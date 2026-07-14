@@ -609,7 +609,8 @@ function MacetasTab({ macetas, accounts, macetaAllocations, onAddMaceta, onDelet
   const getMonthsRemaining = (targetDateStr) => {
     if (!targetDateStr) return 1;
     const now = new Date();
-    const target = new Date(targetDateStr + '-15');
+    const isYearMonthOnly = targetDateStr.includes('-') && targetDateStr.split('-').length === 2;
+    const target = new Date(isYearMonthOnly ? targetDateStr + '-15' : targetDateStr);
     const months = (target.getFullYear() - now.getFullYear()) * 12 + (target.getMonth() - now.getMonth());
     return Math.max(1, months);
   };
@@ -687,7 +688,11 @@ function MacetasTab({ macetas, accounts, macetaAllocations, onAddMaceta, onDelet
               </div>
               {m.targetDate && (
                 <span className="text-[10px] text-noria-muted uppercase tracking-wider font-[500]">
-                  Meta: {new Date(m.targetDate + '-15').toLocaleDateString('es-ES', { month: 'short', year: 'numeric' }).toUpperCase()} ({monthsRemaining} {monthsRemaining === 1 ? 'mes' : 'meses'})
+                  Meta: {(() => {
+                    const isYearMonthOnly = m.targetDate.includes('-') && m.targetDate.split('-').length === 2;
+                    const dateObj = new Date(isYearMonthOnly ? m.targetDate + '-15' : m.targetDate);
+                    return dateObj.toLocaleDateString('es-ES', { month: 'short', year: 'numeric' }).toUpperCase();
+                  })()} ({monthsRemaining} {monthsRemaining === 1 ? 'mes' : 'meses'})
                 </span>
               )}
             </div>
@@ -817,14 +822,14 @@ export default function AccountsScreen() {
 
   // ── Computed: maceta preview ──
   const macetaTargetAmt = parseFloat(macetaTarget) || 0;
-  const macetaCurrentAmt = parseFloat(macetaCurrent) || 0;
-  const macetaRemaining = Math.max(0, macetaTargetAmt - macetaCurrentAmt);
+  const macetaCurrentAmt = 0;
+  const macetaRemaining = macetaTargetAmt;
   const macetaMonthlyContrib = (() => {
     if (!macetaTargetDate) return null;
     const now = new Date();
     const target = new Date(macetaTargetDate + '-15');
     const months = Math.max(1, (target.getFullYear() - now.getFullYear()) * 12 + (target.getMonth() - now.getMonth()));
-    return macetaRemaining > 0 ? macetaRemaining / months : 0;
+    return macetaTargetAmt > 0 ? macetaTargetAmt / months : 0;
   })();
 
   const handleToggleArchiveAccount = async (accId, currentStatus) => {
@@ -905,8 +910,9 @@ export default function AccountsScreen() {
         amount: amt,
         currency: maceta.currency,
         accountId: null,
+        macetaId: maceta.id,
         nextDueDate: new Date().toISOString().slice(0, 7) + '-01',
-        status: 'ACTIVE',
+        status: 'PENDING',
         pillar: 'SAVE'
       });
 
@@ -1235,8 +1241,14 @@ export default function AccountsScreen() {
                 </div>
                 <div>
                   <label className="muji-header block mb-1">Fecha objetivo</label>
-                  <input id="maceta-target-date" type="month" value={macetaTargetDate}
-                    onChange={e => setMacetaTargetDate(e.target.value)} className="muji-input" />
+                  <input
+                    id="maceta-target-date"
+                    type="date"
+                    value={macetaTargetDate}
+                    onChange={e => setMacetaTargetDate(e.target.value)}
+                    className="muji-input"
+                    required
+                  />
                 </div>
               </div>
 
@@ -1259,7 +1271,7 @@ export default function AccountsScreen() {
                     {(() => {
                       if (!macetaTargetDate) return null;
                       const now = new Date();
-                      const target = new Date(macetaTargetDate + '-15');
+                      const target = new Date(macetaTargetDate);
                       const months = Math.max(1, (target.getFullYear() - now.getFullYear()) * 12 + (target.getMonth() - now.getMonth()));
                       const contrib = macetaTargetAmt / months;
                       return (
@@ -1313,6 +1325,9 @@ export default function AccountsScreen() {
               </button>
             </form>
           </div>
+        </>
+      )}
+
       {/* Modal de Distribución de Fondos Multi-cuenta */}
       {distributingMaceta && (
         <AssignFundsModal

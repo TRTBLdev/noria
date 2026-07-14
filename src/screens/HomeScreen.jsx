@@ -43,13 +43,25 @@ export default function HomeScreen() {
   const [anchorDueDate, setAnchorDueDate]   = useState('');
   const [anchorError, setAnchorError]       = useState('');
 
+  // Estados para el Modal de Ejecución de Ahorro (SAVE Anchor)
+  const [payingSaveAnchor, setPayingSaveAnchor] = useState(null);
+  const [savePayMode, setSavePayMode] = useState('ALLOC'); // 'ALLOC' o 'TRANSFER'
+  const [allocAccountId, setAllocAccountId] = useState('');
+  const [transFromAccountId, setTransFromAccountId] = useState('');
+  const [transToAccountId, setTransToAccountId] = useState('');
+  const [transAmountReceived, setTransAmountReceived] = useState('');
+  const [transExchangeRate, setTransExchangeRate] = useState('1.00');
+  const [savePayError, setSavePayError] = useState('');
+
   const baseCurrencyObj  = useLiveQuery(() => db.app_config.get('baseCurrency'));
   const baseCurrency     = baseCurrencyObj?.value || 'USD';
 
-  const accounts      = useLiveQuery(() => db.accounts.toArray())      || [];
-  const anchors       = useLiveQuery(() => db.anchors.toArray())       || [];
-  const transactions  = useLiveQuery(() => db.transactions.toArray())  || [];
-  const incomeSources = useLiveQuery(() => db.income_sources.toArray()) || [];
+  const accounts          = useLiveQuery(() => db.accounts.toArray())          || [];
+  const anchors           = useLiveQuery(() => db.anchors.toArray())           || [];
+  const transactions      = useLiveQuery(() => db.transactions.toArray())      || [];
+  const incomeSources     = useLiveQuery(() => db.income_sources.toArray())    || [];
+  const macetas           = useLiveQuery(() => db.macetas.toArray())           || [];
+  const macetaAllocations = useLiveQuery(() => db.maceta_allocations.toArray()) || [];
 
   const startOfMonth = new Date(); startOfMonth.setDate(1); startOfMonth.setHours(0,0,0,0);
   const thisMonthIncomes = transactions.filter(t => new Date(t.date) >= startOfMonth && t.type === 'IN');
@@ -59,22 +71,249 @@ export default function HomeScreen() {
 
   const incomeSum = thisMonthIncomes.reduce((sum, inc) => sum + inc.amount, 0);
 
-  const pendingAnchors = anchors.filter(a => a.status === 'PENDING');
+  const pendingAnchors = anchors.filter(a => a.status !== 'PAID');
   const paidAnchors   = anchors.filter(a => a.status === 'PAID');
 
   const getSourceName = (id) => incomeSources.find(s => s.id === id)?.name || null;
 
   const handlePayAnchor = async (anchor) => {
+    if (anchor.pillar === 'SAVE' || anchor.type === 'SAVE') {
+      setPayingSaveAnchor(anchor);
+      setSavePayMode('ALLOC');
+      setSavePayError('');
+      if (activeAccounts.length > 0) {
+        setAllocAccountId(activeAccounts[0].id.toString());
+        setTransFromAccountId(activeAccounts[0].id.toString());
+        const secondActive = activeAccounts[1] || activeAccounts[0];
+        setTransToAccountId(secondActive.id.toString());
+      }
+      setTransAmountReceived(anchor.amount.toString());
+      setTransExchangeRate('1.00');
+      return;
+    }
+
     if (!confirm(`¿Marcar "${anchor.name}" como pagado?`)) return;
-    const account = accounts.find(a => a.id === anchor.accountId);
+    let resolvedAccountId = anchor.accountId;
+    if (!resolvedAccountId) {
+      const firstActive = accounts.find(a => !a.isArchived);
+      if (!firstActive) {
+        alert('No tienes cuentas activas registradas para realizar el pago.');
+        return;
+      }
+      resolvedAccountId = firstActive.id;
+    }
+    const account = accounts.find(a => a.id === resolvedAccountId);
     if (!account) { alert('Cuenta no encontrada'); return; }
     await db.transactions.add({
       date: new Date(), type: 'OUT', amount: anchor.amount, currency: anchor.currency,
-      accountId: anchor.accountId, tagId: null, pillar: anchor.pillar,
+      accountId: resolvedAccountId, tagId: null, pillar: anchor.pillar,
       incomeSourceId: null, description: `Ancla: ${anchor.name}`
     });
-    await db.accounts.update(anchor.accountId, { balance: account.balance - anchor.amount });
+    await db.accounts.update(resolvedAccountId, { balance: account.balance - anchor.amount });
     await db.anchors.update(anchor.id, { status: 'PAID' });
+  };
+
+  const handleExecuteSaveAlloc = async (e) => {
+    e.preventDefault();
+    if (!payingSaveAnchor) return;
+    setSavePayError('');
+
+    try {
+      let targetMacetaId = payingSaveAnchor.macetaId;
+      if (!targetMacetaId) {
+        const namePart = payingSaveAnchor.name.replace('Ahorro: ', '').trim().toLowerCase();
+        const found = macetas.find(m => m.name.toLowerCase() === namePart);
+        if (!found) {
+          setSavePayError('No se encontró la meta de ahorro asociada a este ancla.');
+          return;
+        }
+        targetMacetaId = found.id;
+      }
+
+      const maceta = macetas.find(m => m.id === targetMacetaId);
+      if (!maceta) {
+        setSavePayError('Meta de ahorro asociada no encontrada.');
+        return;
+      }
+
+      const accountId = parseInt(allocAccountId);
+      const amount = payingSaveAnchor.amount;
+      const account = accounts.find(a => a.id === accountId);
+      if (!account) {
+        setSavePayError('Cuenta no encontrada.');
+        return;
+      }
+
+      // Obtener todas las allocations existentes para esta maceta
+      const currentAllocations = macetaAllocations.filter(a => a.macetaId === maceta.id);
+      
+      let exists = false;
+      const updatedAllocations = currentAllocations.map(a => {
+        if (a.accountId === accountId) {
+          exists = true;
+          return { ...a, amount: a.amount + amount };
+        }
+        return a;
+      });
+
+      if (!exists) {
+        updatedAllocations.push({
+          macetaId: maceta.id,
+          accountId,
+          amount,
+          currency: maceta.currency || 'USD',
+          locked: false
+        });
+      }
+
+      const totalAllocated = updatedAllocations.reduce((sum, a) => sum + a.amount, 0);
+
+      await db.transaction('rw', [db.maceta_allocations, db.macetas, db.anchors], async () => {
+        await db.maceta_allocations.where('macetaId').equals(maceta.id).delete();
+        for (const alloc of updatedAllocations) {
+          await db.maceta_allocations.add({
+            macetaId: alloc.macetaId,
+            accountId: alloc.accountId,
+            amount: alloc.amount,
+            currency: alloc.currency,
+            locked: !!alloc.locked
+          });
+        }
+        await db.macetas.update(maceta.id, { currentAmount: totalAllocated });
+        await db.anchors.update(payingSaveAnchor.id, { status: 'PAID' });
+      });
+
+      setPayingSaveAnchor(null);
+    } catch (err) {
+      setSavePayError('Error al procesar la asignación del ahorro.');
+    }
+  };
+
+  const handleExecuteSaveTransfer = async (e) => {
+    e.preventDefault();
+    if (!payingSaveAnchor) return;
+    setSavePayError('');
+
+    try {
+      const fromId = parseInt(transFromAccountId);
+      const toId = parseInt(transToAccountId);
+      const amountSent = payingSaveAnchor.amount;
+      const amountRec = parseFloat(transAmountReceived);
+
+      if (fromId === toId) {
+        setSavePayError('Las cuentas de origen y destino deben ser distintas.');
+        return;
+      }
+      if (isNaN(amountRec) || amountRec <= 0) {
+        setSavePayError('El monto recibido debe ser un número positivo.');
+        return;
+      }
+
+      const fromAccount = accounts.find(a => a.id === fromId);
+      const toAccount = accounts.find(a => a.id === toId);
+
+      if (!fromAccount || !toAccount) {
+        setSavePayError('Cuenta de origen o destino no encontrada.');
+        return;
+      }
+      if (fromAccount.balance < amountSent) {
+        setSavePayError(`Saldo insuficiente en la cuenta de origen (${fromAccount.name}).`);
+        return;
+      }
+
+      let targetMacetaId = payingSaveAnchor.macetaId;
+      if (!targetMacetaId) {
+        const namePart = payingSaveAnchor.name.replace('Ahorro: ', '').trim().toLowerCase();
+        const found = macetas.find(m => m.name.toLowerCase() === namePart);
+        if (!found) {
+          setSavePayError('No se encontró la meta de ahorro asociada a este ancla.');
+          return;
+        }
+        targetMacetaId = found.id;
+      }
+
+      const maceta = macetas.find(m => m.id === targetMacetaId);
+      if (!maceta) {
+        setSavePayError('Meta de ahorro asociada no encontrada.');
+        return;
+      }
+
+      const transferId = 'TX-' + Date.now();
+
+      // Obtener todas las allocations existentes para esta maceta
+      const currentAllocations = macetaAllocations.filter(a => a.macetaId === maceta.id);
+      
+      let exists = false;
+      const updatedAllocations = currentAllocations.map(a => {
+        if (a.accountId === toId) {
+          exists = true;
+          return { ...a, amount: a.amount + amountRec };
+        }
+        return a;
+      });
+
+      if (!exists) {
+        updatedAllocations.push({
+          macetaId: maceta.id,
+          accountId: toId,
+          amount: amountRec,
+          currency: maceta.currency || 'USD',
+          locked: false
+        });
+      }
+
+      const totalAllocated = updatedAllocations.reduce((sum, a) => sum + a.amount, 0);
+
+      await db.transaction('rw', [db.accounts, db.transactions, db.maceta_allocations, db.macetas, db.anchors], async () => {
+        // 1. Debitar origen
+        await db.accounts.update(fromId, { balance: fromAccount.balance - amountSent });
+        // 2. Acreditar destino
+        await db.accounts.update(toId, { balance: toAccount.balance + amountRec });
+
+        // 3. Registrar salidas/entradas de transferencia
+        await db.transactions.add({
+          date: new Date(),
+          type: 'TRANSFER_OUT',
+          amount: amountSent,
+          currency: fromAccount.currency,
+          accountId: fromId,
+          description: `Transferencia ahorro meta: ${maceta.name}`,
+          transferId
+        });
+
+        await db.transactions.add({
+          date: new Date(),
+          type: 'TRANSFER_IN',
+          amount: amountRec,
+          currency: toAccount.currency,
+          accountId: toId,
+          description: `Ahorro asignado meta: ${maceta.name}`,
+          transferId
+        });
+
+        // 4. Actualizar allocations de maceta
+        await db.maceta_allocations.where('macetaId').equals(maceta.id).delete();
+        for (const alloc of updatedAllocations) {
+          await db.maceta_allocations.add({
+            macetaId: alloc.macetaId,
+            accountId: alloc.accountId,
+            amount: alloc.amount,
+            currency: alloc.currency,
+            locked: !!alloc.locked
+          });
+        }
+
+        // 5. Actualizar maceta
+        await db.macetas.update(maceta.id, { currentAmount: totalAllocated });
+
+        // 6. Marcar anchor como pagado
+        await db.anchors.update(payingSaveAnchor.id, { status: 'PAID' });
+      });
+
+      setPayingSaveAnchor(null);
+    } catch (err) {
+      setSavePayError('Error al procesar la transferencia del ahorro.');
+    }
   };
 
   const handleCreateAnchor = async (e) => {
@@ -164,7 +403,12 @@ export default function HomeScreen() {
                       <div className="flex items-center space-x-2 mt-0.5">
                         {anchor.nextDueDate && (
                           <span className="label-section">
-                            {new Date(anchor.nextDueDate).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }).toUpperCase()}
+                            {(() => {
+                              const dateObj = anchor.nextDueDate instanceof Date 
+                                ? anchor.nextDueDate 
+                                : new Date(anchor.nextDueDate + 'T12:00:00');
+                              return dateObj.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }).toUpperCase();
+                            })()}
                           </span>
                         )}
                         <span
@@ -332,6 +576,182 @@ export default function HomeScreen() {
                 Crear Gasto Ancla
               </button>
             </form>
+          </div>
+        </>
+      )}
+
+      {/* ── Modal de Ejecución de Ahorro ── */}
+      {payingSaveAnchor && (
+        <>
+          <div className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40" onClick={() => setPayingSaveAnchor(null)} />
+          <div className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto animate-slide-up"
+            style={{ background: '#F5F2ED', borderRadius: '20px 20px 0 0', boxShadow: '0 -8px 40px rgba(0,0,0,0.08)' }}>
+            <div className="px-6 pt-4 pb-10 space-y-4" id="execute-save-modal">
+              {/* Handle */}
+              <div className="flex justify-center mb-2">
+                <div className="w-8 h-[3px] rounded-full" style={{ background: 'rgba(26,26,26,0.12)' }} />
+              </div>
+
+              <div className="flex justify-between items-center">
+                <h4 className="text-[16px] font-[400] text-noria-text">Cumplir Ahorro Programado</h4>
+                <button type="button" onClick={() => setPayingSaveAnchor(null)}
+                  className="focus:outline-none p-1" style={{ color: 'rgba(26,26,26,0.4)' }}>✕</button>
+              </div>
+
+              <div className="border border-[rgba(184,134,11,0.2)] rounded-lg p-3" style={{ background: 'rgba(184,134,11,0.05)' }}>
+                <p className="text-[11px] font-[500]" style={{ color: '#B8860B' }}>META DE AHORRO PENDIENTE</p>
+                <div className="flex justify-between items-center mt-1">
+                  <span className="text-[15px] font-[400] text-noria-text">{payingSaveAnchor.name}</span>
+                  <span className="text-[15px] font-[500] text-noria-text">${fmt(payingSaveAnchor.amount)}</span>
+                </div>
+              </div>
+
+              {/* Selector de modo */}
+              <div className="flex bg-[rgba(26,26,26,0.04)] p-1 rounded-md">
+                <button
+                  type="button"
+                  onClick={() => setSavePayMode('ALLOC')}
+                  className="flex-1 py-1.5 text-[11px] font-[600] uppercase tracking-wider rounded transition-all focus:outline-none"
+                  style={{
+                    background: savePayMode === 'ALLOC' ? '#1A1A1A' : 'transparent',
+                    color: savePayMode === 'ALLOC' ? '#F5F2ED' : 'rgba(26,26,26,0.4)'
+                  }}
+                >
+                  Asignar Fondos (In-place)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSavePayMode('TRANSFER')}
+                  className="flex-1 py-1.5 text-[11px] font-[600] uppercase tracking-wider rounded transition-all focus:outline-none"
+                  style={{
+                    background: savePayMode === 'TRANSFER' ? '#1A1A1A' : 'transparent',
+                    color: savePayMode === 'TRANSFER' ? '#F5F2ED' : 'rgba(26,26,26,0.4)'
+                  }}
+                >
+                  Transferir y Asignar
+                </button>
+              </div>
+
+              {savePayMode === 'ALLOC' ? (
+                /* MODO A: ASIGNACIÓN */
+                <form onSubmit={handleExecuteSaveAlloc} className="space-y-4">
+                  <div>
+                    <label className="muji-header block mb-1">Debitar y Bloquear Ahorro en Cuenta:</label>
+                    <select
+                      id="save-alloc-account"
+                      value={allocAccountId}
+                      onChange={e => setAllocAccountId(e.target.value)}
+                      className="muji-input"
+                      required
+                    >
+                      {activeAccounts.map(acc => (
+                        <option key={acc.id} value={acc.id}>
+                          {acc.name} (${fmt(acc.balance)})
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[10px] text-noria-muted mt-1.5 leading-relaxed">
+                      El dinero no sale de tu patrimonio líquido; se retiene mentalmente en esta cuenta para cumplir con tu meta de ahorro.
+                    </p>
+                  </div>
+
+                  {savePayError && <p className="text-[12px] font-[500]" style={{ color: '#B8860B' }}>{savePayError}</p>}
+
+                  <button
+                    type="submit"
+                    className="w-full py-3 text-[12px] font-[600] uppercase tracking-wider rounded-[6px] transition-all active:scale-[0.98]"
+                    style={{ background: '#5C7A52', color: '#F5F2ED' }}
+                  >
+                    Marcar Ahorro como Asignado
+                  </button>
+                </form>
+              ) : (
+                /* MODO B: TRANSFERENCIA */
+                <form onSubmit={handleExecuteSaveTransfer} className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="muji-header block mb-1">De Cuenta (Origen)</label>
+                      <select
+                        id="save-transfer-from"
+                        value={transFromAccountId}
+                        onChange={e => setTransFromAccountId(e.target.value)}
+                        className="muji-input"
+                        required
+                      >
+                        {activeAccounts.map(acc => (
+                          <option key={acc.id} value={acc.id}>
+                            {acc.name} (${fmt(acc.balance)})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="muji-header block mb-1">A Cuenta (Destino)</label>
+                      <select
+                        id="save-transfer-to"
+                        value={transToAccountId}
+                        onChange={e => setTransToAccountId(e.target.value)}
+                        className="muji-input"
+                        required
+                      >
+                        {activeAccounts.map(acc => (
+                          <option key={acc.id} value={acc.id}>
+                            {acc.name} (${fmt(acc.balance)})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="muji-header block mb-1">Monto Enviado ({accounts.find(a => a.id === parseInt(transFromAccountId))?.currency || 'USD'})</label>
+                      <input
+                        type="number"
+                        className="muji-input"
+                        value={payingSaveAnchor.amount}
+                        disabled
+                      />
+                    </div>
+                    <div>
+                      <label className="muji-header block mb-1">Monto Recibido ({accounts.find(a => a.id === parseInt(transToAccountId))?.currency || 'USD'})</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        inputMode="decimal"
+                        className="muji-input"
+                        value={transAmountReceived}
+                        onChange={e => {
+                          setTransAmountReceived(e.target.value);
+                          const rate = parseFloat(e.target.value) / payingSaveAnchor.amount;
+                          setTransExchangeRate(isNaN(rate) ? '1.00' : rate.toFixed(4));
+                        }}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  {accounts.find(a => a.id === parseInt(transFromAccountId))?.currency !== accounts.find(a => a.id === parseInt(transToAccountId))?.currency && (
+                    <div>
+                      <label className="muji-header block mb-1">Tasa de Cambio Efectiva</label>
+                      <div className="font-mono text-[13px] text-noria-text">
+                        1 {accounts.find(a => a.id === parseInt(transFromAccountId))?.currency} = {transExchangeRate} {accounts.find(a => a.id === parseInt(transToAccountId))?.currency}
+                      </div>
+                    </div>
+                  )}
+
+                  {savePayError && <p className="text-[12px] font-[500]" style={{ color: '#B8860B' }}>{savePayError}</p>}
+
+                  <button
+                    type="submit"
+                    className="w-full py-3 text-[12px] font-[600] uppercase tracking-wider rounded-[6px] transition-all active:scale-[0.98]"
+                    style={{ background: '#5C7A52', color: '#F5F2ED' }}
+                  >
+                    Transferir y Asignar Ahorro
+                  </button>
+                </form>
+              )}
+            </div>
           </div>
         </>
       )}

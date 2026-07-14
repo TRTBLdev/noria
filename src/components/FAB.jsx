@@ -6,9 +6,9 @@ import { Plus, X, ArrowDownLeft, ArrowUpRight, ArrowLeftRight } from 'lucide-rea
 // Radial menu item positions (relative to FAB center)
 // For 3 items: Gasto (left), Transfer (middle), Ingreso (right)
 const RADIAL_POSITIONS = [
-  { dx: -80, dy: -40, delay: '0ms' },   // Gasto — up-left
-  { dx: 0,   dy: -90, delay: '40ms' },  // Transferencia — up-middle
-  { dx: 80,  dy: -40, delay: '80ms' },  // Ingreso — up-right
+  { dx: -110, dy: 0,   delay: '0ms' },   // Gasto — left
+  { dx: -80,  dy: -60, delay: '40ms' },  // Transferencia — up-left
+  { dx: 0,    dy: -90, delay: '80ms' },  // Ingreso — up
 ];
 
 export default function FAB() {
