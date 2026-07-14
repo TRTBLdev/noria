@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-noria-bg text-noria-text font-sans selection:bg-noria-salvia/30;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Thin minimalist scrollbars */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-noria-text/10 rounded-full hover:bg-noria-text/20;
+  }
+}
+
+@layer utilities {
+  /* Blur elements under screen lock or overlay */
+  .blur-sensitive {
+    filter: blur(8px);
+    transition: filter 0.3s ease;
+  }
+  
+  /* Text and letter spacing styles for Muji look */
+  .muji-header {
+    @apply font-sans font-light uppercase tracking-[0.2em] text-xs text-noria-text/50;
+  }
+  
+  .muji-input {
+    @apply w-full bg-[#EAE3D5]/40 border-b border-[#2C2C2C]/10 py-2.5 px-1 focus:border-[#7D9B76] outline-none transition-colors duration-200 font-light text-sm placeholder:text-[#2C2C2C]/30;
+  }
+}
