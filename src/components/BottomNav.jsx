@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Home, Wallet, ArrowLeftRight, Settings } from 'lucide-react';
+import { Home, Wallet, CalendarRange, ArrowLeftRight, Settings } from 'lucide-react';
 
 export default function BottomNav() {
   const navigate    = useNavigate();
@@ -18,6 +18,7 @@ export default function BottomNav() {
   const navItems = [
     { icon: Home,           name: 'Home',      path: '/home' },
     { icon: Wallet,         name: 'Patrimonio', path: '/accounts' },
+    { icon: CalendarRange,  name: 'Presupuesto', path: '/budget' },
     { icon: ArrowLeftRight, name: 'Lotes P2P', path: '/operations' },
     { icon: Settings,       name: 'Config',    path: '/settings' },
   ];

@@ -6,7 +6,11 @@ import BottomNav from '../components/BottomNav.jsx';
 import FAB from '../components/FAB.jsx';
 import { Plus, Landmark, CreditCard, Target, Trash2, Pencil, Wallet, TrendingUp, X, Check, Archive, ArrowUpRight, ArrowDownLeft, Eye, ArchiveRestore } from 'lucide-react';
 
-const TABS = ['Cuentas', 'Macetas', 'Ingresos'];
+import CuentasFuentesTab from '../components/CuentasFuentesTab.jsx';
+import MetasTab from '../components/MetasTab.jsx';
+import HistorialTab from '../components/HistorialTab.jsx';
+
+const TABS = ['Cuentas', 'Metas', 'Historial'];
 
 // Map parameters for readable instrument types
 const INSTRUMENT_TYPES = [
@@ -451,334 +455,7 @@ function EditAccountForm({ account, institutions, onUpdated, onCancel }) {
   );
 }
 
-/* ── Sección: Cuentas Listado Tab ── */
-function CuentasTab({ institutions, accounts, instruments, onSelectAccount, onAddAccount, showArchived, setShowArchived, archivedAccounts }) {
-  const instGroups = institutions
-    .map(inst => ({
-      inst,
-      accs: accounts.filter(a => a.institutionId === inst.id)
-    }))
-    .filter(g => g.accs.length > 0);
 
-  if (instGroups.length === 0 && archivedAccounts.length === 0) return (
-    <div className="flex flex-col items-center py-12 space-y-3" id="accounts-empty">
-      <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.05)' }}>
-        <Landmark size={20} strokeWidth={1.5} style={{ color: 'rgba(26,26,26,0.2)' }} />
-      </div>
-      <p className="text-[13px]" style={{ color: 'rgba(26,26,26,0.35)' }}>Sin cuentas añadidas aún</p>
-      <button onClick={onAddAccount} className="text-[12px] font-[500] uppercase tracking-wider underline underline-offset-2 focus:outline-none" style={{ color: '#5C7A52' }}>
-        Añadir cuenta
-      </button>
-    </div>
-  );
-
-  return (
-    <div className="space-y-6">
-      {instGroups.length === 0 && (
-        <p className="text-[13px] text-noria-muted text-center py-4">No hay cuentas activas.</p>
-      )}
-
-      {instGroups.map(({ inst, accs }) => {
-        // Sum balances per institution
-        const totalUSD = accs.filter(a => a.currency === 'USD').reduce((sum, a) => sum + a.balance, 0);
-        const totalUSDT = accs.filter(a => a.currency === 'USDT').reduce((sum, a) => sum + a.balance, 0);
-        const totalUSDC = accs.filter(a => a.currency === 'USDC').reduce((sum, a) => sum + a.balance, 0);
-
-        const balanceStr = [
-          totalUSD > 0 ? `$${fmt(totalUSD, 0)}` : '',
-          totalUSDT > 0 ? `${fmt(totalUSDT, 0)} USDT` : '',
-          totalUSDC > 0 ? `${fmt(totalUSDC, 0)} USDC` : ''
-        ].filter(Boolean).join('  |  ') || '$0.00';
-
-        return (
-          <div key={inst.id} id={`inst-group-${inst.id}`} className="animate-fade-in">
-            {/* Institution header with aggregated totals */}
-            <div className="flex justify-between items-baseline mb-2 pb-2 border-b border-[rgba(0,0,0,0.07)]">
-              <div className="flex items-center space-x-2">
-                <Landmark size={12} strokeWidth={1.5} style={{ color: 'rgba(26,26,26,0.35)' }} />
-                <span className="label-section">{inst.name}</span>
-                <span className="label-section" style={{ color: 'rgba(26,26,26,0.2)' }}>· {inst.type}</span>
-              </div>
-              <span className="text-[11px] font-[500]" style={{ color: 'rgba(26,26,26,0.45)' }}>
-                {balanceStr}
-              </span>
-            </div>
-
-            {/* Accounts under institution */}
-            <div className="divide-y divide-noria-text/5">
-              {accs.map(acc => {
-                const accInstrs = instruments.filter(i => i.accountId === acc.id);
-                return (
-                  <button
-                    key={acc.id}
-                    onClick={() => onSelectAccount(acc.id)}
-                    className="w-full text-left focus:outline-none transition-colors"
-                  >
-                    <div className="noria-row hover:bg-noria-text/2 px-2 -mx-2 rounded transition-colors" id={`account-row-${acc.id}`}>
-                      <div className="flex items-center space-x-3">
-                        <div className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.04)', color: 'rgba(26,26,26,0.3)' }}>
-                          <Wallet size={16} strokeWidth={1.5} />
-                        </div>
-                        <div>
-                          <p className="text-[15px] font-[400] text-noria-text">{acc.name}</p>
-                          <div className="flex items-center space-x-2 mt-0.5">
-                            <span className="label-section">{acc.type}</span>
-                            {accInstrs.map(instr => (
-                              <span key={instr.id} className="flex items-center space-x-1 label-section">
-                                <CreditCard size={9} strokeWidth={1.5} />
-                                <span>{instr.alias || (INSTRUMENT_TYPES.find(t => t.value === instr.type)?.label || instr.type)}</span>
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-[15px] font-[400] text-noria-text">${fmt(acc.balance)}</p>
-                        <p className="label-section">{acc.currency}</p>
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })}
-
-      {/* ── Archivadas Collapsible Section ── */}
-      {archivedAccounts.length > 0 && (
-        <div className="pt-6 border-t border-[rgba(0,0,0,0.07)]">
-          <button
-            onClick={() => setShowArchived(!showArchived)}
-            className="w-full flex justify-between items-center focus:outline-none py-2"
-          >
-            <span className="label-section flex items-center space-x-2" style={{ color: 'rgba(26,26,26,0.45)' }}>
-              <Archive size={12} strokeWidth={1.5} />
-              <span>Cuentas Archivadas ({archivedAccounts.length})</span>
-            </span>
-            <span className="text-[11px] font-[500]" style={{ color: 'rgba(26,26,26,0.35)' }}>
-              {showArchived ? 'Ocultar' : 'Mostrar'}
-            </span>
-          </button>
-
-          {showArchived && (
-            <div className="divide-y divide-noria-text/5 mt-3 animate-fade-in" id="archived-accounts-list">
-              {archivedAccounts.map(acc => {
-                const inst = institutions.find(i => i.id === acc.institutionId);
-                return (
-                  <button
-                    key={acc.id}
-                    onClick={() => onSelectAccount(acc.id)}
-                    className="w-full text-left py-3 flex justify-between items-center hover:bg-noria-text/2 px-2 -mx-2 rounded transition-colors opacity-60"
-                  >
-                    <div>
-                      <p className="text-[14px] font-[400] text-noria-text">{acc.name}</p>
-                      <p className="label-section mt-0.5">
-                        {inst?.name || 'Institución'} · {acc.type}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[14px] font-[400] text-noria-text">${fmt(acc.balance)}</p>
-                      <p className="label-section">{acc.currency}</p>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ── Sección: Macetas Tab ── */
-function MacetasTab({ macetas, accounts, macetaAllocations, onAddMaceta, onDeleteMaceta, onDistribute, onProgramSavings }) {
-  if (macetas.length === 0) return (
-    <div className="flex flex-col items-center py-12 space-y-3" id="macetas-empty">
-      <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.05)' }}>
-        <Target size={20} strokeWidth={1.5} style={{ color: 'rgba(26,26,26,0.2)' }} />
-      </div>
-      <p className="text-[13px]" style={{ color: 'rgba(26,26,26,0.35)' }}>Sin metas de ahorro activas</p>
-      <button onClick={onAddMaceta} className="text-[12px] font-[500] uppercase tracking-wider underline underline-offset-2 focus:outline-none" style={{ color: '#5C7A52' }}>
-        Crear primera meta
-      </button>
-    </div>
-  );
-
-  const getMonthsRemaining = (targetDateStr) => {
-    if (!targetDateStr) return 1;
-    const now = new Date();
-    const isYearMonthOnly = targetDateStr.includes('-') && targetDateStr.split('-').length === 2;
-    const target = new Date(isYearMonthOnly ? targetDateStr + '-15' : targetDateStr);
-    const months = (target.getFullYear() - now.getFullYear()) * 12 + (target.getMonth() - now.getMonth());
-    return Math.max(1, months);
-  };
-
-  return (
-    <div className="space-y-6 animate-fade-in">
-      {macetas.map(m => {
-        const current = m.currentAmount || 0;
-        const pct = Math.min(100, m.targetAmount > 0 ? (current / m.targetAmount) * 100 : 0);
-        
-        // Bloques unicode de progreso
-        const filledBlocks = Math.round(pct / 10);
-        const emptyBlocks = 10 - filledBlocks;
-        const progressStr = '█'.repeat(filledBlocks) + '░'.repeat(emptyBlocks);
-
-        // Obtener asignaciones de esta maceta
-        const allocations = macetaAllocations.filter(a => a.macetaId === m.id);
-
-        // Calcular aporte mensual sugerido
-        const monthsRemaining = getMonthsRemaining(m.targetDate);
-        const suggestedAmount = Math.max(0, m.targetAmount - current) / monthsRemaining;
-
-        return (
-          <div key={m.id} className="border border-[rgba(0,0,0,0.07)] rounded-[8px] p-5 space-y-4 bg-transparent" id={`maceta-${m.id}`}>
-            
-            {/* Header: Title and Delete */}
-            <div className="flex justify-between items-start">
-              <div className="flex items-center space-x-2">
-                <Target size={14} strokeWidth={1.8} style={{ color: '#5C7A52' }} />
-                <p className="text-[15px] font-[500] text-noria-text">{m.name}</p>
-              </div>
-              <button onClick={() => onDeleteMaceta(m.id, m.name)} className="p-1 focus:outline-none text-noria-muted hover:text-[#9F2F2D]" title="Eliminar Meta">
-                <Trash2 size={13} strokeWidth={1.5} />
-              </button>
-            </div>
-
-            {/* Progreso visual en unicode */}
-            <div className="space-y-1">
-              <p className="text-[11px] font-[500] text-noria-text/60 uppercase tracking-wider">Progreso</p>
-              <div className="font-mono text-[12px] text-noria-text flex items-center space-x-2">
-                <span className="text-[#5C7A52] tracking-normal">{progressStr}</span>
-                <span className="font-[500]">{pct.toFixed(0)}%</span>
-                <span className="text-noria-muted">(${fmt(current, 0)} / ${fmt(m.targetAmount, 0)})</span>
-              </div>
-            </div>
-
-            {/* Distribución de Cuentas */}
-            <div className="space-y-1.5 pt-1">
-              <p className="text-[11px] font-[500] text-noria-text/60 uppercase tracking-wider flex items-center space-x-1">
-                <span>💰 Distribución:</span>
-              </p>
-              {allocations.length === 0 ? (
-                <p className="text-[11px] text-noria-muted italic pl-3">Sin fondos asignados de ninguna cuenta</p>
-              ) : (
-                <div className="font-mono text-[12px] text-noria-text pl-2 space-y-0.5">
-                  {allocations.map((alloc, idx) => {
-                    const acc = accounts.find(a => a.id === alloc.accountId);
-                    const prefix = idx === allocations.length - 1 ? '└─ ' : '├─ ';
-                    return (
-                      <div key={alloc.id} className="flex items-center justify-between">
-                        <span>{prefix}{acc ? acc.name : 'Cuenta Desconocida'}</span>
-                        <span className="font-[500]">${fmt(alloc.amount, 0)} <span className="text-[#5C7A52]">✓</span></span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* Aporte mensual sugerido y Fecha */}
-            <div className="pt-2 border-t border-[rgba(0,0,0,0.05)] flex flex-wrap justify-between items-baseline gap-2">
-              <div className="flex items-baseline space-x-1.5">
-                <span className="text-[11px] font-[500] text-noria-text/60 uppercase tracking-wider">📊 Aporte sugerido:</span>
-                <span className="text-[13px] font-[500] text-[#5C7A52] font-mono">${fmt(suggestedAmount)}/mes</span>
-              </div>
-              {m.targetDate && (
-                <span className="text-[10px] text-noria-muted uppercase tracking-wider font-[500]">
-                  Meta: {(() => {
-                    const isYearMonthOnly = m.targetDate.includes('-') && m.targetDate.split('-').length === 2;
-                    const dateObj = new Date(isYearMonthOnly ? m.targetDate + '-15' : m.targetDate);
-                    return dateObj.toLocaleDateString('es-ES', { month: 'short', year: 'numeric' }).toUpperCase();
-                  })()} ({monthsRemaining} {monthsRemaining === 1 ? 'mes' : 'meses'})
-                </span>
-              )}
-            </div>
-
-            {/* Botones de acción inferior */}
-            <div className="flex space-x-3 pt-2">
-              <button
-                onClick={() => onDistribute(m)}
-                className="flex-1 py-2 text-[10px] font-[600] uppercase tracking-wider border border-[rgba(26,26,26,0.15)] rounded hover:bg-noria-text/5 active:scale-[0.98] transition-all focus:outline-none text-noria-text"
-              >
-                Distribuir Fondos
-              </button>
-              {suggestedAmount > 0 && (
-                <button
-                  onClick={() => onProgramSavings(m, suggestedAmount)}
-                  className="flex-1 py-2 text-[10px] font-[600] uppercase tracking-wider rounded bg-noria-text text-noria-bg hover:opacity-90 active:scale-[0.98] transition-all focus:outline-none"
-                >
-                  Programar Ahorro
-                </button>
-              )}
-            </div>
-
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-/* ── Sección: Fuentes de Ingreso Tab ── */
-function IngresosTab({ incomeSources, onAddSource, onDeleteSource }) {
-  return (
-    <div>
-      {incomeSources.length === 0 ? (
-        <div className="flex flex-col items-center py-12 space-y-3" id="sources-empty">
-          <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.05)' }}>
-            <TrendingUp size={20} strokeWidth={1.5} style={{ color: 'rgba(26,26,26,0.2)' }} />
-          </div>
-          <p className="text-[13px]" style={{ color: 'rgba(26,26,26,0.35)' }}>Sin fuentes de ingreso definidas</p>
-          <button onClick={onAddSource} className="text-[12px] font-[500] uppercase tracking-wider underline underline-offset-2 focus:outline-none" style={{ color: '#5C7A52' }}>
-            Añadir fuente
-          </button>
-        </div>
-      ) : (
-        <div className="divide-y divide-noria-text/5 animate-fade-in">
-          {incomeSources.map(src => (
-            <div key={src.id} className="noria-row" id={`source-row-${src.id}`}>
-              <div className="flex items-center space-x-3">
-                <div className="w-9 h-9 rounded-full flex items-center justify-center text-[15px]" style={{ background: 'rgba(92,122,82,0.08)' }}>
-                  {(() => {
-                    switch (src.type) {
-                      case 'SALARY': return '💼';
-                      case 'FREELANCE': return '💻';
-                      case 'INVESTMENT': return '📈';
-                      case 'GIFT': return '🎁';
-                      case 'BUSINESS': return '🏪';
-                      default: return '💰';
-                    }
-                  })()}
-                </div>
-                <div>
-                  <p className="text-[15px] font-[400] text-noria-text">{src.name}</p>
-                  <p className="text-[10px] text-noria-muted uppercase tracking-wider font-[500] mt-0.5">
-                    {(() => {
-                      switch (src.type) {
-                        case 'SALARY': return 'Salario / Empleo';
-                        case 'FREELANCE': return 'Freelance / Servicios';
-                        case 'INVESTMENT': return 'Inversiones / Dividendos';
-                        case 'GIFT': return 'Regalos / Bonos';
-                        case 'BUSINESS': return 'Ventas / Negocio';
-                        default: return 'Otro';
-                      }
-                    })()}
-                  </p>
-                </div>
-              </div>
-              <button onClick={() => onDeleteSource(src.id, src.name)} className="p-1 focus:outline-none" style={{ color: 'rgba(26,26,26,0.2)' }}>
-                <Trash2 size={13} strokeWidth={1.5} />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 /* ── Pantalla Principal ── */
 export default function AccountsScreen() {
@@ -805,6 +482,23 @@ export default function AccountsScreen() {
   const [sourceName, setSourceName] = useState('');
   const [sourceType, setSourceType] = useState('SALARY');
 
+  // Form Anchor states (Edición en Presupuesto)
+  const [editingAnchor, setEditingAnchor] = useState(null);
+  const [editAnchorName, setEditAnchorName] = useState('');
+  const [editAnchorAmount, setEditAnchorAmount] = useState('');
+  const [editAnchorPillar, setEditAnchorPillar] = useState('NEED');
+  const [editAnchorDueDate, setEditAnchorDueDate] = useState('');
+  const [editAnchorAccountId, setEditAnchorAccountId] = useState('');
+  const [showEditAnchorModal, setShowEditAnchorModal] = useState(false);
+
+  // Form para crear nueva plantilla de gasto fijo (desde pestaña Presupuesto)
+  const [showAddAnchorMasterModal, setShowAddAnchorMasterModal] = useState(false);
+  const [anchorName, setAnchorName] = useState('');
+  const [anchorAmount, setAnchorAmount] = useState('');
+  const [anchorPillar, setAnchorPillar] = useState('NEED');
+  const [anchorAccountId, setAnchorAccountId] = useState('');
+  const [anchorDueDate, setAnchorDueDate] = useState('');
+
   // Dexie Queries
   const institutions = useLiveQuery(() => db.institutions.toArray()) || [];
   const accounts = useLiveQuery(() => db.accounts.toArray()) || [];
@@ -812,6 +506,8 @@ export default function AccountsScreen() {
   const macetas = useLiveQuery(() => db.macetas.toArray()) || [];
   const macetaAllocations = useLiveQuery(() => db.maceta_allocations.toArray()) || [];
   const incomeSources = useLiveQuery(() => db.income_sources.toArray()) || [];
+  const anchors = useLiveQuery(() => db.anchors.toArray()) || [];
+  const transactions = useLiveQuery(() => db.transactions.toArray()) || [];
 
   const activeAccounts = accounts.filter(a => !a.isArchived);
   const archivedAccounts = accounts.filter(a => a.isArchived);
@@ -952,14 +648,216 @@ export default function AccountsScreen() {
     await db.income_sources.delete(id);
   };
 
-  const addButtonLabel = ['Añadir Cuenta', 'Nueva Meta', 'Añadir Fuente'][tab];
+  const handleEditAnchorClick = (anchor) => {
+    setEditingAnchor(anchor);
+    setEditAnchorName(anchor.name);
+    setEditAnchorAmount(anchor.amount.toString());
+    setEditAnchorPillar(anchor.pillar);
+    let formattedDate = '';
+    if (anchor.nextDueDate) {
+      const d = anchor.nextDueDate instanceof Date ? anchor.nextDueDate : new Date(anchor.nextDueDate);
+      formattedDate = d.toISOString().slice(0, 10);
+    }
+    setEditAnchorDueDate(formattedDate);
+    setEditAnchorAccountId(anchor.accountId ? anchor.accountId.toString() : '');
+    setShowEditAnchorModal(true);
+  };
+
+  const handleUpdateAnchor = async (e) => {
+    e.preventDefault();
+    if (!editingAnchor) return;
+    const amt = parseFloat(editAnchorAmount);
+    if (isNaN(amt) || amt <= 0) { alert('Monto inválido'); return; }
+
+    try {
+      const parsedAccountId = editAnchorAccountId ? parseInt(editAnchorAccountId) : null;
+      const parsedDueDate = editAnchorDueDate ? new Date(editAnchorDueDate + 'T12:00:00') : null;
+
+      // 1. Actualizar la plantilla
+      await db.anchors.update(editingAnchor.id, {
+        name: editAnchorName.trim(),
+        amount: amt,
+        pillar: editAnchorPillar,
+        accountId: parsedAccountId,
+        nextDueDate: parsedDueDate
+      });
+
+      // 2. Propagar a las instancias activas de este mes
+      const now = new Date();
+      const startOfCurrentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      const endOfCurrentMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+      const activeInstances = anchors.filter(a => 
+        a.isTemplate === false && 
+        a.parentAnchorId === editingAnchor.id && 
+        a.status === 'PENDING'
+      );
+
+      for (const inst of activeInstances) {
+        const instDate = inst.nextDueDate instanceof Date ? inst.nextDueDate : new Date(inst.nextDueDate);
+        if (instDate >= startOfCurrentMonth && instDate <= endOfCurrentMonth) {
+          await db.anchors.update(inst.id, {
+            name: editAnchorName.trim(),
+            amount: amt,
+            pillar: editAnchorPillar,
+            accountId: parsedAccountId
+          });
+        }
+      }
+
+      setShowEditAnchorModal(false);
+      setEditingAnchor(null);
+    } catch {
+      alert('Error al actualizar el gasto programado');
+    }
+  };
+
+  const handleToggleArchiveAnchor = async (anchor) => {
+    try {
+      const newArchivedState = !anchor.isArchived;
+      await db.anchors.update(anchor.id, { isArchived: newArchivedState });
+      
+      if (newArchivedState) {
+        const now = new Date();
+        const startOfCurrentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const endOfCurrentMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+        const pendingInstancesThisMonth = anchors.filter(a => 
+          a.isTemplate === false && 
+          a.parentAnchorId === anchor.id && 
+          a.status === 'PENDING'
+        );
+
+        for (const inst of pendingInstancesThisMonth) {
+          const instDate = inst.nextDueDate instanceof Date ? inst.nextDueDate : new Date(inst.nextDueDate);
+          if (instDate >= startOfCurrentMonth && instDate <= endOfCurrentMonth) {
+            await db.anchors.delete(inst.id);
+          }
+        }
+      }
+    } catch {
+      alert('Error al cambiar el estado del gasto programado');
+    }
+  };
+
+  const handleDeleteAnchorMaster = async (anchor) => {
+    const confirmMsg = anchor.pillar === 'SAVE' 
+      ? `¿Eliminar permanentemente la meta y plantilla de ahorro "${anchor.name}"?`
+      : `¿Eliminar permanentemente la plantilla de gasto fijo "${anchor.name}"?`;
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      await db.anchors.delete(anchor.id);
+      const pendingInstances = anchors.filter(a => 
+        a.isTemplate === false && 
+        a.parentAnchorId === anchor.id && 
+        a.status === 'PENDING'
+      );
+      for (const inst of pendingInstances) {
+        await db.anchors.delete(inst.id);
+      }
+    } catch {
+      alert('Error al eliminar el gasto programado');
+    }
+  };
+
+  const handleCreateAnchorMaster = async (e) => {
+    e.preventDefault();
+    const amt = parseFloat(anchorAmount);
+    if (isNaN(amt) || amt <= 0) { alert('Monto inválido'); return; }
+    if (!anchorAccountId) { alert('Selecciona una cuenta'); return; }
+    const selectedAcc = accounts.find(a => a.id.toString() === anchorAccountId);
+    
+    try {
+      await db.anchors.add({
+        name: anchorName.trim(),
+        type: 'FIXED',
+        amount: amt,
+        currency: selectedAcc.currency,
+        accountId: parseInt(anchorAccountId),
+        nextDueDate: anchorDueDate ? new Date(anchorDueDate + 'T12:00:00') : new Date(),
+        status: 'PENDING',
+        pillar: anchorPillar,
+        isTemplate: true,
+        isArchived: false
+      });
+      setShowAddAnchorMasterModal(false);
+      setAnchorName(''); setAnchorAmount(''); setAnchorDueDate(''); setAnchorAccountId('');
+    } catch {
+      alert('Error al crear plantilla de gasto fijo');
+    }
+  };
+
+  const handleDeleteTransaction = async (tx) => {
+    if (!confirm('¿Seguro que deseas eliminar esta transacción permanentemente? Se revertirá su impacto en los balances.')) return;
+    try {
+      await db.transaction('rw', [db.accounts, db.transactions, db.anchors], async () => {
+        if (tx.type === 'IN') {
+          const acc = await db.accounts.get(tx.accountId);
+          if (acc) await db.accounts.update(tx.accountId, { balance: acc.balance - tx.amount });
+        } else if (tx.type === 'OUT') {
+          const acc = await db.accounts.get(tx.accountId);
+          if (acc) await db.accounts.update(tx.accountId, { balance: acc.balance + tx.amount });
+        } else if (tx.type === 'TRANSFER_OUT' || tx.type === 'TRANSFER_IN') {
+          const linkedTxs = await db.transactions.where('transferId').equals(tx.transferId).toArray();
+          for (const ltx of linkedTxs) {
+            const acc = await db.accounts.get(ltx.accountId);
+            if (acc) {
+              const delta = ltx.type === 'TRANSFER_OUT' ? ltx.amount : -ltx.amount;
+              await db.accounts.update(ltx.accountId, { balance: acc.balance + delta });
+            }
+            await db.transactions.delete(ltx.id);
+          }
+          return;
+        }
+
+        if (tx.anchorId) {
+          await db.anchors.update(tx.anchorId, { status: 'PENDING' });
+        } else if (tx.description && tx.description.startsWith('Ancla: ')) {
+          const anchorName = tx.description.replace('Ancla: ', '');
+          const matchingAnchor = await db.anchors.where('name').equals(anchorName).first();
+          if (matchingAnchor) {
+            await db.anchors.update(matchingAnchor.id, { status: 'PENDING' });
+          }
+        }
+
+        await db.transactions.delete(tx.id);
+      });
+    } catch (err) {
+      alert('Error al revertir la transacción');
+    }
+  };
+
+  const handleUpdateTransaction = async (txId, updatedFields) => {
+    try {
+      await db.transaction('rw', [db.accounts, db.transactions], async () => {
+        const originalTx = await db.transactions.get(txId);
+        if (!originalTx) return;
+
+        if (updatedFields.amount !== undefined && updatedFields.amount !== originalTx.amount) {
+          const acc = await db.accounts.get(originalTx.accountId);
+          if (acc) {
+            const diff = updatedFields.amount - originalTx.amount;
+            const delta = originalTx.type === 'OUT' ? -diff : diff;
+            await db.accounts.update(originalTx.accountId, { balance: acc.balance + delta });
+          }
+        }
+
+        await db.transactions.update(txId, updatedFields);
+      });
+    } catch (err) {
+      alert('Error al actualizar la transacción');
+    }
+  };
+
+  const addButtonLabel = ['Añadir Cuenta', 'Nueva Meta', null][tab];
   const addButtonAction = [
     () => {
       setIsEditingAccount(false);
       setShowAddAccModal(true);
     },
     () => { setMacetaError(''); setShowAddMacetaModal(true); },
-    () => setShowAddSourceModal(true),
+    null
   ][tab];
 
 
@@ -989,21 +887,23 @@ export default function AccountsScreen() {
         </div>
 
         {/* ── Add button row ── */}
-        <div className="flex justify-end mb-5">
-          <button
-            id={`add-btn-${tab}`}
-            onClick={addButtonAction}
-            className="flex items-center space-x-1 focus:outline-none"
-            style={{ color: '#5C7A52', fontSize: '11px', fontWeight: 500, letterSpacing: '0.06em', textTransform: 'uppercase' }}
-          >
-            <Plus size={12} strokeWidth={2} />
-            <span>{addButtonLabel}</span>
-          </button>
-        </div>
+        {addButtonLabel && (
+          <div className="flex justify-end mb-5">
+            <button
+              id={`add-btn-${tab}`}
+              onClick={addButtonAction}
+              className="flex items-center space-x-1 focus:outline-none"
+              style={{ color: '#5C7A52', fontSize: '11px', fontWeight: 500, letterSpacing: '0.06em', textTransform: 'uppercase' }}
+            >
+              <Plus size={12} strokeWidth={2} />
+              <span>{addButtonLabel}</span>
+            </button>
+          </div>
+        )}
 
         {/* ── Tab content ── */}
         {tab === 0 && (
-          <CuentasTab
+          <CuentasFuentesTab
             institutions={institutions}
             accounts={activeAccounts}
             instruments={instruments}
@@ -1018,10 +918,13 @@ export default function AccountsScreen() {
             showArchived={showArchived}
             setShowArchived={setShowArchived}
             archivedAccounts={archivedAccounts}
+            incomeSources={incomeSources}
+            onAddSource={() => setShowAddSourceModal(true)}
+            onDeleteSource={handleDeleteSource}
           />
         )}
         {tab === 1 && (
-          <MacetasTab
+          <MetasTab
             macetas={macetas}
             accounts={activeAccounts}
             macetaAllocations={macetaAllocations}
@@ -1032,10 +935,11 @@ export default function AccountsScreen() {
           />
         )}
         {tab === 2 && (
-          <IngresosTab
-            incomeSources={incomeSources}
-            onAddSource={() => setShowAddSourceModal(true)}
-            onDeleteSource={handleDeleteSource}
+          <HistorialTab
+            transactions={transactions}
+            accounts={accounts}
+            onDeleteTransaction={handleDeleteTransaction}
+            onUpdateTransaction={handleUpdateTransaction}
           />
         )}
       </div>
@@ -1359,6 +1263,153 @@ export default function AccountsScreen() {
                 className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider rounded-[6px] mt-2 active:scale-[0.98] transition-all"
                 style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
                 Crear Fuente
+              </button>
+            </form>
+          </div>
+        </>
+      )}
+
+      {/* Add Anchor Master (Gasto Fijo Recurrente) */}
+      {showAddAnchorMasterModal && (
+        <>
+          <div className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40" onClick={() => setShowAddAnchorMasterModal(false)} />
+          <div className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto animate-slide-up"
+            style={{ background: '#F5F2ED', borderRadius: '20px 20px 0 0', boxShadow: '0 -8px 40px rgba(0,0,0,0.08)' }}>
+            <form onSubmit={handleCreateAnchorMaster} className="px-6 pt-4 pb-10 space-y-4" id="add-anchor-master-form">
+              <div className="flex justify-center mb-2">
+                <div className="w-8 h-[3px] rounded-full" style={{ background: 'rgba(26,26,26,0.12)' }} />
+              </div>
+
+              <div className="flex justify-between items-center">
+                <h4 className="text-[16px] font-[400] text-noria-text">Nuevo Gasto Fijo Recurrente</h4>
+                <button type="button" onClick={() => setShowAddAnchorMasterModal(false)}
+                  className="focus:outline-none p-1" style={{ color: 'rgba(26,26,26,0.4)' }}>✕</button>
+              </div>
+
+              <div>
+                <label className="muji-header block mb-1">Nombre</label>
+                <input type="text" value={anchorName} onChange={e => setAnchorName(e.target.value)}
+                  placeholder="Ej. Alquiler, Condominio, Netflix" className="muji-input" required autoFocus />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="muji-header block mb-1">Monto (USD)</label>
+                  <input type="number" step="0.01" inputMode="decimal"
+                    value={anchorAmount} onChange={e => setAnchorAmount(e.target.value)}
+                    placeholder="0.00" className="muji-input" required />
+                </div>
+                <div>
+                  <label className="muji-header block mb-1">Primer Vencimiento</label>
+                  <input type="date" value={anchorDueDate}
+                    onChange={e => setAnchorDueDate(e.target.value)} className="muji-input" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="muji-header block mb-1">Cuenta Asociada</label>
+                  <select value={anchorAccountId} onChange={e => setAnchorAccountId(e.target.value)}
+                    className="muji-input" required>
+                    <option value="" disabled>Selecciona...</option>
+                    {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="muji-header block mb-2">Pilar</label>
+                  <div className="flex space-x-1">
+                    {[['NEED','N','#5C7A52'],['WANT','W','#4A6475'],['SAVE','S','#B8860B']].map(([val, short, col]) => (
+                      <button key={val} type="button" onClick={() => setAnchorPillar(val)}
+                        className="flex-1 py-1 text-[10px] font-[500] uppercase rounded border transition-all"
+                        style={{
+                          borderColor: anchorPillar === val ? col : 'rgba(26,26,26,0.10)',
+                          color: anchorPillar === val ? col : 'rgba(26,26,26,0.35)',
+                        }}>
+                        {short}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <button type="submit"
+                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider transition-all active:scale-[0.98] rounded-[6px] mt-2"
+                style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
+                Programar Gasto Fijo
+              </button>
+            </form>
+          </div>
+        </>
+      )}
+
+      {/* Edit Anchor Master Modal */}
+      {showEditAnchorModal && editingAnchor && (
+        <>
+          <div className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40" onClick={() => setShowEditAnchorModal(false)} />
+          <div className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto animate-slide-up"
+            style={{ background: '#F5F2ED', borderRadius: '20px 20px 0 0', boxShadow: '0 -8px 40px rgba(0,0,0,0.08)' }}>
+            <form onSubmit={handleUpdateAnchor} className="px-6 pt-4 pb-10 space-y-4" id="edit-anchor-form">
+              <div className="flex justify-center mb-2">
+                <div className="w-8 h-[3px] rounded-full" style={{ background: 'rgba(26,26,26,0.12)' }} />
+              </div>
+
+              <div className="flex justify-between items-center">
+                <h4 className="text-[16px] font-[400] text-noria-text">Editar Gasto Programado</h4>
+                <button type="button" onClick={() => setShowEditAnchorModal(false)}
+                  className="focus:outline-none p-1" style={{ color: 'rgba(26,26,26,0.4)' }}>✕</button>
+              </div>
+
+              <div>
+                <label className="muji-header block mb-1">Nombre</label>
+                <input type="text" value={editAnchorName} onChange={e => setEditAnchorName(e.target.value)}
+                  className="muji-input" required />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="muji-header block mb-1">Monto Mensual (USD)</label>
+                  <input type="number" step="0.01" inputMode="decimal"
+                    value={editAnchorAmount} onChange={e => setEditAnchorAmount(e.target.value)}
+                    className="muji-input" required />
+                </div>
+                <div>
+                  <label className="muji-header block mb-1">Fecha de cobro estimada</label>
+                  <input type="date" value={editAnchorDueDate}
+                    onChange={e => setEditAnchorDueDate(e.target.value)} className="muji-input" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="muji-header block mb-1">Cuenta Asociada</label>
+                  <select value={editAnchorAccountId} onChange={e => setEditAnchorAccountId(e.target.value)}
+                    className="muji-input" required={editingAnchor.pillar !== 'SAVE'}>
+                    <option value="">Ninguna...</option>
+                    {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="muji-header block mb-2">Pilar</label>
+                  <div className="flex space-x-1">
+                    {[['NEED','N','#5C7A52'],['WANT','W','#4A6475'],['SAVE','S','#B8860B']].map(([val, short, col]) => (
+                      <button key={val} type="button" onClick={() => setEditAnchorPillar(val)}
+                        disabled={editingAnchor.pillar === 'SAVE'}
+                        className="flex-1 py-1 text-[10px] font-[500] uppercase rounded border transition-all disabled:opacity-50"
+                        style={{
+                          borderColor: editAnchorPillar === val ? col : 'rgba(26,26,26,0.10)',
+                          color: editAnchorPillar === val ? col : 'rgba(26,26,26,0.35)',
+                        }}>
+                        {short}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <button type="submit"
+                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider transition-all active:scale-[0.98] rounded-[6px] mt-2"
+                style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
+                Guardar Cambios
               </button>
             </form>
           </div>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
 import Header from '../components/Header.jsx';
@@ -53,6 +53,10 @@ export default function HomeScreen() {
   const [transExchangeRate, setTransExchangeRate] = useState('1.00');
   const [savePayError, setSavePayError] = useState('');
 
+  // Estados para el Modal de Ejecución de Gastos (NEED/WANT Anchor)
+  const [payingGeneralAnchor, setPayingGeneralAnchor] = useState(null);
+  const [generalPayAccountId, setGeneralPayAccountId] = useState('');
+
   const baseCurrencyObj  = useLiveQuery(() => db.app_config.get('baseCurrency'));
   const baseCurrency     = baseCurrencyObj?.value || 'USD';
 
@@ -71,8 +75,70 @@ export default function HomeScreen() {
 
   const incomeSum = thisMonthIncomes.reduce((sum, inc) => sum + inc.amount, 0);
 
-  const pendingAnchors = anchors.filter(a => a.status !== 'PAID');
-  const paidAnchors   = anchors.filter(a => a.status === 'PAID');
+  // Lógica de auto-renovación mensual de plantillas e instancias de cobro
+  useEffect(() => {
+    if (anchors.length === 0) return;
+
+    const runRecurrenceJob = async () => {
+      // 1. Migración en caliente: marcar anclas heredadas sin isTemplate como isTemplate: true
+      const legacyAnchors = anchors.filter(a => a.isTemplate === undefined);
+      if (legacyAnchors.length > 0) {
+        for (const a of legacyAnchors) {
+          await db.anchors.update(a.id, { isTemplate: true, isArchived: false });
+        }
+        return;
+      }
+
+      // 2. Generar instancias de cobro para el mes actual
+      const now = new Date();
+      const currentYear = now.getFullYear();
+      const currentMonth = now.getMonth();
+      const startOfCurrentMonth = new Date(currentYear, currentMonth, 1);
+      const endOfCurrentMonth = new Date(currentYear, currentMonth + 1, 0, 23, 59, 59, 999);
+
+      const templates = anchors.filter(a => a.isTemplate === true && !a.isArchived);
+      const instances = anchors.filter(a => a.isTemplate === false);
+
+      for (const temp of templates) {
+        const hasInstanceThisMonth = instances.some(inst => {
+          if (inst.parentAnchorId !== temp.id) return false;
+          const instDate = inst.nextDueDate instanceof Date ? inst.nextDueDate : new Date(inst.nextDueDate);
+          return instDate >= startOfCurrentMonth && instDate <= endOfCurrentMonth;
+        });
+
+        if (!hasInstanceThisMonth) {
+          let targetDay = 1;
+          if (temp.nextDueDate) {
+            const tempDate = temp.nextDueDate instanceof Date ? temp.nextDueDate : new Date(temp.nextDueDate);
+            targetDay = tempDate.getDate();
+          }
+
+          const lastDayOfCurrentMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+          const finalDay = Math.min(targetDay, lastDayOfCurrentMonth);
+          const instanceDueDate = new Date(currentYear, currentMonth, finalDay, 12, 0, 0);
+
+          await db.anchors.add({
+            name: temp.name,
+            type: temp.type || 'FIXED',
+            amount: temp.amount,
+            currency: temp.currency || 'USD',
+            accountId: temp.accountId || null,
+            macetaId: temp.macetaId || null,
+            nextDueDate: instanceDueDate,
+            status: 'PENDING',
+            pillar: temp.pillar,
+            isTemplate: false,
+            parentAnchorId: temp.id
+          });
+        }
+      }
+    };
+
+    runRecurrenceJob();
+  }, [anchors]);
+
+  const pendingAnchors = anchors.filter(a => a.isTemplate === false && a.status !== 'PAID');
+  const paidAnchors   = anchors.filter(a => a.isTemplate === false && a.status === 'PAID');
 
   const getSourceName = (id) => incomeSources.find(s => s.id === id)?.name || null;
 
@@ -92,25 +158,40 @@ export default function HomeScreen() {
       return;
     }
 
-    if (!confirm(`¿Marcar "${anchor.name}" como pagado?`)) return;
-    let resolvedAccountId = anchor.accountId;
-    if (!resolvedAccountId) {
-      const firstActive = accounts.find(a => !a.isArchived);
-      if (!firstActive) {
-        alert('No tienes cuentas activas registradas para realizar el pago.');
-        return;
-      }
-      resolvedAccountId = firstActive.id;
-    }
+    setPayingGeneralAnchor(anchor);
+    setGeneralPayAccountId(anchor.accountId ? anchor.accountId.toString() : (activeAccounts[0]?.id.toString() || ''));
+  };
+
+  const handleConfirmGeneralPay = async (e) => {
+    e.preventDefault();
+    if (!payingGeneralAnchor) return;
+    const resolvedAccountId = parseInt(generalPayAccountId);
     const account = accounts.find(a => a.id === resolvedAccountId);
     if (!account) { alert('Cuenta no encontrada'); return; }
-    await db.transactions.add({
-      date: new Date(), type: 'OUT', amount: anchor.amount, currency: anchor.currency,
-      accountId: resolvedAccountId, tagId: null, pillar: anchor.pillar,
-      incomeSourceId: null, description: `Ancla: ${anchor.name}`
-    });
-    await db.accounts.update(resolvedAccountId, { balance: account.balance - anchor.amount });
-    await db.anchors.update(anchor.id, { status: 'PAID' });
+
+    try {
+      await db.transaction('rw', [db.accounts, db.transactions, db.anchors], async () => {
+        await db.transactions.add({
+          date: new Date(),
+          type: 'OUT',
+          amount: payingGeneralAnchor.amount,
+          currency: payingGeneralAnchor.currency || 'USD',
+          accountId: resolvedAccountId,
+          tagId: null,
+          pillar: payingGeneralAnchor.pillar,
+          incomeSourceId: null,
+          anchorId: payingGeneralAnchor.id,
+          description: `Ancla: ${payingGeneralAnchor.name}`
+        });
+
+        await db.accounts.update(resolvedAccountId, { balance: account.balance - payingGeneralAnchor.amount });
+        await db.anchors.update(payingGeneralAnchor.id, { status: 'PAID' });
+      });
+
+      setPayingGeneralAnchor(null);
+    } catch {
+      alert('Error al registrar el pago del gasto programado.');
+    }
   };
 
   const handleExecuteSaveAlloc = async (e) => {
@@ -326,7 +407,8 @@ export default function HomeScreen() {
       name: anchorName.trim(), type: 'FIXED', amount: amt, currency: selectedAcc.currency,
       accountId: parseInt(anchorAccountId),
       nextDueDate: anchorDueDate ? new Date(anchorDueDate + 'T12:00:00') : null,
-      status: 'PENDING', pillar: anchorPillar
+      status: 'PENDING', pillar: anchorPillar,
+      isTemplate: true, isArchived: false
     });
     setShowAddAnchorModal(false);
     setAnchorName(''); setAnchorAmount(''); setAnchorDueDate(''); setAnchorAccountId('');
@@ -399,7 +481,17 @@ export default function HomeScreen() {
                   <div className="flex items-center space-x-3">
                     <AnchorIcon name={anchor.name} />
                     <div>
-                      <p className="text-[15px] font-[400] text-noria-text">{anchor.name}</p>
+                      <p className="text-[15px] font-[400] text-noria-text">
+                        {anchor.name}
+                        {(() => {
+                          const accName = accounts.find(a => a.id === anchor.accountId)?.name;
+                          return accName ? (
+                            <span className="text-[10px] text-noria-muted font-normal ml-1.5">
+                              ({accName})
+                            </span>
+                          ) : null;
+                        })()}
+                      </p>
                       <div className="flex items-center space-x-2 mt-0.5">
                         {anchor.nextDueDate && (
                           <span className="label-section">
@@ -417,6 +509,23 @@ export default function HomeScreen() {
                         >
                           {anchor.pillar}
                         </span>
+                        {(() => {
+                          if (!anchor.nextDueDate) return null;
+                          const dateObj = anchor.nextDueDate instanceof Date 
+                            ? anchor.nextDueDate 
+                            : new Date(anchor.nextDueDate + 'T12:00:00');
+                          const now = new Date();
+                          const startOfCurrentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+                          if (dateObj < startOfCurrentMonth) {
+                            return (
+                              <span className="text-[9px] font-[600] px-1.5 py-0.5 rounded uppercase tracking-wider" 
+                                style={{ background: 'rgba(159,47,45,0.1)', color: '#9F2F2D' }}>
+                                Atrasado
+                              </span>
+                            );
+                          }
+                          return null;
+                        })()}
                       </div>
                     </div>
                   </div>
@@ -752,6 +861,61 @@ export default function HomeScreen() {
                 </form>
               )}
             </div>
+          </div>
+        </>
+      )}
+
+      {/* ── MODAL EJECUCIÓN GASTO PROGRAMADO (NEED/WANT) ── */}
+      {payingGeneralAnchor && (
+        <>
+          <div className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40" onClick={() => setPayingGeneralAnchor(null)} />
+          <div className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto animate-slide-up"
+            style={{ background: '#F5F2ED', borderRadius: '20px 20px 0 0', boxShadow: '0 -8px 40px rgba(0,0,0,0.08)' }}>
+            <form onSubmit={handleConfirmGeneralPay} className="px-6 pt-4 pb-10 space-y-4">
+              <div className="flex justify-center mb-2">
+                <div className="w-8 h-[3px] rounded-full" style={{ background: 'rgba(26,26,26,0.12)' }} />
+              </div>
+
+              <div className="flex justify-between items-center">
+                <h4 className="text-[16px] font-[400] text-noria-text">Confirmar Pago de Gasto Fijo</h4>
+                <button type="button" onClick={() => setPayingGeneralAnchor(null)}
+                  className="focus:outline-none p-1" style={{ color: 'rgba(26,26,26,0.4)' }}>✕</button>
+              </div>
+
+              <div className="bg-[rgba(26,26,26,0.02)] p-4 rounded border border-[rgba(26,26,26,0.04)] text-center">
+                <p className="text-[12px] text-noria-muted uppercase tracking-wider">Monto a Debitar</p>
+                <p className="text-[28px] font-[500] text-noria-text mt-1">
+                  ${fmt(payingGeneralAnchor.amount)}
+                </p>
+                <p className="text-[13px] text-noria-text/60 mt-1">
+                  Gasto: <span className="font-[500] text-noria-text">{payingGeneralAnchor.name}</span>
+                </p>
+              </div>
+
+              <div>
+                <label className="muji-header block mb-1">Debitar de la Cuenta</label>
+                <select
+                  value={generalPayAccountId}
+                  onChange={e => setGeneralPayAccountId(e.target.value)}
+                  className="muji-input"
+                  required
+                >
+                  {activeAccounts.map(acc => (
+                    <option key={acc.id} value={acc.id}>
+                      {acc.name} (${fmt(acc.balance)})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider transition-all active:scale-[0.98] rounded-[6px]"
+                style={{ background: '#1A1A1A', color: '#F5F2ED' }}
+              >
+                Confirmar Pago y Descontar
+              </button>
+            </form>
           </div>
         </>
       )}

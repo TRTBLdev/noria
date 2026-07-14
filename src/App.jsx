@@ -4,6 +4,7 @@ import AccessScreen from './screens/AccessScreen.jsx';
 import OnboardingScreen from './screens/OnboardingScreen.jsx';
 import HomeScreen from './screens/HomeScreen.jsx';
 import AccountsScreen from './screens/AccountsScreen.jsx';
+import BudgetScreen from './screens/BudgetScreen.jsx';
 import SettingsScreen from './screens/SettingsScreen.jsx';
 
 export default function App() {
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="/onboarding" element={<OnboardingScreen />} />
         <Route path="/home" element={<HomeScreen />} />
         <Route path="/accounts" element={<AccountsScreen />} />
+        <Route path="/budget" element={<BudgetScreen />} />
         <Route path="/settings" element={<SettingsScreen />} />
         
         {/* Fallback to root */}
