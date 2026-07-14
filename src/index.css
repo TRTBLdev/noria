@@ -4,36 +4,125 @@
 
 @layer base {
   body {
-    @apply bg-noria-bg text-noria-text font-sans selection:bg-noria-salvia/30;
+    background-color: #F5F2ED;
+    color: #1A1A1A;
+    font-family: 'DM Sans', system-ui, sans-serif;
     -webkit-tap-highlight-color: transparent;
+    -webkit-font-smoothing: antialiased;
+    selection-color: rgba(92, 122, 82, 0.2);
   }
 
-  /* Thin minimalist scrollbars */
-  ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
-  ::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  ::-webkit-scrollbar-thumb {
-    @apply bg-noria-text/10 rounded-full hover:bg-noria-text/20;
-  }
+  /* Scrollbars */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(26,26,26,0.08); border-radius: 9999px; }
 }
 
-@layer utilities {
-  /* Blur elements under screen lock or overlay */
-  .blur-sensitive {
-    filter: blur(8px);
-    transition: filter 0.3s ease;
+@layer components {
+  /* ─── Typographic utilities ─── */
+  /* Section label — small, uppercase, tracked */
+  .label-section {
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #787674;
   }
-  
-  /* Text and letter spacing styles for Muji look */
+
+  /* Legacy alias — keeping muji-header for backward compat */
   .muji-header {
-    @apply font-sans font-light uppercase tracking-[0.2em] text-xs text-noria-text/50;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: rgba(26, 26, 26, 0.45);
   }
-  
+
+  /* Input — flat underline style */
   .muji-input {
-    @apply w-full bg-[#EAE3D5]/40 border-b border-[#2C2C2C]/10 py-2.5 px-1 focus:border-[#7D9B76] outline-none transition-colors duration-200 font-light text-sm placeholder:text-[#2C2C2C]/30;
+    width: 100%;
+    background: rgba(26,26,26,0.03);
+    border-bottom: 1px solid rgba(26,26,26,0.10);
+    padding: 10px 4px;
+    outline: none;
+    transition: border-color 0.2s;
+    font-size: 14px;
+    font-weight: 400;
+    color: #1A1A1A;
+  }
+  .muji-input::placeholder { color: rgba(26,26,26,0.25); }
+  .muji-input:focus { border-bottom-color: #5C7A52; }
+
+  /* select inherits from muji-input */
+  select.muji-input { cursor: pointer; }
+
+  /* ─── Pill badge ─── */
+  .noria-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .noria-pill-need  { background: rgba(92,122,82,0.12);  color: #5C7A52; }
+  .noria-pill-want  { background: rgba(74,100,117,0.12); color: #4A6475; }
+  .noria-pill-save  { background: rgba(184,134,11,0.12); color: #B8860B; }
+
+  /* ─── Divider ─── */
+  .noria-divider { border-top: 1px solid rgba(0,0,0,0.07); }
+
+  /* ─── List item row ─── */
+  .noria-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 0;
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+  }
+  .noria-row:last-child { border-bottom: none; }
+
+  /* ─── Progress bar ─── */
+  .progress-track {
+    width: 100%;
+    height: 4px;
+    background: rgba(26,26,26,0.06);
+    border-radius: 20px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    border-radius: 20px;
+    transition: width 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  /* ─── Fade in animation ─── */
+  .animate-fade-in {
+    animation: fadeIn 0.25s ease-out;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ─── Slide up animation (bottom sheets) ─── */
+  .animate-slide-up {
+    animation: slideUp 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes slideUp {
+    from { transform: translateY(100%); }
+    to   { transform: translateY(0); }
+  }
+
+  /* ─── Radial FAB menu ─── */
+  .fab-radial-item {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   }
 }

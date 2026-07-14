@@ -17,15 +17,20 @@ export default function AccessScreen() {
 
   useEffect(() => {
     async function checkExistingAccess() {
-      const config = await db.app_config.get('onboardingComplete');
-      const pinObj = await db.app_config.get('hashedPin');
-      const granted = await db.app_config.get('accessGranted');
+      const onboardingObj = await db.app_config.get('onboardingComplete');
+      const pinObj         = await db.app_config.get('hashedPin');
+      const granted        = await db.app_config.get('accessGranted');
 
       if (granted && granted.value === true) {
-        if (pinObj && pinObj.value) {
-          setPinRequired(true);
+        if (onboardingObj && onboardingObj.value === true) {
+          if (pinObj && pinObj.value) {
+            setPinRequired(true);
+          } else {
+            // PIN is disabled/omitted, go directly to Home
+            navigate('/home');
+          }
         } else {
-          // If granted access but no PIN, go to onboarding directly
+          // Access code validated but onboarding not complete yet
           navigate('/onboarding');
         }
       }
@@ -33,6 +38,7 @@ export default function AccessScreen() {
     }
     checkExistingAccess();
   }, [navigate]);
+
 
   const handleBetaSubmit = async (e) => {
     e.preventDefault();
@@ -84,8 +90,8 @@ export default function AccessScreen() {
 
   if (!hasConfig) {
     return (
-      <div className="min-h-screen bg-noria-bg flex items-center justify-center font-sans">
-        <span className="text-sm font-light text-noria-text/40 tracking-[0.2em] uppercase">Noria</span>
+      <div className="min-h-screen flex items-center justify-center font-sans" style={{ background: '#F5F2ED' }}>
+        <span className="text-[12px] font-[500] tracking-[0.2em] uppercase" style={{ color: 'rgba(26,26,26,0.4)' }}>Noria</span>
       </div>
     );
   }

@@ -2,27 +2,64 @@ import React, { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
 import Header from '../components/Header.jsx';
-import { Download, Upload, EyeOff, Fingerprint, Palette, DollarSign, Trash2, Plus, Pencil } from 'lucide-react';
+import { sha256 } from '../config/access.private.js';
+import { Download, Upload, EyeOff, Fingerprint, Palette, DollarSign, Trash2, BarChart2, Lock } from 'lucide-react';
+
+
+const Toggle = ({ id, value, onToggle }) => (
+  <button id={id} onClick={onToggle}
+    className="w-10 h-5 rounded-full p-0.5 transition-colors focus:outline-none"
+    style={{ background: value ? '#5C7A52' : 'rgba(26,26,26,0.12)' }}>
+    <div className="w-4 h-4 rounded-full bg-white shadow-sm transition-transform duration-200"
+      style={{ transform: value ? 'translateX(20px)' : 'translateX(0)' }} />
+  </button>
+);
 
 export default function SettingsScreen() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-  const [showAddSource, setShowAddSource] = useState(false);
-  const [newSourceName, setNewSourceName] = useState('');
+  const [error, setError]     = useState('');
 
-  const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
+  const baseCurrencyObj  = useLiveQuery(() => db.app_config.get('baseCurrency'));
   const monthlyIncomeObj = useLiveQuery(() => db.app_config.get('monthlyIncome'));
-  const maskBalancesObj = useLiveQuery(() => db.app_config.get('maskBalances'));
+  const maskBalancesObj  = useLiveQuery(() => db.app_config.get('maskBalances'));
   const biometricLockObj = useLiveQuery(() => db.app_config.get('biometricLock'));
-  const themeObj = useLiveQuery(() => db.app_config.get('theme'));
-  const incomeSources = useLiveQuery(() => db.income_sources.toArray()) || [];
+  const themeObj         = useLiveQuery(() => db.app_config.get('theme'));
+  const pillarPctObj     = useLiveQuery(() => db.app_config.get('pillarPct'));
+  const hashedPinObj     = useLiveQuery(() => db.app_config.get('hashedPin'));
 
-  const baseCurrency = baseCurrencyObj?.value || 'USD';
-  const monthlyIncome = monthlyIncomeObj?.value || 0;
-  const maskBalances = maskBalancesObj?.value || false;
-  const biometricLock = biometricLockObj?.value || false;
-  const theme = themeObj?.value || 'System';
+  const baseCurrency   = baseCurrencyObj?.value  || 'USD';
+  const monthlyIncome  = monthlyIncomeObj?.value  || 0;
+  const maskBalances   = maskBalancesObj?.value   || false;
+  const biometricLock  = biometricLockObj?.value  || false;
+  const theme          = themeObj?.value          || 'System';
+  const pillarPct      = pillarPctObj?.value      || { NEED: 50, WANT: 30, SAVE: 20 };
+  const hasPin         = !!hashedPinObj?.value;
+
+  // PIN settings states
+  const [isConfiguringPin, setIsConfiguringPin]   = useState(false);
+  const [isDeactivatingPin, setIsDeactivatingPin] = useState(false);
+  const [isChangingPin, setIsChangingPin]         = useState(false);
+  const [pinInput, setPinInput]                   = useState('');
+  const [confirmPinInput, setConfirmPinInput]     = useState('');
+  const [currentPinVerify, setCurrentPinVerify]   = useState('');
+  const [pinError, setPinError]                   = useState('');
+
+
+  // Local pillar percentages for editing
+  const [needPct,  setNeedPct]  = useState(pillarPct.NEED);
+  const [wantPct,  setWantPct]  = useState(pillarPct.WANT);
+  const [savePct,  setSavePct]  = useState(pillarPct.SAVE);
+  const [pillarError, setPillarError] = useState('');
+
+  // Sync from DB when loaded
+  useEffect(() => {
+    if (pillarPctObj?.value) {
+      setNeedPct(pillarPctObj.value.NEED);
+      setWantPct(pillarPctObj.value.WANT);
+      setSavePct(pillarPctObj.value.SAVE);
+    }
+  }, [pillarPctObj]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -31,13 +68,115 @@ export default function SettingsScreen() {
     else root.classList.toggle('dark', window.matchMedia('(prefers-color-scheme: dark)').matches);
   }, [theme]);
 
+  const putConfig = async (key, value) => db.app_config.put({ key, value });
+  const toggleConfig = async (key, val) => db.app_config.put({ key, value: !val });
+
+  const handleTogglePin = async () => {
+    setPinError('');
+    if (hasPin) {
+      setIsDeactivatingPin(true);
+      setIsConfiguringPin(false);
+      setIsChangingPin(false);
+      setCurrentPinVerify('');
+    } else {
+      setIsConfiguringPin(true);
+      setIsDeactivatingPin(false);
+      setIsChangingPin(false);
+      setPinInput('');
+      setConfirmPinInput('');
+    }
+  };
+
+  const handleDisablePin = async (e) => {
+    e.preventDefault();
+    setPinError('');
+    try {
+      const hashedInput = await sha256(currentPinVerify);
+      if (hashedInput === hashedPinObj.value) {
+        await putConfig('hashedPin', null);
+        setIsDeactivatingPin(false);
+        setCurrentPinVerify('');
+        setMessage('PIN de seguridad desactivado');
+        setTimeout(() => setMessage(''), 2000);
+      } else {
+        setPinError('PIN actual incorrecto');
+      }
+    } catch {
+      setPinError('Error al desactivar el PIN');
+    }
+  };
+
+  const handleEnablePin = async (e) => {
+    e.preventDefault();
+    setPinError('');
+    if (pinInput.length < 4 || pinInput.length > 6) {
+      setPinError('El PIN debe tener entre 4 y 6 dígitos');
+      return;
+    }
+    if (pinInput !== confirmPinInput) {
+      setPinError('Los PINs no coinciden');
+      return;
+    }
+    try {
+      const hashed = await sha256(pinInput);
+      await putConfig('hashedPin', hashed);
+      setIsConfiguringPin(false);
+      setPinInput('');
+      setConfirmPinInput('');
+      setMessage('PIN de seguridad activado');
+      setTimeout(() => setMessage(''), 2000);
+    } catch {
+      setPinError('Error al activar el PIN');
+    }
+  };
+
+  const handleChangePin = async (e) => {
+    e.preventDefault();
+    setPinError('');
+    if (pinInput.length < 4 || pinInput.length > 6) {
+      setPinError('El nuevo PIN debe tener entre 4 y 6 dígitos');
+      return;
+    }
+    if (pinInput !== confirmPinInput) {
+      setPinError('Los nuevos PINs no coinciden');
+      return;
+    }
+    try {
+      const hashedVerify = await sha256(currentPinVerify);
+      if (hashedVerify !== hashedPinObj.value) {
+        setPinError('PIN actual incorrecto');
+        return;
+      }
+      const hashed = await sha256(pinInput);
+      await putConfig('hashedPin', hashed);
+      setIsChangingPin(false);
+      setPinInput('');
+      setConfirmPinInput('');
+      setCurrentPinVerify('');
+      setMessage('PIN cambiado con éxito');
+      setTimeout(() => setMessage(''), 2000);
+    } catch {
+      setPinError('Error al cambiar el PIN');
+    }
+  };
+
+  const savePillarPct = async () => {
+    const total = parseInt(needPct) + parseInt(wantPct) + parseInt(savePct);
+    if (total !== 100) {
+      setPillarError(`Los porcentajes deben sumar 100%. Ahora suman ${total}%.`);
+      return;
+    }
+    setPillarError('');
+    await putConfig('pillarPct', { NEED: parseInt(needPct), WANT: parseInt(wantPct), SAVE: parseInt(savePct) });
+    setMessage('Porcentajes guardados');
+    setTimeout(() => setMessage(''), 2000);
+  };
+
   const handleExport = async () => {
     setMessage(''); setError(''); setLoading(true);
     try {
       const exportData = {};
-      for (const table of db.tables) {
-        exportData[table.name] = await table.toArray();
-      }
+      for (const table of db.tables) exportData[table.name] = await table.toArray();
       const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -45,12 +184,9 @@ export default function SettingsScreen() {
       a.download = `noria_backup_${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      setMessage('Datos exportados con éxito');
-    } catch (err) {
-      setError('Error al exportar los datos');
-    } finally {
-      setLoading(false);
-    }
+      setMessage('Datos exportados');
+    } catch { setError('Error al exportar'); }
+    finally { setLoading(false); }
   };
 
   const handleImport = async (e) => {
@@ -69,207 +205,368 @@ export default function SettingsScreen() {
         });
         setMessage('Importado. Recargando...');
         setTimeout(() => window.location.reload(), 1500);
-      } catch (err) {
-        setError('Archivo inválido o corrupto');
-        setLoading(false);
-      }
+      } catch { setError('Archivo inválido'); setLoading(false); }
     };
     reader.readAsText(file);
-  };
-
-  const toggleConfig = async (key, val) => await db.app_config.put({ key, value: !val });
-  const putConfig = async (key, value) => await db.app_config.put({ key, value });
-
-  const handleAddSource = async (e) => {
-    e.preventDefault();
-    if (!newSourceName.trim()) return;
-    const exists = incomeSources.find(s => s.name.toLowerCase() === newSourceName.trim().toLowerCase());
-    if (!exists) {
-      await db.income_sources.add({ name: newSourceName.trim(), type: 'OTHER', isActive: true });
-    }
-    setNewSourceName('');
-    setShowAddSource(false);
-  };
-
-  const handleDeleteSource = async (id, name) => {
-    if (!confirm(`¿Eliminar la fuente "${name}"?`)) return;
-    await db.income_sources.delete(id);
   };
 
   const handleClearAll = async () => {
     if (!confirm('¿Estás COMPLETAMENTE seguro? Esta acción es irreversible.')) return;
     setLoading(true);
-    try {
-      await db.delete();
-      window.location.href = '/';
-    } catch (err) {
-      setError('Error al eliminar base de datos');
-      setLoading(false);
-    }
+    try { await db.delete(); window.location.href = '/'; }
+    catch { setError('Error al eliminar base de datos'); setLoading(false); }
   };
 
-  // Toggle component
-  const Toggle = ({ id, value, onToggle }) => (
-    <button id={id} onClick={onToggle}
-      className={`w-10 h-5 rounded-full p-0.5 transition-colors focus:outline-none ${value ? 'bg-noria-salvia' : 'bg-noria-text/15'}`}>
-      <div className={`bg-white w-4 h-4 rounded-full shadow-sm transform transition-transform duration-200 ${value ? 'translate-x-5' : ''}`} />
-    </button>
+  // Section row component
+  const Row = ({ icon, label, right }) => (
+    <div className="noria-row">
+      <div className="flex items-center space-x-3">
+        <span style={{ color: 'rgba(26,26,26,0.4)' }}>{icon}</span>
+        <p className="text-[15px] font-[400] text-noria-text">{label}</p>
+      </div>
+      {right}
+    </div>
   );
 
   return (
-    <div className="min-h-screen bg-noria-bg pb-24 pt-16">
+    <div className="min-h-screen pb-24 pt-16" style={{ background: '#F5F2ED' }}>
       <Header title="Configuración" showBack={true} />
 
       <main className="px-6 max-w-md mx-auto">
 
-        {/* Section: Data Portability */}
+        {/* ── Data Portability ── */}
         <section className="py-6" id="portability-section">
-          <h3 className="muji-header mb-4">Portabilidad de Datos</h3>
+          <p className="label-section mb-4">Portabilidad de Datos</p>
+          <p className="text-[13px] font-[400] mb-4" style={{ color: 'rgba(26,26,26,0.5)' }}>
+            Mueve tu libro de cuentas libremente. Exporta como JSON legible.
+          </p>
 
-          <div className="flex space-x-0 divide-x divide-noria-text/8 border-t border-b border-noria-text/8">
+          <div className="flex space-x-4 mb-3">
             <button id="export-data-btn" onClick={handleExport} disabled={loading}
-              className="flex-1 flex items-center justify-center space-x-2 py-4 hover:bg-noria-text/3 transition-colors disabled:opacity-30 focus:outline-none">
-              <Download size={14} strokeWidth={1.5} className="text-noria-text/60" />
-              <span className="text-xs font-light text-noria-text/70">Exportar JSON</span>
+              className="flex items-center space-x-2 text-[13px] font-[400] focus:outline-none disabled:opacity-30 transition-opacity"
+              style={{ color: '#1A1A1A' }}>
+              <Download size={14} strokeWidth={1.5} />
+              <span>Exportar JSON</span>
             </button>
 
-            <label id="import-data-label" className="flex-1 flex items-center justify-center space-x-2 py-4 hover:bg-noria-text/3 transition-colors cursor-pointer">
-              <Upload size={14} strokeWidth={1.5} className="text-noria-text/60" />
-              <span className="text-xs font-light text-noria-text/70">Importar JSON</span>
+            <label id="import-data-label"
+              className="flex items-center space-x-2 text-[13px] font-[400] cursor-pointer"
+              style={{ color: '#1A1A1A' }}>
+              <Upload size={14} strokeWidth={1.5} />
+              <span>Importar datos</span>
               <input id="import-file-input" type="file" accept=".json" onChange={handleImport} disabled={loading} className="hidden" />
             </label>
           </div>
 
-          {message && <p className="text-xs text-noria-salvia font-light mt-3" id="settings-success-msg">{message}</p>}
-          {error && <p className="text-xs text-noria-amber font-light mt-3" id="settings-error-msg">{error}</p>}
+          {message && <p className="text-[12px] font-[500]" style={{ color: '#5C7A52' }} id="settings-success-msg">{message}</p>}
+          {error   && <p className="text-[12px] font-[500]" style={{ color: '#B8860B' }} id="settings-error-msg">{error}</p>}
         </section>
 
-        <div className="border-t border-noria-text/8" />
+        <div className="noria-divider" />
 
-        {/* Section: Privacy Shield */}
+        {/* ── Privacy Shield ── */}
         <section className="py-6" id="privacy-section">
-          <h3 className="muji-header mb-4">Escudo de Privacidad</h3>
+          <p className="label-section mb-4">Escudo de Privacidad</p>
 
-          <div className="divide-y divide-noria-text/5">
-            <div className="flex justify-between items-center py-3.5">
-              <div className="flex items-center space-x-3">
-                <EyeOff size={15} strokeWidth={1.5} className="text-noria-text/40" />
+          <Row
+            icon={<EyeOff size={15} strokeWidth={1.5} />}
+            label="Ocultar Saldos"
+            right={<Toggle id="toggle-mask-balances" value={maskBalances} onToggle={() => toggleConfig('maskBalances', maskBalances)} />}
+          />
+
+          <Row
+            icon={<Lock size={15} strokeWidth={1.5} />}
+            label="PIN de Seguridad"
+            right={<Toggle id="toggle-security-pin" value={hasPin} onToggle={handleTogglePin} />}
+          />
+
+          {/* Formulario de Activación de PIN */}
+          {isConfiguringPin && (
+            <form onSubmit={handleEnablePin} className="mt-3 p-4 border border-[rgba(0,0,0,0.06)] rounded bg-[rgba(26,26,26,0.02)] space-y-3 animate-fade-in" id="enable-pin-form">
+              <p className="text-[11px] font-[500] text-noria-text/60 uppercase tracking-wider">Habilitar PIN de seguridad</p>
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <p className="text-sm font-light text-noria-text">Ocultar Saldos</p>
-                  <p className="text-[10px] font-light text-noria-text/40 mt-0.5">Ofusca montos al iniciar</p>
+                  <label className="muji-header block mb-1">Nuevo PIN</label>
+                  <input
+                    type="password"
+                    pattern="[0-9]*"
+                    inputMode="numeric"
+                    maxLength={6}
+                    value={pinInput}
+                    onChange={e => setPinInput(e.target.value.replace(/\D/g, ''))}
+                    placeholder="••••"
+                    className="muji-input text-center text-sm"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="muji-header block mb-1">Confirmar PIN</label>
+                  <input
+                    type="password"
+                    pattern="[0-9]*"
+                    inputMode="numeric"
+                    maxLength={6}
+                    value={confirmPinInput}
+                    onChange={e => setConfirmPinInput(e.target.value.replace(/\D/g, ''))}
+                    placeholder="••••"
+                    className="muji-input text-center text-sm"
+                    required
+                  />
                 </div>
               </div>
-              <Toggle id="toggle-mask-balances" value={maskBalances} onToggle={() => toggleConfig('maskBalances', maskBalances)} />
-            </div>
-
-            <div className="flex justify-between items-center py-3.5">
-              <div className="flex items-center space-x-3">
-                <Fingerprint size={15} strokeWidth={1.5} className="text-noria-text/40" />
-                <div>
-                  <p className="text-sm font-light text-noria-text">Bloqueo Biométrico</p>
-                  <p className="text-[10px] font-light text-noria-text/40 mt-0.5">Requiere FaceID / Huella</p>
-                </div>
+              {pinError && <p className="text-[11px] font-[500]" style={{ color: '#B8860B' }}>{pinError}</p>}
+              <div className="flex space-x-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => { setIsConfiguringPin(false); setPinError(''); }}
+                  className="flex-1 py-1.5 text-[11px] border border-[rgba(26,26,26,0.15)] rounded bg-transparent uppercase tracking-wider font-[500]"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-1.5 text-[11px] rounded uppercase tracking-wider font-[500]"
+                  style={{ background: '#1A1A1A', color: '#F5F2ED' }}
+                >
+                  Activar
+                </button>
               </div>
-              <Toggle id="toggle-biometric-lock" value={biometricLock} onToggle={() => toggleConfig('biometricLock', biometricLock)} />
-            </div>
-          </div>
-        </section>
-
-        <div className="border-t border-noria-text/8" />
-
-        {/* Section: Income Sources */}
-        <section className="py-6" id="income-sources-section">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="muji-header">Fuentes de Ingreso</h3>
-            <button onClick={() => setShowAddSource(!showAddSource)}
-              className="flex items-center space-x-1 text-[10px] font-light uppercase tracking-widest text-noria-salvia hover:text-noria-salvia/70 focus:outline-none">
-              <Plus size={12} strokeWidth={1.5} />
-              <span>Nueva</span>
-            </button>
-          </div>
-
-          {showAddSource && (
-            <form onSubmit={handleAddSource} className="flex space-x-3 mb-4" id="add-income-source-form">
-              <input type="text" value={newSourceName} onChange={e => setNewSourceName(e.target.value)}
-                placeholder="Ej. Estudio CKM Visualización" className="muji-input flex-1" autoFocus />
-              <button type="submit" className="text-xs font-light uppercase tracking-wider text-noria-salvia border-b border-noria-salvia/30 pb-0.5 whitespace-nowrap">
-                Añadir
-              </button>
             </form>
           )}
 
-          <div className="divide-y divide-noria-text/5">
-            {incomeSources.length === 0 ? (
-              <p className="text-xs font-light text-noria-text/30 py-4">No hay fuentes registradas.</p>
-            ) : (
-              incomeSources.map(src => (
-                <div key={src.id} className="flex justify-between items-center py-3">
-                  <p className="text-sm font-light text-noria-text">{src.name}</p>
-                  <button onClick={() => handleDeleteSource(src.id, src.name)}
-                    className="text-noria-text/15 hover:text-noria-amber transition-colors p-1 focus:outline-none">
-                    <Trash2 size={13} strokeWidth={1.5} />
-                  </button>
+          {/* Formulario de Desactivación de PIN */}
+          {isDeactivatingPin && (
+            <form onSubmit={handleDisablePin} className="mt-3 p-4 border border-[rgba(0,0,0,0.06)] rounded bg-[rgba(26,26,26,0.02)] space-y-3 animate-fade-in" id="disable-pin-form">
+              <p className="text-[11px] font-[500] text-noria-text/60 uppercase tracking-wider">Confirmar Desactivación</p>
+              <div>
+                <label className="muji-header block mb-1">Introduce tu PIN actual</label>
+                <input
+                  type="password"
+                  pattern="[0-9]*"
+                  inputMode="numeric"
+                  maxLength={6}
+                  value={currentPinVerify}
+                  onChange={e => setCurrentPinVerify(e.target.value.replace(/\D/g, ''))}
+                  placeholder="••••"
+                  className="muji-input text-center text-sm"
+                  required
+                />
+              </div>
+              {pinError && <p className="text-[11px] font-[500]" style={{ color: '#B8860B' }}>{pinError}</p>}
+              <div className="flex space-x-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => { setIsDeactivatingPin(false); setPinError(''); }}
+                  className="flex-1 py-1.5 text-[11px] border border-[rgba(26,26,26,0.15)] rounded bg-transparent uppercase tracking-wider font-[500]"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-1.5 text-[11px] rounded uppercase tracking-wider font-[500]"
+                  style={{ background: '#9F2F2D', color: '#F5F2ED' }}
+                >
+                  Desactivar
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Formulario de Cambio de PIN */}
+          {isChangingPin && (
+            <form onSubmit={handleChangePin} className="mt-3 p-4 border border-[rgba(0,0,0,0.06)] rounded bg-[rgba(26,26,26,0.02)] space-y-3 animate-fade-in" id="change-pin-form">
+              <p className="text-[11px] font-[500] text-noria-text/60 uppercase tracking-wider">Cambiar PIN de seguridad</p>
+              <div>
+                <label className="muji-header block mb-1">PIN Actual</label>
+                <input
+                  type="password"
+                  pattern="[0-9]*"
+                  inputMode="numeric"
+                  maxLength={6}
+                  value={currentPinVerify}
+                  onChange={e => setCurrentPinVerify(e.target.value.replace(/\D/g, ''))}
+                  placeholder="••••"
+                  className="muji-input text-center text-sm mb-2"
+                  required
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="muji-header block mb-1">Nuevo PIN</label>
+                  <input
+                    type="password"
+                    pattern="[0-9]*"
+                    inputMode="numeric"
+                    maxLength={6}
+                    value={pinInput}
+                    onChange={e => setPinInput(e.target.value.replace(/\D/g, ''))}
+                    placeholder="••••"
+                    className="muji-input text-center text-sm"
+                    required
+                  />
                 </div>
-              ))
-            )}
+                <div>
+                  <label className="muji-header block mb-1">Confirmar Nuevo PIN</label>
+                  <input
+                    type="password"
+                    pattern="[0-9]*"
+                    inputMode="numeric"
+                    maxLength={6}
+                    value={confirmPinInput}
+                    onChange={e => setConfirmPinInput(e.target.value.replace(/\D/g, ''))}
+                    placeholder="••••"
+                    className="muji-input text-center text-sm"
+                    required
+                  />
+                </div>
+              </div>
+              {pinError && <p className="text-[11px] font-[500]" style={{ color: '#B8860B' }}>{pinError}</p>}
+              <div className="flex space-x-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => { setIsChangingPin(false); setPinError(''); }}
+                  className="flex-1 py-1.5 text-[11px] border border-[rgba(26,26,26,0.15)] rounded bg-transparent uppercase tracking-wider font-[500]"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-1.5 text-[11px] rounded uppercase tracking-wider font-[500]"
+                  style={{ background: '#1A1A1A', color: '#F5F2ED' }}
+                >
+                  Guardar
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Botón de Cambiar PIN si el PIN ya está activo y no se está editando nada */}
+          {hasPin && !isConfiguringPin && !isDeactivatingPin && !isChangingPin && (
+            <div className="mt-2 text-right">
+              <button
+                type="button"
+                id="start-change-pin-btn"
+                onClick={() => {
+                  setIsChangingPin(true);
+                  setIsConfiguringPin(false);
+                  setIsDeactivatingPin(false);
+                  setPinInput('');
+                  setConfirmPinInput('');
+                  setCurrentPinVerify('');
+                  setPinError('');
+                }}
+                className="text-[11px] font-[500] uppercase tracking-wider text-[#5C7A52] underline underline-offset-2 focus:outline-none"
+              >
+                Cambiar PIN de seguridad
+              </button>
+            </div>
+          )}
+        </section>
+
+        <div className="noria-divider" />
+
+        {/* ── Homeostasis — configurar pilares ── */}
+        <section className="py-6" id="homeostasis-config-section">
+          <p className="label-section mb-1">Pilares de Homeostasis</p>
+          <p className="text-[13px] mb-4" style={{ color: 'rgba(26,26,26,0.5)' }}>
+            Ajusta los porcentajes de Necesidades, Deseos y Ahorro. Deben sumar 100%.
+          </p>
+
+          <div className="space-y-4">
+            {[
+              { key: 'NEED', label: 'Necesidades', val: needPct, set: setNeedPct, color: '#5C7A52' },
+              { key: 'WANT', label: 'Deseos',      val: wantPct, set: setWantPct, color: '#4A6475' },
+              { key: 'SAVE', label: 'Ahorro',      val: savePct, set: setSavePct, color: '#B8860B' },
+            ].map(({ key, label, val, set, color }) => (
+              <div key={key} className="flex items-center justify-between">
+                <div className="flex items-center space-x-3">
+                  <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: color }} />
+                  <p className="text-[14px] font-[400] text-noria-text">{label}</p>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <input
+                    id={`pillar-pct-${key.toLowerCase()}`}
+                    type="number" min="0" max="100" step="1"
+                    value={val} onChange={e => set(e.target.value)}
+                    className="w-14 text-right bg-transparent outline-none text-[15px] font-[400] text-noria-text border-b border-[rgba(26,26,26,0.10)] pb-0.5 focus:border-[#5C7A52] transition-colors"
+                  />
+                  <span className="text-[13px]" style={{ color: 'rgba(26,26,26,0.4)' }}>%</span>
+                </div>
+              </div>
+            ))}
+
+            {/* Sum indicator */}
+            <div className="flex items-center justify-between pt-1">
+              <span className="label-section">Total</span>
+              <span
+                className="text-[14px] font-[500]"
+                style={{ color: parseInt(needPct) + parseInt(wantPct) + parseInt(savePct) === 100 ? '#5C7A52' : '#B8860B' }}
+              >
+                {(parseInt(needPct) || 0) + (parseInt(wantPct) || 0) + (parseInt(savePct) || 0)}%
+              </span>
+            </div>
+
+            {pillarError && <p className="text-[11px] font-[500]" style={{ color: '#B8860B' }}>{pillarError}</p>}
+
+            <button id="save-pillar-pct-btn" onClick={savePillarPct}
+              className="w-full py-2.5 text-[12px] font-[500] uppercase tracking-wider rounded-[6px] transition-all active:scale-[0.98] mt-1"
+              style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
+              Guardar Porcentajes
+            </button>
           </div>
         </section>
 
-        <div className="border-t border-noria-text/8" />
+        <div className="noria-divider" />
 
-        {/* Section: Preferences */}
+        {/* ── Preferences ── */}
         <section className="py-6" id="preferences-section">
-          <h3 className="muji-header mb-4">Preferencias</h3>
+          <p className="label-section mb-4">Preferencias</p>
 
-          <div className="divide-y divide-noria-text/5">
-            <div className="flex justify-between items-center py-3.5">
-              <div className="flex items-center space-x-3">
-                <DollarSign size={15} strokeWidth={1.5} className="text-noria-text/40" />
-                <p className="text-sm font-light text-noria-text">Ingreso Mensual Base</p>
-              </div>
+          <Row
+            icon={<DollarSign size={15} strokeWidth={1.5} />}
+            label="Ingreso Mensual Base"
+            right={
               <input type="number" value={monthlyIncome}
                 onChange={e => putConfig('monthlyIncome', parseFloat(e.target.value) || 0)}
-                className="w-24 text-right bg-transparent outline-none text-sm font-light text-noria-text border-b border-noria-text/10 focus:border-noria-salvia transition-colors pb-0.5"
-                id="settings-income-input"
-              />
-            </div>
-
-            <div className="flex justify-between items-center py-3.5">
-              <div className="flex items-center space-x-3">
-                <DollarSign size={15} strokeWidth={1.5} className="text-noria-text/40" />
-                <p className="text-sm font-light text-noria-text">Moneda Base</p>
-              </div>
+                className="w-24 text-right bg-transparent outline-none text-[15px] font-[400] text-noria-text border-b border-[rgba(26,26,26,0.10)] pb-0.5 focus:border-[#5C7A52] transition-colors"
+                id="settings-income-input" />
+            }
+          />
+          <Row
+            icon={<DollarSign size={15} strokeWidth={1.5} />}
+            label="Moneda Base"
+            right={
               <select value={baseCurrency} onChange={e => putConfig('baseCurrency', e.target.value)}
-                className="bg-transparent text-sm font-light text-noria-text border-b border-noria-text/10 focus:border-noria-salvia outline-none pb-0.5 transition-colors"
+                className="bg-transparent text-[15px] font-[400] text-noria-text outline-none border-b border-[rgba(26,26,26,0.10)] pb-0.5"
                 id="settings-currency-select">
                 <option value="USD">USD</option>
                 <option value="USDT">USDT</option>
                 <option value="USDC">USDC</option>
               </select>
-            </div>
-
-            <div className="flex justify-between items-center py-3.5">
-              <div className="flex items-center space-x-3">
-                <Palette size={15} strokeWidth={1.5} className="text-noria-text/40" />
-                <p className="text-sm font-light text-noria-text">Apariencia</p>
-              </div>
+            }
+          />
+          <Row
+            icon={<Palette size={15} strokeWidth={1.5} />}
+            label="Apariencia"
+            right={
               <select value={theme} onChange={e => putConfig('theme', e.target.value)}
-                className="bg-transparent text-sm font-light text-noria-text border-b border-noria-text/10 focus:border-noria-salvia outline-none pb-0.5 transition-colors"
+                className="bg-transparent text-[15px] font-[400] text-noria-text outline-none border-b border-[rgba(26,26,26,0.10)] pb-0.5"
                 id="settings-theme-select">
                 <option value="System">Sistema</option>
                 <option value="Light">Claro</option>
                 <option value="Dark">Oscuro</option>
               </select>
-            </div>
-          </div>
+            }
+          />
         </section>
 
-        <div className="border-t border-noria-text/8" />
+        <div className="noria-divider" />
 
-        {/* Danger Zone */}
+        {/* ── Danger Zone ── */}
         <section className="py-8 flex justify-center" id="danger-zone-section">
           <button id="clear-all-data-btn" onClick={handleClearAll} disabled={loading}
-            className="flex items-center space-x-2 text-[10px] font-light text-noria-amber/60 hover:text-noria-amber uppercase tracking-widest border-b border-noria-amber/20 hover:border-noria-amber/50 pb-0.5 transition-all focus:outline-none">
+            className="flex items-center space-x-2 text-[12px] font-[500] uppercase tracking-wider focus:outline-none disabled:opacity-30 border-b pb-0.5 transition-all"
+            style={{ color: '#9F2F2D', borderColor: 'rgba(159,47,45,0.25)' }}>
             <Trash2 size={12} strokeWidth={1.5} />
             <span>Eliminar todos mis datos</span>
           </button>

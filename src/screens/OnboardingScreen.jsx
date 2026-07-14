@@ -9,6 +9,7 @@ export default function OnboardingScreen() {
   const [step, setStep] = useState(0);
   const [baseCurrency, setBaseCurrency] = useState('USD');
   const [monthlyIncome, setMonthlyIncome] = useState('');
+  const [usePin, setUsePin] = useState(true);
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [pinError, setPinError] = useState('');
@@ -32,19 +33,20 @@ export default function OnboardingScreen() {
     e.preventDefault();
     setPinError('');
 
-    if (pin.length < 4 || pin.length > 6) {
-      setPinError('El PIN debe tener entre 4 y 6 dígitos');
-      return;
-    }
-
-    if (pin !== confirmPin) {
-      setPinError('Los PINs no coinciden');
-      return;
+    if (usePin) {
+      if (pin.length < 4 || pin.length > 6) {
+        setPinError('El PIN debe tener entre 4 y 6 dígitos');
+        return;
+      }
+      if (pin !== confirmPin) {
+        setPinError('Los PINs no coinciden');
+        return;
+      }
     }
 
     setLoading(true);
     try {
-      const hashedPin = await sha256(pin);
+      const hashedPin = usePin ? await sha256(pin) : null;
 
       // Save onboarding config
       await db.app_config.put({ key: 'baseCurrency', value: baseCurrency });
@@ -54,7 +56,7 @@ export default function OnboardingScreen() {
 
       // Add standard cash account automatically matching base currency
       const cashInstId = await db.institutions.add({
-        name: 'Efectivo Personal',
+        name: 'Efectivo',
         type: 'CASH',
         country: 'VE'
       });
@@ -89,7 +91,7 @@ export default function OnboardingScreen() {
         </div>
         {/* Progress bar */}
         <div className="w-full bg-noria-text/5 h-[1px] mt-4 rounded-full overflow-hidden">
-          <div 
+          <div
             className="bg-noria-salvia h-full transition-all duration-300"
             style={{ width: `${((step + 1) / stepsTotal) * 100}%` }}
           />
@@ -176,42 +178,65 @@ export default function OnboardingScreen() {
           // Step 4: Security PIN Setup
           <div className="space-y-6 animate-fade-in" id="onboarding-step-pin">
             <h2 className="text-xl font-light tracking-wide text-noria-text">
-              Crea tu PIN de Acceso
+              PIN de Seguridad
             </h2>
             <p className="text-sm font-light text-noria-text/60 leading-relaxed">
-              Crea un código de 4 a 6 dígitos para proteger tu información en este dispositivo.
+              Protege el acceso a tu información financiera en este dispositivo.
             </p>
 
-            <div className="space-y-4 pt-4">
-              <div>
-                <label htmlFor="pin-input" className="muji-header block">PIN de acceso</label>
+            <div className="pt-2 space-y-4">
+              <div className="flex items-center space-x-3 p-3 border border-[rgba(0,0,0,0.06)] rounded bg-[rgba(26,26,26,0.02)]">
                 <input
-                  id="pin-input"
-                  type="password"
-                  pattern="[0-9]*"
-                  inputMode="numeric"
-                  maxLength={6}
-                  value={pin}
-                  onChange={e => setPin(e.target.value.replace(/\D/g, ''))}
-                  placeholder="••••••"
-                  className="muji-input text-center text-lg tracking-[0.3em]"
+                  type="checkbox"
+                  id="enable-pin-checkbox"
+                  checked={usePin}
+                  onChange={e => setUsePin(e.target.checked)}
+                  className="rounded border-[rgba(26,26,26,0.15)] text-[#5C7A52] focus:ring-[#5C7A52] w-4 h-4 cursor-pointer"
                 />
+                <label htmlFor="enable-pin-checkbox" className="text-xs font-[500] text-noria-text/75 uppercase tracking-wide cursor-pointer select-none">
+                  Habilitar PIN de acceso
+                </label>
               </div>
 
-              <div>
-                <label htmlFor="confirm-pin-input" className="muji-header block">Confirmar PIN</label>
-                <input
-                  id="confirm-pin-input"
-                  type="password"
-                  pattern="[0-9]*"
-                  inputMode="numeric"
-                  maxLength={6}
-                  value={confirmPin}
-                  onChange={e => setConfirmPin(e.target.value.replace(/\D/g, ''))}
-                  placeholder="••••••"
-                  className="muji-input text-center text-lg tracking-[0.3em]"
-                />
-              </div>
+              {usePin ? (
+                <div className="space-y-4 animate-fade-in">
+                  <div>
+                    <label htmlFor="pin-input" className="muji-header block">PIN de acceso</label>
+                    <input
+                      id="pin-input"
+                      type="password"
+                      pattern="[0-9]*"
+                      inputMode="numeric"
+                      maxLength={6}
+                      value={pin}
+                      onChange={e => setPin(e.target.value.replace(/\D/g, ''))}
+                      placeholder="••••••"
+                      className="muji-input text-center text-lg tracking-[0.3em]"
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="confirm-pin-input" className="muji-header block">Confirmar PIN</label>
+                    <input
+                      id="confirm-pin-input"
+                      type="password"
+                      pattern="[0-9]*"
+                      inputMode="numeric"
+                      maxLength={6}
+                      value={confirmPin}
+                      onChange={e => setConfirmPin(e.target.value.replace(/\D/g, ''))}
+                      placeholder="••••••"
+                      className="muji-input text-center text-lg tracking-[0.3em]"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="p-3 border border-dashed border-[rgba(0,0,0,0.08)] rounded bg-transparent animate-fade-in">
+                  <p className="text-[12px] text-noria-text/60 leading-relaxed">
+                    Has omitido el PIN de acceso. Tu homeostasis financiera se cargará directamente al iniciar la aplicación. Podrás activarlo cuando lo desees en la sección de Ajustes.
+                  </p>
+                </div>
+              )}
 
               {pinError && (
                 <p className="text-xs text-noria-amber font-light tracking-wide text-center" id="onboarding-pin-error">
@@ -251,7 +276,7 @@ export default function OnboardingScreen() {
           <button
             id="onboarding-finish-btn"
             onClick={handleComplete}
-            disabled={loading || pin.length < 4 || confirmPin.length < 4}
+            disabled={loading || (usePin && (pin.length < 4 || confirmPin.length < 4))}
             className="flex items-center space-x-2 py-2 px-5 bg-noria-text text-noria-bg rounded-noria text-sm font-light uppercase tracking-wider hover:opacity-90 active:scale-[0.98] transition-all disabled:opacity-30 disabled:scale-100"
           >
             <span>Listo</span>

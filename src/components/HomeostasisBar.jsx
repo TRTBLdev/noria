@@ -4,161 +4,191 @@ import { db } from '../db/db.js';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 
 export default function HomeostasisBar() {
-  const [expandedPillar, setExpandedPillar] = useState(null); // 'NEED' | 'WANT' | 'SAVE' | null
+  const [expanded, setExpanded] = useState(null); // 'NEED' | 'WANT' | 'SAVE' | null
 
-  const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
+  const baseCurrencyObj  = useLiveQuery(() => db.app_config.get('baseCurrency'));
   const monthlyIncomeObj = useLiveQuery(() => db.app_config.get('monthlyIncome'));
-  const baseCurrency = baseCurrencyObj?.value || 'USD';
-  const monthlyIncome = monthlyIncomeObj?.value || 0;
+  // Configurable pillar percentages (default 50/30/20)
+  const pillarPctObj     = useLiveQuery(() => db.app_config.get('pillarPct'));
+
+  const baseCurrency   = baseCurrencyObj?.value  || 'USD';
+  const monthlyIncome  = monthlyIncomeObj?.value  || 0;
+  const pillarPct      = pillarPctObj?.value      || { NEED: 50, WANT: 30, SAVE: 20 };
 
   const transactions = useLiveQuery(async () => {
-    const all = await db.transactions.toArray();
     const start = new Date();
     start.setDate(1);
     start.setHours(0, 0, 0, 0);
+    const all = await db.transactions.toArray();
     return all.filter(t => new Date(t.date) >= start && t.type === 'OUT');
   }) || [];
 
   let spentNeeds = 0, spentWants = 0, spentSavings = 0;
   transactions.forEach(t => {
-    if (t.pillar === 'NEED') spentNeeds += t.amount;
-    if (t.pillar === 'WANT') spentWants += t.amount;
+    if (t.pillar === 'NEED') spentNeeds  += t.amount;
+    if (t.pillar === 'WANT') spentWants  += t.amount;
     if (t.pillar === 'SAVE') spentSavings += t.amount;
   });
 
-  const goalNeeds = monthlyIncome * 0.50;
-  const goalWants = monthlyIncome * 0.30;
-  const goalSavings = monthlyIncome * 0.20;
-  const totalSpent = spentNeeds + spentWants + spentSavings || 1;
+  const goalNeeds    = monthlyIncome * (pillarPct.NEED / 100);
+  const goalWants    = monthlyIncome * (pillarPct.WANT / 100);
+  const goalSavings  = monthlyIncome * (pillarPct.SAVE / 100);
 
   const pillars = [
     {
       key: 'NEED',
-      label: 'NEEDS',
-      pct: '50%',
+      label: `NEEDS (${pillarPct.NEED}%)`,
       spent: spentNeeds,
-      goal: goalNeeds,
-      color: 'bg-noria-salvia',
-      textColor: 'text-noria-salvia',
-      segWidth: (spentNeeds / totalSpent) * 100,
+      goal:  goalNeeds,
+      color: '#5C7A52',          // salvia
+      barBg: 'rgba(92,122,82,0.12)',
+      textColor: '#5C7A52',
       desc: 'Gastos vitales: alquiler, comida, luz, servicios básicos.',
     },
     {
       key: 'WANT',
-      label: 'WANTS',
-      pct: '30%',
+      label: `WANTS (${pillarPct.WANT}%)`,
       spent: spentWants,
-      goal: goalWants,
-      color: 'bg-noria-slate',
-      textColor: 'text-noria-slate',
-      segWidth: (spentWants / totalSpent) * 100,
+      goal:  goalWants,
+      color: '#4A6475',          // slate
+      barBg: 'rgba(74,100,117,0.12)',
+      textColor: '#4A6475',
       desc: 'Estilo de vida, salidas, entretenimiento, suscripciones.',
     },
     {
       key: 'SAVE',
-      label: 'SAVE',
-      pct: '20%',
+      label: `SAVINGS (${pillarPct.SAVE}%)`,
       spent: spentSavings,
-      goal: goalSavings,
-      color: 'bg-noria-amber',
-      textColor: 'text-noria-amber',
-      segWidth: (spentSavings / totalSpent) * 100,
+      goal:  goalSavings,
+      color: '#B8860B',          // amber
+      barBg: 'rgba(184,134,11,0.12)',
+      textColor: '#B8860B',
       desc: 'Dinero reservado para el futuro y fondo de emergencia.',
     },
   ];
 
-  const togglePillar = (key) => {
-    setExpandedPillar(prev => prev === key ? null : key);
-  };
-
   const fmt = (n) => n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  if (monthlyIncome === 0) {
+    return (
+      <article>
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="text-subtitle font-sans font-[400] text-noria-text">Homeostasis</h3>
+          <span className="label-section">{new Date().toLocaleString('es-ES', { month: 'long' }).toUpperCase()}</span>
+        </div>
+        <p className="text-body text-noria-muted py-3">
+          Configura tu ingreso mensual en Configuración para ver tu homeostasis.
+        </p>
+      </article>
+    );
+  }
 
   return (
     <article>
-      {/* Section Header */}
-      <div className="flex justify-between items-center mb-4">
-        <h3 className="muji-header">Homeostasis</h3>
-        <span className="text-[10px] font-light text-noria-text/40 tracking-wider">
-          {new Date().toLocaleString('es-ES', { month: 'long' }).toUpperCase()}
-        </span>
+      {/* Header */}
+      <div className="flex justify-between items-center mb-5">
+        <h3 className="text-subtitle font-sans font-[400] text-noria-text">Homeostasis</h3>
+        <span className="label-section">{new Date().toLocaleString('es-ES', { month: 'long' }).toUpperCase()}</span>
       </div>
 
-      {monthlyIncome === 0 ? (
-        <p className="text-xs font-light text-noria-text/40 py-2">
-          Configura tus ingresos en Configuración para activar la Homeostasis.
-        </p>
-      ) : (
-        <>
-          {/* Single segmented bar */}
-          <div className="w-full h-[3px] flex rounded-full overflow-hidden mb-5">
-            {pillars.map(p => (
+      {/* ── 3 columnas horizontales (exactamente como la referencia) ── */}
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        {pillars.map(p => (
+          <button
+            key={p.key}
+            id={`homeostasis-col-${p.key.toLowerCase()}`}
+            onClick={() => setExpanded(prev => prev === p.key ? null : p.key)}
+            className="flex flex-col space-y-2 text-left focus:outline-none group"
+          >
+            {/* Barra gruesa superior (fiel a referencia, 5px, radio 20px) */}
+            <div className="w-full h-[5px] rounded-[20px] overflow-hidden" style={{ background: 'rgba(26,26,26,0.06)' }}>
               <div
-                key={p.key}
-                style={{ width: `${Math.max(2, p.segWidth)}%` }}
-                className={`${p.color} h-full transition-all duration-500`}
+                className="h-full rounded-[20px] transition-all duration-500"
+                style={{
+                  width: `${Math.min(100, p.goal > 0 ? (p.spent / p.goal) * 100 : 0)}%`,
+                  background: p.color,
+                }}
               />
-            ))}
+            </div>
+            {/* Label */}
+            <p className="label-section leading-tight" style={{ color: 'rgba(26,26,26,0.5)', fontSize: '10px' }}>
+              {p.label}
+            </p>
+            {/* Monto gastado */}
+            <p className="text-[15px] font-[400] text-noria-text leading-none">
+              ${fmt(p.spent)}
+            </p>
+          </button>
+        ))}
+      </div>
+
+      {/* ── Accordion de desglose — aparece debajo de las columnas ── */}
+      {pillars.map(p => expanded === p.key && (
+        <div
+          key={`detail-${p.key}`}
+          id={`homeostasis-detail-${p.key.toLowerCase()}`}
+          className="animate-fade-in border border-[rgba(0,0,0,0.07)] rounded-[8px] p-4 mb-2 space-y-3"
+          style={{ background: p.barBg }}
+        >
+          {/* Barra de progreso individual */}
+          <div className="space-y-1.5">
+            <div className="flex justify-between items-center">
+              <span className="label-section" style={{ color: p.textColor }}>{p.key}</span>
+              <span className="label-section text-noria-muted">
+                {p.goal > 0 ? `${Math.min(100, Math.round((p.spent / p.goal) * 100))}%` : '–'}
+              </span>
+            </div>
+            <div className="progress-track">
+              <div
+                className="progress-fill"
+                style={{
+                  width: `${Math.min(100, p.goal > 0 ? (p.spent / p.goal) * 100 : 0)}%`,
+                  background: p.color,
+                }}
+              />
+            </div>
           </div>
 
-          {/* Pillar Columns — tappable, each expands inline */}
-          <div className="divide-y divide-noria-text/5">
-            {pillars.map(p => (
-              <div key={p.key}>
-                {/* Pillar Row */}
-                <button
-                  id={`homeostasis-${p.key.toLowerCase()}-btn`}
-                  onClick={() => togglePillar(p.key)}
-                  className="w-full flex items-center justify-between py-3 focus:outline-none group"
-                >
-                  <div className="flex items-center space-x-3">
-                    <span className={`w-1.5 h-1.5 rounded-full ${p.color}`} />
-                    <span className="text-[10px] font-light tracking-widest uppercase text-noria-text/50">
-                      {p.label} <span className="text-noria-text/30">({p.pct})</span>
-                    </span>
-                  </div>
-                  <div className="flex items-center space-x-3">
-                    <span className="text-sm font-light text-noria-text">
-                      {fmt(p.spent)} <span className="text-[10px] text-noria-text/40">{baseCurrency}</span>
-                    </span>
-                    {expandedPillar === p.key
-                      ? <ChevronUp size={12} strokeWidth={1.5} className="text-noria-text/30" />
-                      : <ChevronDown size={12} strokeWidth={1.5} className="text-noria-text/20 group-hover:text-noria-text/40 transition-colors" />
-                    }
-                  </div>
-                </button>
-
-                {/* Inline Expanded Detail */}
-                {expandedPillar === p.key && (
-                  <div className="pb-4 pl-4 space-y-3 animate-fade-in" id={`homeostasis-detail-${p.key.toLowerCase()}`}>
-                    <p className="text-[11px] font-light text-noria-text/55 leading-relaxed">{p.desc}</p>
-                    <div className="flex space-x-8">
-                      <div>
-                        <p className="text-[9px] uppercase tracking-widest text-noria-text/30 mb-0.5">Consumido</p>
-                        <p className={`text-base font-light ${p.textColor}`}>{fmt(p.spent)}</p>
-                      </div>
-                      <div>
-                        <p className="text-[9px] uppercase tracking-widest text-noria-text/30 mb-0.5">Límite ideal</p>
-                        <p className="text-base font-light text-noria-text">{fmt(p.goal)}</p>
-                      </div>
-                      <div>
-                        <p className="text-[9px] uppercase tracking-widest text-noria-text/30 mb-0.5">Restante</p>
-                        <p className={`text-base font-light ${p.spent > p.goal ? 'text-noria-amber' : 'text-noria-text'}`}>
-                          {fmt(Math.max(0, p.goal - p.spent))}
-                        </p>
-                      </div>
-                    </div>
-                    {p.spent > p.goal && (
-                      <p className="text-[10px] text-noria-amber font-light">
-                        Superaste el límite por {fmt(p.spent - p.goal)} {baseCurrency}.
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
+          {/* Monto consumido vs límite */}
+          <div className="grid grid-cols-3 gap-2 pt-1">
+            <div>
+              <p className="label-section mb-0.5">Consumido</p>
+              <p className="text-[15px] font-[400]" style={{ color: p.textColor }}>${fmt(p.spent)}</p>
+            </div>
+            <div>
+              <p className="label-section mb-0.5">Límite</p>
+              <p className="text-[15px] font-[400] text-noria-text">${fmt(p.goal)}</p>
+            </div>
+            <div>
+              <p className="label-section mb-0.5">Restante</p>
+              <p
+                className="text-[15px] font-[400]"
+                style={{ color: p.spent > p.goal ? '#B8860B' : '#5C7A52' }}
+              >
+                ${fmt(Math.max(0, p.goal - p.spent))}
+              </p>
+            </div>
           </div>
-        </>
-      )}
+
+          {/* Descripción + alerta si se superó */}
+          <p className="text-[12px] text-noria-muted leading-relaxed">{p.desc}</p>
+          {p.spent > p.goal && (
+            <p className="text-[11px] font-[500]" style={{ color: '#B8860B' }}>
+              Superaste el límite por ${fmt(p.spent - p.goal)} {baseCurrency}.
+            </p>
+          )}
+
+          {/* Cerrar */}
+          <button
+            onClick={() => setExpanded(null)}
+            className="flex items-center space-x-1 pt-1 focus:outline-none"
+            style={{ color: 'rgba(26,26,26,0.35)', fontSize: '10px' }}
+          >
+            <ChevronUp size={12} strokeWidth={1.5} />
+            <span className="label-section" style={{ color: 'inherit' }}>Cerrar</span>
+          </button>
+        </div>
+      ))}
     </article>
   );
 }

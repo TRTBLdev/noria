@@ -19,6 +19,11 @@ db.version(1).stores({
   app_config: 'key',
 });
 
+db.version(2).stores({
+  accounts: '++id, institutionId, name, type, currency, balance, isArchived',
+});
+
+
 // Seed data function to populate catalogs on first open
 export async function seedDatabase() {
   const tagsCount = await db.tags.count();
@@ -33,15 +38,6 @@ export async function seedDatabase() {
       { name: 'Restaurantes', pillar: 'WANT' },
       { name: 'Fondo Emergencia', pillar: 'SAVE' },
       { name: 'Ahorro Viajes', pillar: 'SAVE' }
-    ]);
-  }
-
-  const instCount = await db.institutions.count();
-  if (instCount === 0) {
-    await db.institutions.bulkAdd([
-      { name: 'Efectivo Personal', type: 'CASH', country: 'VE' },
-      { name: 'Binance Exchange', type: 'EXCHANGE', country: 'US' },
-      { name: 'Zinli Billetera', type: 'NEOBANK', country: 'PA' }
     ]);
   }
 }
