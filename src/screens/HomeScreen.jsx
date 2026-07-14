@@ -75,6 +75,32 @@ export default function HomeScreen() {
   const activeAccounts = accounts.filter(a => !a.isArchived);
   const aggregatedBalance = activeAccounts.reduce((sum, acc) => sum + acc.balance, 0);
 
+  // Estado para la burbuja del día seleccionado en la Línea de Flotación Semanal
+  const [selectedDate, setSelectedDate] = useState(null);
+
+  // Helper para obtener los 7 días de la semana actual (Lunes a Domingo)
+  const getWeekDays = () => {
+    const today = new Date();
+    const currentDay = today.getDay(); // 0: Dom, 1: Lun, ...
+    const distance = currentDay === 0 ? -6 : 1 - currentDay;
+    const monday = new Date(today);
+    monday.setDate(today.getDate() + distance);
+
+    const days = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      days.push(d);
+    }
+    return days;
+  };
+
+  const weekDays = getWeekDays();
+  const startOfWeek = new Date(weekDays[0]);
+  startOfWeek.setHours(0, 0, 0, 0);
+  const endOfWeek = new Date(weekDays[6]);
+  endOfWeek.setHours(23, 59, 59, 999);
+
   const incomeSum = thisMonthIncomes.reduce((sum, inc) => sum + inc.amount, 0);
 
   // Lógica de auto-renovación mensual de plantillas e instancias de cobro
@@ -135,41 +161,83 @@ export default function HomeScreen() {
             }
           }
 
-          // 4. Generación de la instancia faltante
+          // 4. Generación de las instancias proyectadas según la frecuencia flexible
           const updatedAnchors = await db.anchors.toArray();
           const freshInstances = updatedAnchors.filter(a => a.isTemplate === false);
 
+          const getProjectedDatesInMonth = (startDate, interval, unit, startOfMonth, endOfMonth) => {
+            const dates = [];
+            let current = new Date(startDate);
+            if (isNaN(current.getTime())) return dates;
+
+            const safeInterval = Math.max(1, interval || 1);
+
+            const addInterval = (d) => {
+              const next = new Date(d);
+              if (unit === 'DAYS') next.setDate(next.getDate() + safeInterval);
+              else if (unit === 'WEEKS') next.setDate(next.getDate() + (safeInterval * 7));
+              else if (unit === 'MONTHS') next.setMonth(next.getMonth() + safeInterval);
+              else if (unit === 'YEARS') next.setFullYear(next.getFullYear() + safeInterval);
+              return next;
+            };
+
+            if (current > endOfMonth) {
+              return dates;
+            }
+
+            let iter = 0;
+            while (current < startOfMonth && iter < 1000) {
+              current = addInterval(current);
+              iter++;
+            }
+
+            iter = 0;
+            while (current >= startOfMonth && current <= endOfMonth && iter < 100) {
+              dates.push(new Date(current));
+              current = addInterval(current);
+              iter++;
+            }
+
+            const orig = new Date(startDate);
+            if (orig >= startOfMonth && orig <= endOfMonth && !dates.some(d => d.toDateString() === orig.toDateString())) {
+              dates.push(orig);
+            }
+
+            return dates.sort((a, b) => a - b);
+          };
+
           for (const temp of templates) {
-            const hasInstanceThisMonth = freshInstances.some(inst => {
-              if (inst.parentAnchorId !== temp.id) return false;
-              const instDate = inst.nextDueDate instanceof Date ? inst.nextDueDate : new Date(inst.nextDueDate);
-              return instDate >= startOfCurrentMonth && instDate <= endOfCurrentMonth;
-            });
+            const startDate = temp.nextDueDate ? new Date(temp.nextDueDate) : startOfCurrentMonth;
+            const interval = temp.frequencyInterval || 1;
+            const unit = temp.frequencyUnit || 'MONTHS';
 
-            if (!hasInstanceThisMonth) {
-              let targetDay = 1;
-              if (temp.nextDueDate) {
-                const tempDate = temp.nextDueDate instanceof Date ? temp.nextDueDate : new Date(temp.nextDueDate);
-                targetDay = tempDate.getDate();
-              }
+            const projectedDates = getProjectedDatesInMonth(startDate, interval, unit, startOfCurrentMonth, endOfCurrentMonth);
 
-              const lastDayOfCurrentMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-              const finalDay = Math.min(targetDay, lastDayOfCurrentMonth);
-              const instanceDueDate = new Date(currentYear, currentMonth, finalDay, 12, 0, 0);
-
-              await db.anchors.add({
-                name: temp.name,
-                type: temp.type || 'FIXED',
-                amount: temp.amount,
-                currency: temp.currency || 'USD',
-                accountId: temp.accountId || null,
-                macetaId: temp.macetaId || null,
-                nextDueDate: instanceDueDate,
-                status: 'PENDING',
-                pillar: temp.pillar,
-                isTemplate: false,
-                parentAnchorId: temp.id
+            for (const projDate of projectedDates) {
+              // Comprobar si ya existe una instancia para esta plantilla en esta fecha específica (mismo día/mes/año)
+              const hasInstance = freshInstances.some(inst => {
+                if (inst.parentAnchorId !== temp.id) return false;
+                const instDate = inst.nextDueDate instanceof Date ? inst.nextDueDate : new Date(inst.nextDueDate);
+                return instDate.getFullYear() === projDate.getFullYear() &&
+                       instDate.getMonth() === projDate.getMonth() &&
+                       instDate.getDate() === projDate.getDate();
               });
+
+              if (!hasInstance) {
+                await db.anchors.add({
+                  name: temp.name,
+                  type: temp.type || 'FIXED',
+                  amount: temp.amount,
+                  currency: temp.currency || 'USD',
+                  accountId: temp.accountId || null,
+                  macetaId: temp.macetaId || null,
+                  nextDueDate: projDate,
+                  status: 'PENDING',
+                  pillar: temp.pillar,
+                  isTemplate: false,
+                  parentAnchorId: temp.id
+                });
+              }
             }
           }
         });
@@ -183,8 +251,27 @@ export default function HomeScreen() {
     runRecurrenceJob();
   }, [anchors]);
 
-  const pendingAnchors = anchors.filter(a => a.isTemplate === false && a.status !== 'PAID');
-  const paidAnchors   = anchors.filter(a => a.isTemplate === false && a.status === 'PAID');
+  // 1. Obtener todas las instancias de anchors que caen en la semana actual
+  const thisWeekAnchors = anchors.filter(a => {
+    if (a.isTemplate !== false) return false;
+    const d = a.nextDueDate instanceof Date ? a.nextDueDate : new Date(a.nextDueDate);
+    const t = new Date(d); t.setHours(0,0,0,0);
+    const start = new Date(startOfWeek); start.setHours(0,0,0,0);
+    const end = new Date(endOfWeek); end.setHours(23,59,59,999);
+    return t >= start && t <= end;
+  });
+
+  // 2. Filtrar si hay una fecha seleccionada
+  const displayedAnchors = thisWeekAnchors.filter(a => {
+    if (!selectedDate) return true;
+    const d = a.nextDueDate instanceof Date ? a.nextDueDate : new Date(a.nextDueDate);
+    return d.getFullYear() === selectedDate.getFullYear() &&
+           d.getMonth() === selectedDate.getMonth() &&
+           d.getDate() === selectedDate.getDate();
+  });
+
+  const pendingAnchors = displayedAnchors.filter(a => a.status !== 'PAID');
+  const paidAnchors   = displayedAnchors.filter(a => a.status === 'PAID');
 
   const getSourceName = (id) => incomeSources.find(s => s.id === id)?.name || null;
 
@@ -490,34 +577,93 @@ export default function HomeScreen() {
 
         <div className="noria-divider" />
 
-        {/* ── Línea de Flotación ── */}
+        {/* ── Línea de Flotación Semanal ── */}
         <section className="py-6" id="anchors-list-section">
-          <div className="flex justify-between items-center mb-5">
+          <div className="flex justify-between items-baseline mb-4">
             <h3 className="text-subtitle font-[400] text-noria-text">Línea de Flotación</h3>
-            <button
-              id="add-anchor-btn"
-              onClick={() => { setAnchorError(''); if (activeAccounts.length > 0) setAnchorAccountId(activeAccounts[0].id.toString()); setShowAddAnchorModal(true); }}
-              className="flex items-center space-x-1 focus:outline-none"
-              style={{ color: '#5C7A52', fontSize: '11px', fontWeight: 500, letterSpacing: '0.06em', textTransform: 'uppercase' }}
-            >
-              <Plus size={12} strokeWidth={2} />
-              <span>Añadir</span>
-            </button>
+            {selectedDate && (
+              <button
+                onClick={() => setSelectedDate(null)}
+                className="text-[10px] font-[500] uppercase tracking-wider text-noria-muted hover:text-noria-text transition-colors focus:outline-none"
+              >
+                Ver toda la semana
+              </button>
+            )}
           </div>
 
-          {anchors.length === 0 ? (
-            /* Empty state */
-            <div className="flex flex-col items-center py-8 space-y-3" id="anchors-empty-state">
-              <div className="w-10 h-10 rounded-full flex items-center justify-center"
-                style={{ background: 'rgba(26,26,26,0.05)' }}>
-                <Home size={18} strokeWidth={1.5} style={{ color: 'rgba(26,26,26,0.2)' }} />
-              </div>
-              <p className="text-[13px]" style={{ color: 'rgba(26,26,26,0.35)' }}>Sin gastos ancla aún</p>
-              <button onClick={() => { setAnchorError(''); if (activeAccounts.length > 0) setAnchorAccountId(activeAccounts[0].id.toString()); setShowAddAnchorModal(true); }}
-                className="text-[12px] font-[500] uppercase tracking-wider underline underline-offset-2 focus:outline-none"
-                style={{ color: '#5C7A52' }}>
-                Agregar el primero
-              </button>
+          {/* Burbujas de los 7 Días de la Semana Actual */}
+          <div className="flex justify-between items-center bg-[rgba(26,26,26,0.02)] border border-[rgba(26,26,26,0.06)] rounded-[8px] p-3 mb-5">
+            {weekDays.map((date, idx) => {
+              const isToday = new Date().toDateString() === date.toDateString();
+              const isSelected = selectedDate && selectedDate.toDateString() === date.toDateString();
+              const dayName = date.toLocaleDateString('es-ES', { weekday: 'narrow' }).toUpperCase();
+              const dayNum = date.getDate();
+
+              // Calcular compromisos de este día exacto
+              const dayAnchors = thisWeekAnchors.filter(a => {
+                const d = a.nextDueDate instanceof Date ? a.nextDueDate : new Date(a.nextDueDate);
+                return d.toDateString() === date.toDateString();
+              });
+
+              let dotColor = null;
+              if (dayAnchors.length > 0) {
+                const hasPending = dayAnchors.some(a => a.status !== 'PAID');
+                if (hasPending) {
+                  const hasOverdue = dayAnchors.some(a => {
+                    if (a.status === 'PAID') return false;
+                    const d = a.nextDueDate instanceof Date ? a.nextDueDate : new Date(a.nextDueDate);
+                    const todayCl = new Date(); todayCl.setHours(0,0,0,0);
+                    return d < todayCl;
+                  });
+                  const hasToday = dayAnchors.some(a => {
+                    if (a.status === 'PAID') return false;
+                    const d = a.nextDueDate instanceof Date ? a.nextDueDate : new Date(a.nextDueDate);
+                    const todayCl = new Date(); todayCl.setHours(0,0,0,0);
+                    return d.toDateString() === todayCl.toDateString();
+                  });
+
+                  if (hasOverdue) dotColor = '#9F2F2D'; // Rojo (vencido)
+                  else if (hasToday) dotColor = '#B8860B'; // Ocre (vence hoy)
+                  else dotColor = 'rgba(26,26,26,0.3)'; // Gris (futuro)
+                } else {
+                  dotColor = '#5C7A52'; // Verde (completado)
+                }
+              }
+
+              return (
+                <button
+                  key={idx}
+                  onClick={() => {
+                    if (isSelected) {
+                      setSelectedDate(null);
+                    } else {
+                      setSelectedDate(date);
+                    }
+                  }}
+                  className="flex flex-col items-center justify-center flex-1 py-1 focus:outline-none transition-all rounded"
+                  style={{
+                    background: isSelected ? 'rgba(92,122,82,0.08)' : 'transparent',
+                    border: isToday ? '1px solid rgba(92,122,82,0.25)' : '1px solid transparent'
+                  }}
+                >
+                  <span className="text-[9px] font-[500] opacity-40 mb-0.5">{dayName}</span>
+                  <span className="text-[13px] font-[600]" style={{ color: isSelected || isToday ? '#5C7A52' : '#1A1A1A' }}>
+                    {dayNum}
+                  </span>
+                  <div className="h-1 w-1 rounded-full mt-1" style={{ background: dotColor || 'transparent' }} />
+                </button>
+              );
+            })}
+          </div>
+
+          {pendingAnchors.length === 0 && paidAnchors.length === 0 ? (
+            <div className="flex flex-col items-center py-8 space-y-2" id="anchors-empty-state">
+              <p className="text-[12px]" style={{ color: 'rgba(26,26,26,0.35)' }}>
+                {selectedDate 
+                  ? `Sin obligaciones para el ${selectedDate.toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}`
+                  : 'Sin obligaciones para esta semana'
+                }
+              </p>
             </div>
           ) : (
             <div>

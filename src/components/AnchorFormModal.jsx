@@ -16,6 +16,8 @@ export default function AnchorFormModal({
   const [accountId, setAccountId] = useState('');
   const [macetaId, setMacetaId] = useState('');
   const [pillar, setPillar] = useState('NEED');
+  const [frequencyInterval, setFrequencyInterval] = useState(1);
+  const [frequencyUnit, setFrequencyUnit] = useState('MONTHS');
   const [error, setError] = useState('');
 
   // Sincronizar el formulario con el anchor provisto (si es edición)
@@ -37,6 +39,8 @@ export default function AnchorFormModal({
       setAccountId(anchor.accountId ? anchor.accountId.toString() : '');
       setMacetaId(anchor.macetaId ? anchor.macetaId.toString() : '');
       setPillar(anchor.pillar || 'NEED');
+      setFrequencyInterval(anchor.frequencyInterval || 1);
+      setFrequencyUnit(anchor.frequencyUnit || 'MONTHS');
     } else {
       // Valores por defecto para creación
       setName('');
@@ -45,6 +49,8 @@ export default function AnchorFormModal({
       setAccountId('');
       setMacetaId('');
       setPillar('NEED');
+      setFrequencyInterval(1);
+      setFrequencyUnit('MONTHS');
     }
     setError('');
   }, [anchor, isOpen]);
@@ -58,6 +64,12 @@ export default function AnchorFormModal({
     const parsedAmount = parseFloat(amount);
     if (isNaN(parsedAmount) || parsedAmount <= 0) {
       setError('El monto debe ser un número mayor a cero.');
+      return;
+    }
+
+    const intervalVal = parseInt(frequencyInterval);
+    if (isNaN(intervalVal) || intervalVal <= 0) {
+      setError('El intervalo de frecuencia debe ser al menos 1.');
       return;
     }
 
@@ -78,6 +90,8 @@ export default function AnchorFormModal({
       pillar,
       accountId: pillar !== 'SAVE' ? parseInt(accountId) : null,
       macetaId: pillar === 'SAVE' ? parseInt(macetaId) : null,
+      frequencyInterval: intervalVal,
+      frequencyUnit,
     };
 
     onSubmit(data);
@@ -122,7 +136,7 @@ export default function AnchorFormModal({
           {/* Monto y Fecha */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="muji-header block mb-1">Monto Mensual (USD)</label>
+              <label className="muji-header block mb-1">Monto (USD)</label>
               <input
                 type="number"
                 step="0.01"
@@ -135,13 +149,43 @@ export default function AnchorFormModal({
               />
             </div>
             <div>
-              <label className="muji-header block mb-1">Fecha de cobro estimada</label>
+              <label className="muji-header block mb-1">Fecha de inicio/Estimada</label>
               <input
                 type="date"
                 value={dueDate}
                 onChange={e => setDueDate(e.target.value)}
                 className="muji-input"
               />
+            </div>
+          </div>
+
+          {/* Frecuencia Flexible */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="muji-header block mb-1">Repetir cada</label>
+              <input
+                type="number"
+                min="1"
+                step="1"
+                value={frequencyInterval}
+                onChange={e => setFrequencyInterval(e.target.value)}
+                className="muji-input"
+                required
+              />
+            </div>
+            <div>
+              <label className="muji-header block mb-1">Unidad</label>
+              <select
+                value={frequencyUnit}
+                onChange={e => setFrequencyUnit(e.target.value)}
+                className="muji-input"
+                required
+              >
+                <option value="DAYS">Días</option>
+                <option value="WEEKS">Semanas</option>
+                <option value="MONTHS">Meses</option>
+                <option value="YEARS">Años</option>
+              </select>
             </div>
           </div>
 
