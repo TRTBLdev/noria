@@ -1159,18 +1159,29 @@ export default function AccountsScreen() {
                         {recentTransactions.map(t => (
                           <div key={t.id} className="py-2.5 flex justify-between items-center text-sm">
                             <div>
-                              <p className="font-[400] text-noria-text text-[13px]">{t.description || (t.type === 'IN' ? 'Ingreso' : 'Gasto')}</p>
+                              <p className="font-[400] text-noria-text text-[13px]">
+                                {t.description || (
+                                  t.type === 'IN' ? 'Ingreso' :
+                                  t.type === 'TRANSFER_IN' ? 'Transferencia (Entrada)' :
+                                  t.type === 'TRANSFER_OUT' ? 'Transferencia (Salida)' : 'Gasto'
+                                )}
+                              </p>
                               <p className="text-[9px] text-noria-muted uppercase tracking-wider mt-0.5">
                                 {new Date(t.date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })}
                                 {t.pillar && <span className="ml-1.5 font-[500]" style={{ color: t.pillar === 'NEED' ? '#5C7A52' : t.pillar === 'WANT' ? '#4A6475' : '#B8860B' }}>{t.pillar}</span>}
                               </p>
                             </div>
-                            <span
-                              className="font-[500] text-[13px] flex items-center space-x-1"
-                              style={{ color: t.type === 'IN' ? '#5C7A52' : '#1A1A1A' }}
-                            >
-                              {t.type === 'IN' ? '+' : '-'}${fmt(t.amount)}
-                            </span>
+                            {(() => {
+                              const isIncome = t.type === 'IN' || t.type === 'TRANSFER_IN';
+                              return (
+                                <span
+                                  className="font-[500] text-[13px] flex items-center space-x-1"
+                                  style={{ color: isIncome ? '#5C7A52' : '#1A1A1A' }}
+                                >
+                                  {isIncome ? '+' : '-'}${fmt(t.amount)}
+                                </span>
+                              );
+                            })()}
                           </div>
                         ))}
                       </div>
