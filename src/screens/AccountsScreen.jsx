@@ -741,10 +741,33 @@ function IngresosTab({ incomeSources, onAddSource, onDeleteSource }) {
           {incomeSources.map(src => (
             <div key={src.id} className="noria-row" id={`source-row-${src.id}`}>
               <div className="flex items-center space-x-3">
-                <div className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: 'rgba(92,122,82,0.08)', color: '#5C7A52' }}>
-                  <TrendingUp size={15} strokeWidth={1.5} />
+                <div className="w-9 h-9 rounded-full flex items-center justify-center text-[15px]" style={{ background: 'rgba(92,122,82,0.08)' }}>
+                  {(() => {
+                    switch (src.type) {
+                      case 'SALARY': return '💼';
+                      case 'FREELANCE': return '💻';
+                      case 'INVESTMENT': return '📈';
+                      case 'GIFT': return '🎁';
+                      case 'BUSINESS': return '🏪';
+                      default: return '💰';
+                    }
+                  })()}
                 </div>
-                <p className="text-[15px] font-[400] text-noria-text">{src.name}</p>
+                <div>
+                  <p className="text-[15px] font-[400] text-noria-text">{src.name}</p>
+                  <p className="text-[10px] text-noria-muted uppercase tracking-wider font-[500] mt-0.5">
+                    {(() => {
+                      switch (src.type) {
+                        case 'SALARY': return 'Salario / Empleo';
+                        case 'FREELANCE': return 'Freelance / Servicios';
+                        case 'INVESTMENT': return 'Inversiones / Dividendos';
+                        case 'GIFT': return 'Regalos / Bonos';
+                        case 'BUSINESS': return 'Ventas / Negocio';
+                        default: return 'Otro';
+                      }
+                    })()}
+                  </p>
+                </div>
               </div>
               <button onClick={() => onDeleteSource(src.id, src.name)} className="p-1 focus:outline-none" style={{ color: 'rgba(26,26,26,0.2)' }}>
                 <Trash2 size={13} strokeWidth={1.5} />
@@ -780,6 +803,7 @@ export default function AccountsScreen() {
 
   // Form Source states
   const [sourceName, setSourceName] = useState('');
+  const [sourceType, setSourceType] = useState('SALARY');
 
   // Dexie Queries
   const institutions = useLiveQuery(() => db.institutions.toArray()) || [];
@@ -879,8 +903,9 @@ export default function AccountsScreen() {
     e.preventDefault();
     if (!sourceName.trim()) return;
     const exists = incomeSources.find(s => s.name.toLowerCase() === sourceName.trim().toLowerCase());
-    if (!exists) await db.income_sources.add({ name: sourceName.trim(), type: 'OTHER', isActive: true });
+    if (!exists) await db.income_sources.add({ name: sourceName.trim(), type: sourceType, isActive: true });
     setSourceName('');
+    setSourceType('SALARY');
     setShowAddSourceModal(false);
   };
 
@@ -1317,6 +1342,18 @@ export default function AccountsScreen() {
                 <label className="muji-header block mb-1">Nombre de la fuente</label>
                 <input id="source-name" type="text" value={sourceName} onChange={e => setSourceName(e.target.value)}
                   placeholder="Ej. Estudio CKM Visualización" className="muji-input" autoFocus required />
+              </div>
+              <div>
+                <label className="muji-header block mb-1">Tipo de Ingreso</label>
+                <select id="source-type" value={sourceType} onChange={e => setSourceType(e.target.value)}
+                  className="muji-input" required>
+                  <option value="SALARY">Salario / Empleo</option>
+                  <option value="FREELANCE">💻 Freelance / Servicios</option>
+                  <option value="INVESTMENT">📈 Inversiones / Dividendos</option>
+                  <option value="GIFT">🎁 Regalos / Bonos</option>
+                  <option value="BUSINESS">🏪 Ventas / Negocio</option>
+                  <option value="OTHER">Otro</option>
+                </select>
               </div>
               <button id="submit-new-source-btn" type="submit"
                 className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider rounded-[6px] mt-2 active:scale-[0.98] transition-all"

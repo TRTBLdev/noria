@@ -33,6 +33,7 @@ export default function FAB() {
   const [description, setDescription] = useState('');
   const [incomeSourceId, setIncomeSourceId] = useState('');
   const [newSourceName, setNewSourceName]   = useState('');
+  const [newSourceType, setNewSourceType]   = useState('SALARY');
   const [error, setError]   = useState('');
   const [success, setSuccess] = useState(false);
 
@@ -71,6 +72,7 @@ export default function FAB() {
     setExchangeRate('');
     setDescription('');
     setNewSourceName('');
+    setNewSourceType('SALARY');
     setError('');
     setSuccess(false);
     if (activeAccounts.length > 0) {
@@ -223,11 +225,12 @@ export default function FAB() {
         if (!selectedAccount) { setError('Cuenta no encontrada'); return; }
 
         let resolvedSourceId = incomeSourceId ? parseInt(incomeSourceId) : null;
-        if (activeForm === 'INGRESO' && newSourceName.trim()) {
-          const existing = incomeSources.find(s => s.name.toLowerCase() === newSourceName.trim().toLowerCase());
+        if (activeForm === 'INGRESO' && (incomeSourceId === 'new' || newSourceName.trim())) {
+          const nameToUse = newSourceName.trim();
+          const existing = incomeSources.find(s => s.name.toLowerCase() === nameToUse.toLowerCase());
           resolvedSourceId = existing
             ? existing.id
-            : await db.income_sources.add({ name: newSourceName.trim(), type: 'OTHER', isActive: true });
+            : await db.income_sources.add({ name: nameToUse, type: newSourceType, isActive: true });
         }
 
         await db.transactions.add({
@@ -474,19 +477,46 @@ export default function FAB() {
 
                   {/* Income Source */}
                   {activeForm === 'INGRESO' && (
-                    <div>
-                      <label className="muji-header block mb-1">Fuente de Ingreso</label>
-                      <select id="tx-income-source" value={incomeSourceId}
-                        onChange={e => { setIncomeSourceId(e.target.value); if (e.target.value === 'new') setNewSourceName(''); }}
-                        className="muji-input">
-                        {incomeSources.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                        <option value="new">+ Nueva fuente...</option>
-                      </select>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="muji-header block mb-1">Fuente de Ingreso</label>
+                        <select id="tx-income-source" value={incomeSourceId}
+                          onChange={e => { setIncomeSourceId(e.target.value); if (e.target.value === 'new') setNewSourceName(''); }}
+                          className="muji-input">
+                          {incomeSources.map(s => {
+                            const emoji = s.type === 'SALARY' ? '💼' :
+                                          s.type === 'FREELANCE' ? '💻' :
+                                          s.type === 'INVESTMENT' ? '📈' :
+                                          s.type === 'GIFT' ? '🎁' :
+                                          s.type === 'BUSINESS' ? '🏪' : '💰';
+                            return <option key={s.id} value={s.id}>{emoji} {s.name}</option>;
+                          })}
+                          <option value="new">+ Nueva fuente...</option>
+                        </select>
+                      </div>
                       {(incomeSourceId === 'new' || incomeSources.length === 0) && (
-                        <input id="tx-new-source" type="text" value={newSourceName}
-                          onChange={e => setNewSourceName(e.target.value)}
-                          placeholder="Ej. Estudio CKM Visualización"
-                          className="muji-input mt-2" />
+                        <div className="space-y-3 p-3 border border-[rgba(0,0,0,0.06)] rounded bg-[rgba(26,26,26,0.01)] animate-fade-in">
+                          <div>
+                            <label className="muji-header block mb-1">Nombre de la nueva fuente</label>
+                            <input id="tx-new-source" type="text" value={newSourceName}
+                              onChange={e => setNewSourceName(e.target.value)}
+                              placeholder="Ej. Estudio CKM Visualización"
+                              className="muji-input" required />
+                          </div>
+                          <div>
+                            <label className="muji-header block mb-1">Tipo de Ingreso</label>
+                            <select id="tx-new-source-type" value={newSourceType}
+                              onChange={e => setNewSourceType(e.target.value)}
+                              className="muji-input" required>
+                              <option value="SALARY">Salario / Empleo</option>
+                              <option value="FREELANCE">💻 Freelance / Servicios</option>
+                              <option value="INVESTMENT">📈 Inversiones / Dividendos</option>
+                              <option value="GIFT">🎁 Regalos / Bonos</option>
+                              <option value="BUSINESS">🏪 Ventas / Negocio</option>
+                              <option value="OTHER">Otro</option>
+                            </select>
+                          </div>
+                        </div>
                       )}
                     </div>
                   )}
