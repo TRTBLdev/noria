@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
 import Header from '../components/Header.jsx';
@@ -34,6 +34,7 @@ function AnchorIcon({ name }) {
 
 export default function HomeScreen() {
   const [showAddAnchorModal, setShowAddAnchorModal] = useState(false);
+  const isRunningRecurrence = useRef(false);
   const [showIncomes, setShowIncomes] = useState(false);
 
   const [anchorName, setAnchorName]         = useState('');
@@ -61,6 +62,7 @@ export default function HomeScreen() {
   const baseCurrency     = baseCurrencyObj?.value || 'USD';
 
   const accounts          = useLiveQuery(() => db.accounts.toArray())          || [];
+  const institutions      = useLiveQuery(() => db.institutions.toArray())      || [];
   const anchors           = useLiveQuery(() => db.anchors.toArray())           || [];
   const transactions      = useLiveQuery(() => db.transactions.toArray())      || [];
   const incomeSources     = useLiveQuery(() => db.income_sources.toArray())    || [];
@@ -78,59 +80,103 @@ export default function HomeScreen() {
   // Lógica de auto-renovación mensual de plantillas e instancias de cobro
   useEffect(() => {
     if (anchors.length === 0) return;
+    if (isRunningRecurrence.current) return;
 
     const runRecurrenceJob = async () => {
-      // 1. Migración en caliente: marcar anclas heredadas sin isTemplate como isTemplate: true
-      const legacyAnchors = anchors.filter(a => a.isTemplate === undefined);
-      if (legacyAnchors.length > 0) {
-        for (const a of legacyAnchors) {
-          await db.anchors.update(a.id, { isTemplate: true, isArchived: false });
-        }
-        return;
-      }
+      isRunningRecurrence.current = true;
+      try {
+        await db.transaction('rw', [db.anchors], async () => {
+          const freshAnchors = await db.anchors.toArray();
 
-      // 2. Generar instancias de cobro para el mes actual
-      const now = new Date();
-      const currentYear = now.getFullYear();
-      const currentMonth = now.getMonth();
-      const startOfCurrentMonth = new Date(currentYear, currentMonth, 1);
-      const endOfCurrentMonth = new Date(currentYear, currentMonth + 1, 0, 23, 59, 59, 999);
-
-      const templates = anchors.filter(a => a.isTemplate === true && !a.isArchived);
-      const instances = anchors.filter(a => a.isTemplate === false);
-
-      for (const temp of templates) {
-        const hasInstanceThisMonth = instances.some(inst => {
-          if (inst.parentAnchorId !== temp.id) return false;
-          const instDate = inst.nextDueDate instanceof Date ? inst.nextDueDate : new Date(inst.nextDueDate);
-          return instDate >= startOfCurrentMonth && instDate <= endOfCurrentMonth;
-        });
-
-        if (!hasInstanceThisMonth) {
-          let targetDay = 1;
-          if (temp.nextDueDate) {
-            const tempDate = temp.nextDueDate instanceof Date ? temp.nextDueDate : new Date(temp.nextDueDate);
-            targetDay = tempDate.getDate();
+          // 1. Migración en caliente: marcar anclas heredadas sin isTemplate como isTemplate: true
+          const legacyAnchors = freshAnchors.filter(a => a.isTemplate === undefined);
+          if (legacyAnchors.length > 0) {
+            for (const a of legacyAnchors) {
+              await db.anchors.update(a.id, { isTemplate: true, isArchived: false });
+            }
+            return;
           }
 
-          const lastDayOfCurrentMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-          const finalDay = Math.min(targetDay, lastDayOfCurrentMonth);
-          const instanceDueDate = new Date(currentYear, currentMonth, finalDay, 12, 0, 0);
+          // 2. Generar fechas límite
+          const now = new Date();
+          const currentYear = now.getFullYear();
+          const currentMonth = now.getMonth();
+          const startOfCurrentMonth = new Date(currentYear, currentMonth, 1);
+          const endOfCurrentMonth = new Date(currentYear, currentMonth + 1, 0, 23, 59, 59, 999);
 
-          await db.anchors.add({
-            name: temp.name,
-            type: temp.type || 'FIXED',
-            amount: temp.amount,
-            currency: temp.currency || 'USD',
-            accountId: temp.accountId || null,
-            macetaId: temp.macetaId || null,
-            nextDueDate: instanceDueDate,
-            status: 'PENDING',
-            pillar: temp.pillar,
-            isTemplate: false,
-            parentAnchorId: temp.id
+          const templates = freshAnchors.filter(a => a.isTemplate === true && !a.isArchived);
+          const instances = freshAnchors.filter(a => a.isTemplate === false);
+
+          // 3. Limpieza de duplicados accidentales para el mes actual
+          const instancesThisMonth = instances.filter(inst => {
+            const instDate = inst.nextDueDate instanceof Date ? inst.nextDueDate : new Date(inst.nextDueDate);
+            return instDate >= startOfCurrentMonth && instDate <= endOfCurrentMonth;
           });
-        }
+
+          const groups = {};
+          for (const inst of instancesThisMonth) {
+            if (!inst.parentAnchorId) continue;
+            if (!groups[inst.parentAnchorId]) {
+              groups[inst.parentAnchorId] = [];
+            }
+            groups[inst.parentAnchorId].push(inst);
+          }
+
+          for (const parentId in groups) {
+            const list = groups[parentId];
+            if (list.length > 1) {
+              // Si hay duplicados, conservar la pagada (PAID), o en su defecto la primera.
+              const keeper = list.find(a => a.status === 'PAID') || list[0];
+              for (const item of list) {
+                if (item.id !== keeper.id) {
+                  await db.anchors.delete(item.id);
+                }
+              }
+            }
+          }
+
+          // 4. Generación de la instancia faltante
+          const updatedAnchors = await db.anchors.toArray();
+          const freshInstances = updatedAnchors.filter(a => a.isTemplate === false);
+
+          for (const temp of templates) {
+            const hasInstanceThisMonth = freshInstances.some(inst => {
+              if (inst.parentAnchorId !== temp.id) return false;
+              const instDate = inst.nextDueDate instanceof Date ? inst.nextDueDate : new Date(inst.nextDueDate);
+              return instDate >= startOfCurrentMonth && instDate <= endOfCurrentMonth;
+            });
+
+            if (!hasInstanceThisMonth) {
+              let targetDay = 1;
+              if (temp.nextDueDate) {
+                const tempDate = temp.nextDueDate instanceof Date ? temp.nextDueDate : new Date(temp.nextDueDate);
+                targetDay = tempDate.getDate();
+              }
+
+              const lastDayOfCurrentMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+              const finalDay = Math.min(targetDay, lastDayOfCurrentMonth);
+              const instanceDueDate = new Date(currentYear, currentMonth, finalDay, 12, 0, 0);
+
+              await db.anchors.add({
+                name: temp.name,
+                type: temp.type || 'FIXED',
+                amount: temp.amount,
+                currency: temp.currency || 'USD',
+                accountId: temp.accountId || null,
+                macetaId: temp.macetaId || null,
+                nextDueDate: instanceDueDate,
+                status: 'PENDING',
+                pillar: temp.pillar,
+                isTemplate: false,
+                parentAnchorId: temp.id
+              });
+            }
+          }
+        });
+      } catch (err) {
+        console.error('Error in recurrence job transaction:', err);
+      } finally {
+        isRunningRecurrence.current = false;
       }
     };
 
@@ -753,11 +799,15 @@ export default function HomeScreen() {
                       className="muji-input"
                       required
                     >
-                      {activeAccounts.map(acc => (
-                        <option key={acc.id} value={acc.id}>
-                          {acc.name} (${fmt(acc.balance)})
-                        </option>
-                      ))}
+                      {activeAccounts.map(acc => {
+                        const inst = institutions.find(i => i.id === acc.institutionId);
+                        const label = inst ? `${inst.name} · ${acc.name} (${acc.type})` : `${acc.name} (${acc.type})`;
+                        return (
+                          <option key={acc.id} value={acc.id}>
+                            {label} (${fmt(acc.balance)})
+                          </option>
+                        );
+                      })}
                     </select>
                     <p className="text-[10px] text-noria-muted mt-1.5 leading-relaxed">
                       El dinero no sale de tu patrimonio líquido; se retiene mentalmente en esta cuenta para cumplir con tu meta de ahorro.
@@ -787,11 +837,15 @@ export default function HomeScreen() {
                         className="muji-input"
                         required
                       >
-                        {activeAccounts.map(acc => (
-                          <option key={acc.id} value={acc.id}>
-                            {acc.name} (${fmt(acc.balance)})
-                          </option>
-                        ))}
+                        {activeAccounts.map(acc => {
+                          const inst = institutions.find(i => i.id === acc.institutionId);
+                          const label = inst ? `${inst.name} · ${acc.name} (${acc.type})` : `${acc.name} (${acc.type})`;
+                          return (
+                            <option key={acc.id} value={acc.id}>
+                              {label} (${fmt(acc.balance)})
+                            </option>
+                          );
+                        })}
                       </select>
                     </div>
                     <div>
@@ -803,11 +857,15 @@ export default function HomeScreen() {
                         className="muji-input"
                         required
                       >
-                        {activeAccounts.map(acc => (
-                          <option key={acc.id} value={acc.id}>
-                            {acc.name} (${fmt(acc.balance)})
-                          </option>
-                        ))}
+                        {activeAccounts.map(acc => {
+                          const inst = institutions.find(i => i.id === acc.institutionId);
+                          const label = inst ? `${inst.name} · ${acc.name} (${acc.type})` : `${acc.name} (${acc.type})`;
+                          return (
+                            <option key={acc.id} value={acc.id}>
+                              {label} (${fmt(acc.balance)})
+                            </option>
+                          );
+                        })}
                       </select>
                     </div>
                   </div>
@@ -900,11 +958,15 @@ export default function HomeScreen() {
                   className="muji-input"
                   required
                 >
-                  {activeAccounts.map(acc => (
-                    <option key={acc.id} value={acc.id}>
-                      {acc.name} (${fmt(acc.balance)})
-                    </option>
-                  ))}
+                  {activeAccounts.map(acc => {
+                    const inst = institutions.find(i => i.id === acc.institutionId);
+                    const label = inst ? `${inst.name} · ${acc.name} (${acc.type})` : `${acc.name} (${acc.type})`;
+                    return (
+                      <option key={acc.id} value={acc.id}>
+                        {label} (${fmt(acc.balance)})
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 

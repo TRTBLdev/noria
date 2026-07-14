@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
 import Header from '../components/Header.jsx';
 import { sha256 } from '../config/access.private.js';
-import { Download, Upload, EyeOff, Fingerprint, Palette, DollarSign, Trash2, BarChart2, Lock } from 'lucide-react';
+import { Download, Upload, EyeOff, Fingerprint, Palette, DollarSign, Trash2, BarChart2, Lock, Pencil, Plus } from 'lucide-react';
 
 
 const Toggle = ({ id, value, onToggle }) => (
@@ -28,6 +28,11 @@ export default function SettingsScreen() {
   const pillarPctObj     = useLiveQuery(() => db.app_config.get('pillarPct'));
   const hashedPinObj     = useLiveQuery(() => db.app_config.get('hashedPin'));
 
+  // Dexie Queries para Catálogos
+  const institutions = useLiveQuery(() => db.institutions.toArray()) || [];
+  const tags = useLiveQuery(() => db.tags.toArray()) || [];
+  const accounts = useLiveQuery(() => db.accounts.toArray()) || [];
+
   const baseCurrency   = baseCurrencyObj?.value  || 'USD';
   const monthlyIncome  = monthlyIncomeObj?.value  || 0;
   const maskBalances   = maskBalancesObj?.value   || false;
@@ -35,6 +40,19 @@ export default function SettingsScreen() {
   const theme          = themeObj?.value          || 'System';
   const pillarPct      = pillarPctObj?.value      || { NEED: 50, WANT: 30, SAVE: 20 };
   const hasPin         = !!hashedPinObj?.value;
+
+  // Estados locales para la edición de Instituciones
+  const [editingInstId, setEditingInstId] = useState(null);
+  const [editInstName, setEditInstName] = useState('');
+  const [editInstType, setEditInstType] = useState('BANK');
+
+  // Estados locales para Categorías (Tags)
+  const [editingTagId, setEditingTagId] = useState(null);
+  const [editTagName, setEditTagName] = useState('');
+  const [editTagPillar, setEditTagPillar] = useState('NEED');
+  const [showAddTagForm, setShowAddTagForm] = useState(false);
+  const [newTagName, setNewTagName] = useState('');
+  const [newTagPillar, setNewTagPillar] = useState('NEED');
 
   // PIN settings states
   const [isConfiguringPin, setIsConfiguringPin]   = useState(false);
@@ -208,6 +226,76 @@ export default function SettingsScreen() {
       } catch { setError('Archivo inválido'); setLoading(false); }
     };
     reader.readAsText(file);
+  };
+
+  const handleUpdateInst = async (id) => {
+    if (!editInstName.trim()) return;
+    try {
+      await db.institutions.update(id, { name: editInstName.trim(), type: editInstType });
+      // Propagar el cambio de nombre a las cuentas que usan este banco
+      const relatedAccs = accounts.filter(a => a.institutionId === id);
+      for (const acc of relatedAccs) {
+        await db.accounts.update(acc.id, { name: editInstName.trim() });
+      }
+      setEditingInstId(null);
+      setMessage('Banco actualizado');
+      setTimeout(() => setMessage(''), 2000);
+    } catch {
+      setError('Error al actualizar el banco');
+    }
+  };
+
+  const handleDeleteInst = async (id, name) => {
+    const count = accounts.filter(a => a.institutionId === id).length;
+    if (count > 0) {
+      alert(`No puedes eliminar la institución "${name}" porque tiene ${count} cuenta(s) asociada(s).`);
+      return;
+    }
+    if (!confirm(`¿Eliminar la institución "${name}"?`)) return;
+    try {
+      await db.institutions.delete(id);
+      setMessage('Institución eliminada');
+      setTimeout(() => setMessage(''), 2000);
+    } catch {
+      setError('Error al eliminar');
+    }
+  };
+
+  const handleCreateTag = async (e) => {
+    e.preventDefault();
+    if (!newTagName.trim()) return;
+    try {
+      await db.tags.add({ name: newTagName.trim(), pillar: newTagPillar });
+      setNewTagName('');
+      setShowAddTagForm(false);
+      setMessage('Categoría añadida');
+      setTimeout(() => setMessage(''), 2000);
+    } catch {
+      setError('Error al crear categoría');
+    }
+  };
+
+  const handleUpdateTag = async (id) => {
+    if (!editTagName.trim()) return;
+    try {
+      await db.tags.update(id, { name: editTagName.trim(), pillar: editTagPillar });
+      setEditingTagId(null);
+      setMessage('Categoría actualizada');
+      setTimeout(() => setMessage(''), 2000);
+    } catch {
+      setError('Error al actualizar categoría');
+    }
+  };
+
+  const handleDeleteTag = async (id, name) => {
+    if (!confirm(`¿Eliminar la categoría "${name}"?`)) return;
+    try {
+      await db.tags.delete(id);
+      setMessage('Categoría eliminada');
+      setTimeout(() => setMessage(''), 2000);
+    } catch {
+      setError('Error al eliminar');
+    }
   };
 
   const handleClearAll = async () => {
@@ -558,6 +646,238 @@ export default function SettingsScreen() {
               </select>
             }
           />
+        </section>
+
+        <div className="noria-divider" />
+
+        {/* ── Catalogs Administration ── */}
+        <section className="py-6" id="catalogs-section">
+          <p className="label-section mb-4">Administración de Catálogos</p>
+
+          {/* ── Catálogo de Bancos ── */}
+          <div className="space-y-3 mb-6">
+            <h5 className="text-[12px] font-[500] uppercase tracking-wider text-noria-text/60">Bancos / Instituciones</h5>
+            <div className="space-y-2">
+              {institutions.map(inst => {
+                const isEditing = editingInstId === inst.id;
+                const relatedCount = accounts.filter(a => a.institutionId === inst.id).length;
+
+                return (
+                  <div key={inst.id} className="flex justify-between items-center p-3 border border-[rgba(0,0,0,0.06)] rounded bg-[rgba(26,26,26,0.01)] text-[13px]">
+                    {isEditing ? (
+                      <div className="flex-1 space-y-2 pr-2">
+                        <input
+                          type="text"
+                          value={editInstName}
+                          onChange={e => setEditInstName(e.target.value)}
+                          className="muji-input text-[12px] py-1 px-2"
+                          required
+                        />
+                        <select
+                          value={editInstType}
+                          onChange={e => setEditInstType(e.target.value)}
+                          className="muji-input text-[12px] py-1 px-2"
+                        >
+                          <option value="BANK">Banco</option>
+                          <option value="NEOBANK">Banco Digital</option>
+                          <option value="EXCHANGE">Exchange</option>
+                          <option value="HOT_WALLET">Hot Wallet</option>
+                          <option value="COLD_WALLET">Cold Wallet</option>
+                          <option value="CASH">Efectivo</option>
+                        </select>
+                        <div className="flex space-x-2">
+                          <button
+                            type="button"
+                            onClick={() => setEditingInstId(null)}
+                            className="px-2 py-1 text-[10px] border border-[rgba(26,26,26,0.15)] rounded font-[500]"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateInst(inst.id)}
+                            className="px-2 py-1 text-[10px] rounded text-white bg-noria-text font-[500]"
+                          >
+                            Guardar
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div>
+                          <p className="font-[450] text-noria-text">{inst.name}</p>
+                          <p className="text-[10px] text-noria-muted uppercase tracking-wider mt-0.5">
+                            {inst.type} · {relatedCount} {relatedCount === 1 ? 'cuenta' : 'cuentas'}
+                          </p>
+                        </div>
+                        <div className="flex items-center space-x-1">
+                          <button
+                            onClick={() => {
+                              setEditingInstId(inst.id);
+                              setEditInstName(inst.name);
+                              setEditInstType(inst.type);
+                            }}
+                            className="p-1.5 focus:outline-none hover:bg-noria-text/5 rounded transition-colors text-noria-muted hover:text-noria-text"
+                            title="Editar Banco"
+                          >
+                            <Pencil size={12} strokeWidth={1.5} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteInst(inst.id, inst.name)}
+                            disabled={relatedCount > 0}
+                            className="p-1.5 focus:outline-none hover:bg-noria-text/5 rounded transition-colors text-noria-muted hover:text-[#9F2F2D] disabled:opacity-30"
+                            title={relatedCount > 0 ? "No se puede eliminar (tiene cuentas activas)" : "Eliminar Banco"}
+                          >
+                            <Trash2 size={12} strokeWidth={1.5} />
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ── Catálogo de Categorías (Tags) ── */}
+          <div className="space-y-3">
+            <div className="flex justify-between items-center">
+              <h5 className="text-[12px] font-[500] uppercase tracking-wider text-noria-text/60">Etiquetas / Categorías</h5>
+              <button
+                onClick={() => setShowAddTagForm(!showAddTagForm)}
+                className="text-[10px] font-[500] uppercase tracking-wider text-[#5C7A52] flex items-center space-x-0.5 focus:outline-none"
+              >
+                <Plus size={10} />
+                <span>Añadir</span>
+              </button>
+            </div>
+
+            {/* Formulario Añadir Categoría */}
+            {showAddTagForm && (
+              <form onSubmit={handleCreateTag} className="p-3 border border-[rgba(0,0,0,0.06)] rounded bg-[rgba(26,26,26,0.02)] space-y-3 animate-fade-in">
+                <p className="text-[11px] font-[500] text-noria-text/60 uppercase tracking-wider">Nueva Categoría</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="muji-header block mb-1">Nombre</label>
+                    <input
+                      type="text"
+                      value={newTagName}
+                      onChange={e => setNewTagName(e.target.value)}
+                      placeholder="Ej. Mascotas"
+                      className="muji-input text-[12px] py-1 px-2"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="muji-header block mb-1">Pilar</label>
+                    <select
+                      value={newTagPillar}
+                      onChange={e => setNewTagPillar(e.target.value)}
+                      className="muji-input text-[12px] py-1 px-2"
+                    >
+                      <option value="NEED">Necesidad (NEED)</option>
+                      <option value="WANT">Deseo (WANT)</option>
+                      <option value="SAVE">Ahorro (SAVE)</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="flex space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddTagForm(false)}
+                    className="flex-1 py-1 text-[10px] border border-[rgba(26,26,26,0.15)] rounded font-[500]"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 py-1 text-[10px] rounded text-white bg-noria-text font-[500]"
+                  >
+                    Crear
+                  </button>
+                </div>
+              </form>
+            )}
+
+            <div className="space-y-2">
+              {tags.map(tag => {
+                const isEditing = editingTagId === tag.id;
+                const pilarColor = tag.pillar === 'NEED' ? '#5C7A52' : tag.pillar === 'WANT' ? '#4A6475' : '#B8860B';
+                const pilarBg = tag.pillar === 'NEED' ? 'rgba(92,122,82,0.10)' : tag.pillar === 'WANT' ? 'rgba(74,100,117,0.10)' : 'rgba(184,134,11,0.10)';
+
+                return (
+                  <div key={tag.id} className="flex justify-between items-center p-3 border border-[rgba(0,0,0,0.06)] rounded bg-[rgba(26,26,26,0.01)] text-[13px]">
+                    {isEditing ? (
+                      <div className="flex-1 space-y-2 pr-2">
+                        <input
+                          type="text"
+                          value={editTagName}
+                          onChange={e => setEditTagName(e.target.value)}
+                          className="muji-input text-[12px] py-1 px-2"
+                          required
+                        />
+                        <select
+                          value={editTagPillar}
+                          onChange={e => setEditTagPillar(e.target.value)}
+                          className="muji-input text-[12px] py-1 px-2"
+                        >
+                          <option value="NEED">Necesidad (NEED)</option>
+                          <option value="WANT">Deseo (WANT)</option>
+                          <option value="SAVE">Ahorro (SAVE)</option>
+                        </select>
+                        <div className="flex space-x-2">
+                          <button
+                            type="button"
+                            onClick={() => setEditingTagId(null)}
+                            className="px-2 py-1 text-[10px] border border-[rgba(26,26,26,0.15)] rounded font-[500]"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateTag(tag.id)}
+                            className="px-2 py-1 text-[10px] rounded text-white bg-noria-text font-[500]"
+                          >
+                            Guardar
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center space-x-2">
+                          <span className="font-[450] text-noria-text">{tag.name}</span>
+                          <span className="text-[9px] font-[600] px-1.5 py-0.5 rounded uppercase tracking-wider" 
+                            style={{ background: pilarBg, color: pilarColor }}>
+                            {tag.pillar}
+                          </span>
+                        </div>
+                        <div className="flex items-center space-x-1">
+                          <button
+                            onClick={() => {
+                              setEditingTagId(tag.id);
+                              setEditTagName(tag.name);
+                              setEditTagPillar(tag.pillar);
+                            }}
+                            className="p-1.5 focus:outline-none hover:bg-noria-text/5 rounded transition-colors text-noria-muted hover:text-noria-text"
+                            title="Editar Categoría"
+                          >
+                            <Pencil size={12} strokeWidth={1.5} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteTag(tag.id, tag.name)}
+                            className="p-1.5 focus:outline-none hover:bg-noria-text/5 rounded transition-colors text-noria-muted hover:text-[#9F2F2D]"
+                            title="Eliminar Categoría"
+                          >
+                            <Trash2 size={12} strokeWidth={1.5} />
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </section>
 
         <div className="noria-divider" />

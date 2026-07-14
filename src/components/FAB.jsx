@@ -11,12 +11,18 @@ const RADIAL_POSITIONS = [
   { dx: 0,    dy: -90, delay: '80ms' },  // Ingreso — up
 ];
 
+const fmt = (n, d = 2) => {
+  if (typeof n !== 'number') return '0.00';
+  return n.toLocaleString('es-ES', { minimumFractionDigits: d, maximumFractionDigits: d });
+};
+
 export default function FAB() {
   const [isOpen, setIsOpen]       = useState(false);
   const [activeForm, setActiveForm] = useState(null); // 'GASTO' | 'INGRESO' | 'TRANSFERENCIA'
   const sheetRef = useRef(null);
 
   const accounts      = useLiveQuery(() => db.accounts.toArray())      || [];
+  const institutions  = useLiveQuery(() => db.institutions.toArray())  || [];
   const activeAccounts = accounts.filter(a => !a.isArchived);
   const tags          = useLiveQuery(() => db.tags.toArray())           || [];
   const incomeSources = useLiveQuery(() => db.income_sources.toArray()) || [];
@@ -552,14 +558,22 @@ export default function FAB() {
                           <label className="muji-header block mb-1">Desde Cuenta</label>
                           <select id="tx-account" value={accountId} onChange={e => handleSourceAccountChange(e.target.value)}
                             className="muji-input" required>
-                            {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} ({acc.currency})</option>)}
+                            {activeAccounts.map(acc => {
+                              const inst = institutions.find(i => i.id === acc.institutionId);
+                              const label = inst ? `${inst.name} · ${acc.name} (${acc.type})` : `${acc.name} (${acc.type})`;
+                              return <option key={acc.id} value={acc.id}>{label} ({acc.currency})</option>;
+                            })}
                           </select>
                         </div>
                         <div>
                           <label className="muji-header block mb-1">Hacia Cuenta</label>
                           <select id="tx-account-dest" value={toAccountId} onChange={e => handleTargetAccountChange(e.target.value)}
                             className="muji-input" required>
-                            {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} ({acc.currency})</option>)}
+                            {activeAccounts.map(acc => {
+                              const inst = institutions.find(i => i.id === acc.institutionId);
+                              const label = inst ? `${inst.name} · ${acc.name} (${acc.type})` : `${acc.name} (${acc.type})`;
+                              return <option key={acc.id} value={acc.id}>{label} ({acc.currency})</option>;
+                            })}
                           </select>
                         </div>
                       </div>
@@ -576,7 +590,11 @@ export default function FAB() {
                         <label className="muji-header block mb-1">Cuenta</label>
                         <select id="tx-account" value={accountId} onChange={e => setAccountId(e.target.value)}
                           className="muji-input" required>
-                          {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} ({acc.currency})</option>)}
+                          {activeAccounts.map(acc => {
+                            const inst = institutions.find(i => i.id === acc.institutionId);
+                            const label = inst ? `${inst.name} · ${acc.name} (${acc.type})` : `${acc.name} (${acc.type})`;
+                            return <option key={acc.id} value={acc.id}>{label} ({acc.currency})</option>;
+                          })}
                         </select>
                       </div>
                       <div>

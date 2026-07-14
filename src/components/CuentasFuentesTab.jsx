@@ -1,5 +1,5 @@
 import React from 'react';
-import { Landmark, Wallet, CreditCard, Archive, Trash2, TrendingUp, Plus } from 'lucide-react';
+import { Landmark, Wallet, CreditCard, Archive, Trash2, TrendingUp, Plus, Pencil } from 'lucide-react';
 
 const INSTRUMENT_TYPES = [
   { value: 'DEBIT_CARD', label: 'Tarjeta de Débito' },
@@ -18,6 +18,7 @@ export default function CuentasFuentesTab({
   archivedAccounts,
   incomeSources,
   onAddSource,
+  onEditSource,
   onDeleteSource
 }) {
 
@@ -239,9 +240,14 @@ export default function CuentasFuentesTab({
                     </p>
                   </div>
                 </div>
-                <button onClick={() => onDeleteSource(src.id, src.name)} className="p-2 focus:outline-none hover:bg-noria-text/5 rounded transition-colors" style={{ color: 'rgba(26,26,26,0.2)' }}>
-                  <Trash2 size={13} strokeWidth={1.5} />
-                </button>
+                <div className="flex items-center space-x-1">
+                  <button onClick={() => onEditSource(src)} className="p-2 focus:outline-none hover:bg-noria-text/5 rounded transition-colors text-noria-muted hover:text-noria-text" title="Editar Fuente">
+                    <Pencil size={13} strokeWidth={1.5} />
+                  </button>
+                  <button onClick={() => onDeleteSource(src.id, src.name)} className="p-2 focus:outline-none hover:bg-noria-text/5 rounded transition-colors text-noria-muted hover:text-[#9F2F2D]" title="Eliminar Fuente">
+                    <Trash2 size={13} strokeWidth={1.5} />
+                  </button>
+                </div>
               </div>
             ))}
           </div>

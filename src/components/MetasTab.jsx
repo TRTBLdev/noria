@@ -1,11 +1,13 @@
 import React from 'react';
-import { Target, Trash2 } from 'lucide-react';
+import { Target, Trash2, Pencil } from 'lucide-react';
 
 export default function MetasTab({
   macetas,
   accounts,
   macetaAllocations,
+  anchors = [],
   onAddMaceta,
+  onEditMaceta,
   onDeleteMaceta,
   onDistribute,
   onProgramSavings
@@ -56,6 +58,9 @@ export default function MetasTab({
         // Obtener asignaciones de esta meta
         const allocations = macetaAllocations.filter(a => a.macetaId === m.id);
 
+        // Obtener ahorros recurrentes asociados
+        const linkedSavings = anchors.filter(a => a.pillar === 'SAVE' && a.macetaId === m.id && a.isTemplate === true);
+
         // Calcular aporte mensual sugerido
         const monthsRemaining = getMonthsRemaining(m.targetDate);
         const suggestedAmount = Math.max(0, m.targetAmount - current) / monthsRemaining;
@@ -63,15 +68,20 @@ export default function MetasTab({
         return (
           <div key={m.id} className="border border-[rgba(0,0,0,0.07)] rounded-[8px] p-5 space-y-4 bg-transparent" id={`maceta-${m.id}`}>
             
-            {/* Header: Title and Delete */}
+            {/* Header: Title and Actions */}
             <div className="flex justify-between items-start">
               <div className="flex items-center space-x-2">
                 <Target size={14} strokeWidth={1.8} style={{ color: '#5C7A52' }} />
                 <p className="text-[15px] font-[500] text-noria-text">{m.name}</p>
               </div>
-              <button onClick={() => onDeleteMaceta(m.id, m.name)} className="p-1 focus:outline-none text-noria-muted hover:text-[#9F2F2D]" title="Eliminar Meta">
-                <Trash2 size={13} strokeWidth={1.5} />
-              </button>
+              <div className="flex items-center space-x-1">
+                <button onClick={() => onEditMaceta(m)} className="p-1 focus:outline-none text-noria-muted hover:text-noria-text" title="Editar Meta">
+                  <Pencil size={13} strokeWidth={1.5} />
+                </button>
+                <button onClick={() => onDeleteMaceta(m.id, m.name)} className="p-1 focus:outline-none text-noria-muted hover:text-[#9F2F2D]" title="Eliminar Meta">
+                  <Trash2 size={13} strokeWidth={1.5} />
+                </button>
+              </div>
             </div>
 
             {/* Progreso visual en unicode */}
@@ -87,7 +97,7 @@ export default function MetasTab({
             {/* Distribución de Cuentas */}
             <div className="space-y-1.5 pt-1">
               <p className="text-[11px] font-[500] text-noria-text/60 uppercase tracking-wider">
-                <span>💰 Distribución:</span>
+                <span>💰 Fondos bloqueados en cuentas:</span>
               </p>
               {allocations.length === 0 ? (
                 <p className="text-[11px] text-noria-muted italic pl-3">Sin fondos asignados de ninguna cuenta</p>
@@ -100,6 +110,28 @@ export default function MetasTab({
                       <div key={alloc.id} className="flex items-center justify-between">
                         <span>{prefix}{acc ? acc.name : 'Cuenta Desconocida'}</span>
                         <span className="font-[500]">${fmt(alloc.amount, 0)} <span className="text-[#5C7A52]">✓</span></span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Ahorros Recurrentes Vinculados */}
+            <div className="space-y-1.5 pt-1">
+              <p className="text-[11px] font-[500] text-noria-text/60 uppercase tracking-wider">
+                <span>🔄 Aportes mensuales programados:</span>
+              </p>
+              {linkedSavings.length === 0 ? (
+                <p className="text-[11px] text-noria-muted italic pl-3">Sin aportes recurrentes programados</p>
+              ) : (
+                <div className="font-mono text-[12px] text-noria-text pl-2 space-y-0.5">
+                  {linkedSavings.map((save, idx) => {
+                    const prefix = idx === linkedSavings.length - 1 ? '└─ ' : '├─ ';
+                    return (
+                      <div key={save.id} className="flex items-center justify-between">
+                        <span>{prefix}{save.name}</span>
+                        <span className="font-[500]">${fmt(save.amount, 0)}/mes</span>
                       </div>
                     );
                   })}

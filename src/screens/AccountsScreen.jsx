@@ -478,9 +478,22 @@ export default function AccountsScreen() {
   const [macetaTargetDate, setMacetaTargetDate] = useState('');
   const [macetaError, setMacetaError] = useState('');
 
+  // Estados para Edición de Metas
+  const [editingMaceta, setEditingMaceta] = useState(null);
+  const [editMacetaName, setEditMacetaName] = useState('');
+  const [editMacetaTarget, setEditMacetaTarget] = useState('');
+  const [editMacetaTargetDate, setEditMacetaTargetDate] = useState('');
+  const [showEditMacetaModal, setShowEditMacetaModal] = useState(false);
+
   // Form Source states
   const [sourceName, setSourceName] = useState('');
   const [sourceType, setSourceType] = useState('SALARY');
+
+  // Estados para Edición de Fuentes de Ingreso
+  const [editingSource, setEditingSource] = useState(null);
+  const [editSourceName, setEditSourceName] = useState('');
+  const [editSourceType, setEditSourceType] = useState('SALARY');
+  const [showEditSourceModal, setShowEditSourceModal] = useState(false);
 
   // Form Anchor states (Edición en Presupuesto)
   const [editingAnchor, setEditingAnchor] = useState(null);
@@ -606,10 +619,52 @@ export default function AccountsScreen() {
   };
 
   const handleDeleteMaceta = async (id, name) => {
-    if (!confirm(`¿Eliminar la meta "${name}"?`)) return;
-    // Borrar asignaciones asociadas a la maceta
-    await db.maceta_allocations.where('macetaId').equals(id).delete();
-    await db.macetas.delete(id);
+    const msg = `¿Eliminar permanentemente la meta "${name}"?
+Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) vinculadas a ella y liberará los saldos retenidos.`;
+    if (!confirm(msg)) return;
+
+    try {
+      await db.transaction('rw', [db.maceta_allocations, db.macetas, db.anchors], async () => {
+        // 1. Borrar asignaciones
+        await db.maceta_allocations.where('macetaId').equals(id).delete();
+
+        // 2. Borrar anclas asociadas (tanto plantillas como instancias de ahorro tipo SAVE vinculadas a esta maceta)
+        await db.anchors.where('macetaId').equals(id).delete();
+
+        // 3. Borrar la maceta
+        await db.macetas.delete(id);
+      });
+    } catch (err) {
+      console.error(err);
+      alert('Error al eliminar la meta y sus aportaciones asociadas');
+    }
+  };
+
+  const handleEditMacetaClick = (maceta) => {
+    setEditingMaceta(maceta);
+    setEditMacetaName(maceta.name);
+    setEditMacetaTarget(maceta.targetAmount.toString());
+    setEditMacetaTargetDate(maceta.targetDate || '');
+    setShowEditMacetaModal(true);
+  };
+
+  const handleUpdateMaceta = async (e) => {
+    e.preventDefault();
+    if (!editingMaceta) return;
+    const targetVal = parseFloat(editMacetaTarget);
+    if (isNaN(targetVal) || targetVal <= 0) { alert('Monto objetivo inválido'); return; }
+
+    try {
+      await db.macetas.update(editingMaceta.id, {
+        name: editMacetaName.trim(),
+        targetAmount: targetVal,
+        targetDate: editMacetaTargetDate || null
+      });
+      setShowEditMacetaModal(false);
+      setEditingMaceta(null);
+    } catch (err) {
+      alert('Error al actualizar la meta');
+    }
   };
 
   const handleProgramSavings = async (maceta, suggestedAmount) => {
@@ -640,6 +695,30 @@ export default function AccountsScreen() {
       alert(`Gasto fijo de ahorro "${anchorName}" programado correctamente con un aporte mensual de $${fmt(amt)}.`);
     } catch (err) {
       alert('Error al programar el gasto fijo de ahorro');
+    }
+  };
+
+  const handleEditSourceClick = (src) => {
+    setEditingSource(src);
+    setEditSourceName(src.name);
+    setEditSourceType(src.type);
+    setShowEditSourceModal(true);
+  };
+
+  const handleUpdateSource = async (e) => {
+    e.preventDefault();
+    if (!editingSource) return;
+    if (!editSourceName.trim()) return;
+
+    try {
+      await db.income_sources.update(editingSource.id, {
+        name: editSourceName.trim(),
+        type: editSourceType
+      });
+      setShowEditSourceModal(false);
+      setEditingSource(null);
+    } catch (err) {
+      alert('Error al actualizar la fuente de ingreso');
     }
   };
 
@@ -920,6 +999,7 @@ export default function AccountsScreen() {
             archivedAccounts={archivedAccounts}
             incomeSources={incomeSources}
             onAddSource={() => setShowAddSourceModal(true)}
+            onEditSource={handleEditSourceClick}
             onDeleteSource={handleDeleteSource}
           />
         )}
@@ -928,7 +1008,9 @@ export default function AccountsScreen() {
             macetas={macetas}
             accounts={activeAccounts}
             macetaAllocations={macetaAllocations}
+            anchors={anchors}
             onAddMaceta={() => { setMacetaError(''); setShowAddMacetaModal(true); }}
+            onEditMaceta={handleEditMacetaClick}
             onDeleteMaceta={handleDeleteMaceta}
             onDistribute={setDistributingMaceta}
             onProgramSavings={handleProgramSavings}
@@ -1206,7 +1288,7 @@ export default function AccountsScreen() {
                       return (
                         <div>
                           <p className="label-section mb-0.5">Aporte mensual sugerido</p>
-                          <p className="text-[14px] font-[400]" style={{ color: '#5C7A52' }}>${fmt(contrib)}/mes</p>
+                          <p className="text-[14px] font-[400] style={{ color: '#5C7A52' }}">${fmt(contrib)}/mes</p>
                         </div>
                       );
                     })()}
@@ -1221,6 +1303,72 @@ export default function AccountsScreen() {
                 className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider rounded-[6px] mt-2 active:scale-[0.98] transition-all"
                 style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
                 Crear Meta
+              </button>
+            </form>
+          </div>
+        </>
+      )}
+
+      {/* Edit Maceta */}
+      {showEditMacetaModal && editingMaceta && (
+        <>
+          <div className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40" onClick={() => { setShowEditMacetaModal(false); setEditingMaceta(null); }} />
+          <div className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto animate-slide-up overflow-y-auto"
+            style={{ background: '#F5F2ED', borderRadius: '20px 20px 0 0', boxShadow: '0 -8px 40px rgba(0,0,0,0.08)', maxHeight: '90vh' }}>
+            <form onSubmit={handleUpdateMaceta} className="px-6 pt-4 pb-10 space-y-4" id="edit-maceta-form">
+              <div className="flex justify-center mb-2">
+                <div className="w-8 h-[3px] rounded-full" style={{ background: 'rgba(26,26,26,0.12)' }} />
+              </div>
+              <div className="flex justify-between items-center">
+                <h4 className="text-[16px] font-[400] text-noria-text">Editar Meta de Ahorro</h4>
+                <button type="button" onClick={() => { setShowEditMacetaModal(false); setEditingMaceta(null); }}
+                  className="focus:outline-none p-1" style={{ color: 'rgba(26,26,26,0.4)' }}>✕</button>
+              </div>
+
+              <div>
+                <label className="muji-header block mb-1">Nombre de la Meta</label>
+                <input type="text" value={editMacetaName} onChange={e => setEditMacetaName(e.target.value)}
+                  className="muji-input" required />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="muji-header block mb-1">Objetivo (USD)</label>
+                  <input type="number" step="1" value={editMacetaTarget}
+                    onChange={e => setEditMacetaTarget(e.target.value)} className="muji-input" required />
+                </div>
+                <div>
+                  <label className="muji-header block mb-1">Fecha objetivo</label>
+                  <input
+                    type="date"
+                    value={editMacetaTargetDate}
+                    onChange={e => setEditMacetaTargetDate(e.target.value)}
+                    className="muji-input"
+                    required
+                  />
+                </div>
+              </div>
+
+              {/* Vista previa de aporte sugerido */}
+              {(() => {
+                const targetAmt = parseFloat(editMacetaTarget) || 0;
+                if (!editMacetaTargetDate || targetAmt <= 0) return null;
+                const now = new Date();
+                const target = new Date(editMacetaTargetDate + '-15');
+                const months = Math.max(1, (target.getFullYear() - now.getFullYear()) * 12 + (target.getMonth() - now.getMonth()));
+                const contrib = targetAmt / months;
+                return (
+                  <div className="border border-[rgba(0,0,0,0.07)] rounded-[8px] p-4 space-y-2 bg-[rgba(92,122,82,0.02)]">
+                    <p className="label-section mb-0.5">Nuevo aporte sugerido recalculado</p>
+                    <p className="text-[14px] font-[500] text-[#5C7A52] font-mono">${fmt(contrib)}/mes</p>
+                  </div>
+                );
+              })()}
+
+              <button type="submit"
+                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider rounded-[6px] mt-2 active:scale-[0.98] transition-all"
+                style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
+                Guardar Cambios
               </button>
             </form>
           </div>
@@ -1269,7 +1417,47 @@ export default function AccountsScreen() {
         </>
       )}
 
-      {/* Add Anchor Master (Gasto Fijo Recurrente) */}
+      {/* Edit Income Source */}
+      {showEditSourceModal && editingSource && (
+        <>
+          <div className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-45" onClick={() => { setShowEditSourceModal(false); setEditingSource(null); }} />
+          <div className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto animate-slide-up"
+            style={{ background: '#F5F2ED', borderRadius: '20px 20px 0 0', boxShadow: '0 -8px 40px rgba(0,0,0,0.08)' }}>
+            <form onSubmit={handleUpdateSource} className="px-6 pt-4 pb-10 space-y-4" id="edit-source-form">
+              <div className="flex justify-center mb-2">
+                <div className="w-8 h-[3px] rounded-full" style={{ background: 'rgba(26,26,26,0.12)' }} />
+              </div>
+              <div className="flex justify-between items-center">
+                <h4 className="text-[16px] font-[400] text-noria-text">Editar Fuente de Ingreso</h4>
+                <button type="button" onClick={() => { setShowEditSourceModal(false); setEditingSource(null); }}
+                  className="focus:outline-none p-1" style={{ color: 'rgba(26,26,26,0.4)' }}>✕</button>
+              </div>
+              <div>
+                <label className="muji-header block mb-1">Nombre de la fuente</label>
+                <input type="text" value={editSourceName} onChange={e => setEditSourceName(e.target.value)}
+                  className="muji-input" autoFocus required />
+              </div>
+              <div>
+                <label className="muji-header block mb-1">Tipo de Ingreso</label>
+                <select value={editSourceType} onChange={e => setEditSourceType(e.target.value)}
+                  className="muji-input" required>
+                  <option value="SALARY">Salario / Empleo</option>
+                  <option value="FREELANCE">💻 Freelance / Servicios</option>
+                  <option value="INVESTMENT">📈 Inversiones / Dividendos</option>
+                  <option value="GIFT">🎁 Regalos / Bonos</option>
+                  <option value="BUSINESS">🏪 Ventas / Negocio</option>
+                  <option value="OTHER">Otro</option>
+                </select>
+              </div>
+              <button type="submit"
+                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider rounded-[6px] mt-2 active:scale-[0.98] transition-all"
+                style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
+                Guardar Cambios
+              </button>
+            </form>
+          </div>
+        </>
+      )}
       {showAddAnchorMasterModal && (
         <>
           <div className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40" onClick={() => setShowAddAnchorMasterModal(false)} />

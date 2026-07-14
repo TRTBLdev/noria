@@ -4,33 +4,37 @@ import { db } from '../db/db.js';
 import Header from '../components/Header.jsx';
 import BottomNav from '../components/BottomNav.jsx';
 import FAB from '../components/FAB.jsx';
+import AnchorFormModal from '../components/AnchorFormModal.jsx';
 import { Plus, Pencil, Archive, ArchiveRestore, Trash2, Wallet } from 'lucide-react';
 
 export default function BudgetScreen() {
   const [showArchived, setShowArchived] = useState(false);
 
-  // Estados para creación
+  // Estados para modales componentizados
   const [showAddModal, setShowAddModal] = useState(false);
-  const [anchorName, setAnchorName] = useState('');
-  const [anchorAmount, setAnchorAmount] = useState('');
-  const [anchorPillar, setAnchorPillar] = useState('NEED');
-  const [anchorAccountId, setAnchorAccountId] = useState('');
-  const [anchorDueDate, setAnchorDueDate] = useState('');
-  const [anchorError, setAnchorError] = useState('');
-
-  // Estados para edición
   const [editingAnchor, setEditingAnchor] = useState(null);
-  const [editAnchorName, setEditAnchorName] = useState('');
-  const [editAnchorAmount, setEditAnchorAmount] = useState('');
-  const [editAnchorPillar, setEditAnchorPillar] = useState('NEED');
-  const [editAnchorDueDate, setEditAnchorDueDate] = useState('');
-  const [editAnchorAccountId, setEditAnchorAccountId] = useState('');
   const [showEditModal, setShowEditModal] = useState(false);
 
   // Dexie Queries
   const accounts = useLiveQuery(() => db.accounts.toArray()) || [];
+  const institutions = useLiveQuery(() => db.institutions.toArray()) || [];
   const anchors = useLiveQuery(() => db.anchors.toArray()) || [];
-  
+  const macetas = useLiveQuery(() => db.macetas.toArray()) || [];
+
+  // Migración retrospectiva en caliente de anclas heredadas
+  React.useEffect(() => {
+    if (anchors.length === 0) return;
+    const runMigration = async () => {
+      const legacy = anchors.filter(a => a.isTemplate === undefined);
+      if (legacy.length > 0) {
+        for (const a of legacy) {
+          await db.anchors.update(a.id, { isTemplate: true, isArchived: false });
+        }
+      }
+    };
+    runMigration();
+  }, [anchors]);
+
   const activeAccounts = accounts.filter(a => !a.isArchived);
 
   // Filtrar plantillas activas vs pausadas
@@ -44,69 +48,63 @@ export default function BudgetScreen() {
   
   const getAccountName = (id) => accounts.find(a => a.id === id)?.name || 'Ninguna';
 
-  const handleCreateAnchorMaster = async (e) => {
-    e.preventDefault();
-    setAnchorError('');
-    const amt = parseFloat(anchorAmount);
-    if (isNaN(amt) || amt <= 0) { setAnchorError('Monto inválido'); return; }
-    if (!anchorAccountId) { setAnchorError('Selecciona una cuenta'); return; }
-    
-    const selectedAcc = accounts.find(a => a.id.toString() === anchorAccountId);
-    if (!selectedAcc) { setAnchorError('Cuenta no encontrada'); return; }
-
+  const handleCreateAnchor = async (data) => {
     try {
+      let currency = 'USD';
+      if (data.pillar === 'SAVE') {
+        const targetMaceta = macetas.find(m => m.id === data.macetaId);
+        if (targetMaceta) currency = targetMaceta.currency;
+      } else {
+        const selectedAcc = accounts.find(a => a.id === data.accountId);
+        if (selectedAcc) currency = selectedAcc.currency;
+      }
+
       await db.anchors.add({
-        name: anchorName.trim(),
+        name: data.name,
         type: 'FIXED',
-        amount: amt,
-        currency: selectedAcc.currency,
-        accountId: parseInt(anchorAccountId),
-        nextDueDate: anchorDueDate ? new Date(anchorDueDate + 'T12:00:00') : new Date(),
+        amount: data.amount,
+        currency,
+        accountId: data.accountId || null,
+        macetaId: data.macetaId || null,
+        nextDueDate: data.nextDueDate ? new Date(data.nextDueDate.getTime() + 12*60*60*1000) : new Date(), // Ajustar a mediodía para evitar problemas de zona horaria
         status: 'PENDING',
-        pillar: anchorPillar,
+        pillar: data.pillar,
         isTemplate: true,
         isArchived: false
       });
       setShowAddModal(false);
-      setAnchorName(''); setAnchorAmount(''); setAnchorDueDate(''); setAnchorAccountId('');
-    } catch {
-      setAnchorError('Error al crear plantilla de gasto fijo');
+    } catch (err) {
+      console.error(err);
+      alert('Error al crear el elemento programado');
     }
   };
 
   const handleEditClick = (anchor) => {
     setEditingAnchor(anchor);
-    setEditAnchorName(anchor.name);
-    setEditAnchorAmount(anchor.amount.toString());
-    setEditAnchorPillar(anchor.pillar);
-    
-    let formattedDate = '';
-    if (anchor.nextDueDate) {
-      const d = anchor.nextDueDate instanceof Date ? anchor.nextDueDate : new Date(anchor.nextDueDate);
-      formattedDate = d.toISOString().slice(0, 10);
-    }
-    setEditAnchorDueDate(formattedDate);
-    setEditAnchorAccountId(anchor.accountId ? anchor.accountId.toString() : '');
     setShowEditModal(true);
   };
 
-  const handleUpdateAnchor = async (e) => {
-    e.preventDefault();
+  const handleUpdateAnchor = async (data) => {
     if (!editingAnchor) return;
-    const amt = parseFloat(editAnchorAmount);
-    if (isNaN(amt) || amt <= 0) { alert('Monto inválido'); return; }
-
     try {
-      const parsedAccountId = editAnchorAccountId ? parseInt(editAnchorAccountId) : null;
-      const parsedDueDate = editAnchorDueDate ? new Date(editAnchorDueDate + 'T12:00:00') : null;
+      let currency = 'USD';
+      if (data.pillar === 'SAVE') {
+        const targetMaceta = macetas.find(m => m.id === data.macetaId);
+        if (targetMaceta) currency = targetMaceta.currency;
+      } else {
+        const selectedAcc = accounts.find(a => a.id === data.accountId);
+        if (selectedAcc) currency = selectedAcc.currency;
+      }
 
       // 1. Actualizar plantilla
       await db.anchors.update(editingAnchor.id, {
-        name: editAnchorName.trim(),
-        amount: amt,
-        pillar: editAnchorPillar,
-        accountId: parsedAccountId,
-        nextDueDate: parsedDueDate
+        name: data.name,
+        amount: data.amount,
+        currency,
+        pillar: data.pillar,
+        accountId: data.accountId || null,
+        macetaId: data.macetaId || null,
+        nextDueDate: data.nextDueDate ? new Date(data.nextDueDate.getTime() + 12*60*60*1000) : null
       });
 
       // 2. Propagar a instancias activas del mes
@@ -124,18 +122,21 @@ export default function BudgetScreen() {
         const instDate = inst.nextDueDate instanceof Date ? inst.nextDueDate : new Date(inst.nextDueDate);
         if (instDate >= startOfCurrentMonth && instDate <= endOfCurrentMonth) {
           await db.anchors.update(inst.id, {
-            name: editAnchorName.trim(),
-            amount: amt,
-            pillar: editAnchorPillar,
-            accountId: parsedAccountId
+            name: data.name,
+            amount: data.amount,
+            currency,
+            pillar: data.pillar,
+            accountId: data.accountId || null,
+            macetaId: data.macetaId || null
           });
         }
       }
 
       setShowEditModal(false);
       setEditingAnchor(null);
-    } catch {
-      alert('Error al actualizar el gasto programado');
+    } catch (err) {
+      console.error(err);
+      alert('Error al actualizar el elemento programado');
     }
   };
 
@@ -293,154 +294,26 @@ export default function BudgetScreen() {
         )}
       </div>
 
-      {/* ── MODAL AÑADIR GASTO FIJO RECURRENTE ── */}
-      {showAddModal && (
-        <>
-          <div className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40" onClick={() => setShowAddModal(false)} />
-          <div className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto animate-slide-up"
-            style={{ background: '#F5F2ED', borderRadius: '20px 20px 0 0', boxShadow: '0 -8px 40px rgba(0,0,0,0.08)' }}>
-            <form onSubmit={handleCreateAnchorMaster} className="px-6 pt-4 pb-10 space-y-4" id="add-anchor-form">
-              <div className="flex justify-center mb-2">
-                <div className="w-8 h-[3px] rounded-full" style={{ background: 'rgba(26,26,26,0.12)' }} />
-              </div>
+      {/* Modal para Añadir Plantilla */}
+      <AnchorFormModal
+        isOpen={showAddModal}
+        onClose={() => setShowAddModal(false)}
+        onSubmit={handleCreateAnchor}
+        activeAccounts={activeAccounts}
+        institutions={institutions}
+        macetas={macetas}
+      />
 
-              <div className="flex justify-between items-center">
-                <h4 className="text-[16px] font-[400] text-noria-text">Nuevo Gasto Fijo Recurrente</h4>
-                <button type="button" onClick={() => setShowAddModal(false)}
-                  className="focus:outline-none p-1" style={{ color: 'rgba(26,26,26,0.4)' }}>✕</button>
-              </div>
-
-              <div>
-                <label className="muji-header block mb-1">Nombre</label>
-                <input type="text" value={anchorName} onChange={e => setAnchorName(e.target.value)}
-                  placeholder="Ej. Alquiler, Condominio, Netflix" className="muji-input" required autoFocus />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="muji-header block mb-1">Monto (USD)</label>
-                  <input type="number" step="0.01" inputMode="decimal"
-                    value={anchorAmount} onChange={e => setAnchorAmount(e.target.value)}
-                    placeholder="0.00" className="muji-input" required />
-                </div>
-                <div>
-                  <label className="muji-header block mb-1">Primer Vencimiento</label>
-                  <input type="date" value={anchorDueDate}
-                    onChange={e => setAnchorDueDate(e.target.value)} className="muji-input" />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="muji-header block mb-1">Cuenta Asociada (Débito)</label>
-                  <select value={anchorAccountId} onChange={e => setAnchorAccountId(e.target.value)}
-                    className="muji-input" required>
-                    <option value="" disabled>Selecciona...</option>
-                    {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="muji-header block mb-2">Pilar</label>
-                  <div className="flex space-x-1">
-                    {[['NEED','N','#5C7A52'],['WANT','W','#4A6475'],['SAVE','S','#B8860B']].map(([val, short, col]) => (
-                      <button key={val} type="button" onClick={() => setAnchorPillar(val)}
-                        className="flex-1 py-1 text-[10px] font-[500] uppercase rounded border transition-all"
-                        style={{
-                          borderColor: anchorPillar === val ? col : 'rgba(26,26,26,0.10)',
-                          color: anchorPillar === val ? col : 'rgba(26,26,26,0.35)',
-                        }}>
-                        {short}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {anchorError && <p className="text-[12px] font-[500]" style={{ color: '#B8860B' }}>{anchorError}</p>}
-
-              <button type="submit"
-                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider transition-all active:scale-[0.98] rounded-[6px] mt-2"
-                style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
-                Programar Gasto Fijo
-              </button>
-            </form>
-          </div>
-        </>
-      )}
-
-      {/* ── MODAL EDITAR GASTO FIJO RECURRENTE ── */}
-      {showEditModal && editingAnchor && (
-        <>
-          <div className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40" onClick={() => setShowEditModal(false)} />
-          <div className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto animate-slide-up"
-            style={{ background: '#F5F2ED', borderRadius: '20px 20px 0 0', boxShadow: '0 -8px 40px rgba(0,0,0,0.08)' }}>
-            <form onSubmit={handleUpdateAnchor} className="px-6 pt-4 pb-10 space-y-4" id="edit-anchor-form">
-              <div className="flex justify-center mb-2">
-                <div className="w-8 h-[3px] rounded-full" style={{ background: 'rgba(26,26,26,0.12)' }} />
-              </div>
-
-              <div className="flex justify-between items-center">
-                <h4 className="text-[16px] font-[400] text-noria-text">Editar Gasto Programado</h4>
-                <button type="button" onClick={() => setShowEditModal(false)}
-                  className="focus:outline-none p-1" style={{ color: 'rgba(26,26,26,0.4)' }}>✕</button>
-              </div>
-
-              <div>
-                <label className="muji-header block mb-1">Nombre</label>
-                <input type="text" value={editAnchorName} onChange={e => setEditAnchorName(e.target.value)}
-                  className="muji-input" required />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="muji-header block mb-1">Monto Mensual (USD)</label>
-                  <input type="number" step="0.01" inputMode="decimal"
-                    value={editAnchorAmount} onChange={e => setEditAnchorAmount(e.target.value)}
-                    className="muji-input" required />
-                </div>
-                <div>
-                  <label className="muji-header block mb-1">Fecha de cobro estimada</label>
-                  <input type="date" value={editAnchorDueDate}
-                    onChange={e => setEditAnchorDueDate(e.target.value)} className="muji-input" />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="muji-header block mb-1">Cuenta Asociada (Débito)</label>
-                  <select value={editAnchorAccountId} onChange={e => setEditAnchorAccountId(e.target.value)}
-                    className="muji-input" required={editingAnchor.pillar !== 'SAVE'}>
-                    <option value="">Ninguna...</option>
-                    {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="muji-header block mb-2">Pilar</label>
-                  <div className="flex space-x-1">
-                    {[['NEED','N','#5C7A52'],['WANT','W','#4A6475'],['SAVE','S','#B8860B']].map(([val, short, col]) => (
-                      <button key={val} type="button" onClick={() => setEditAnchorPillar(val)}
-                        disabled={editingAnchor.pillar === 'SAVE'}
-                        className="flex-1 py-1 text-[10px] font-[500] uppercase rounded border transition-all disabled:opacity-50"
-                        style={{
-                          borderColor: editAnchorPillar === val ? col : 'rgba(26,26,26,0.10)',
-                          color: editAnchorPillar === val ? col : 'rgba(26,26,26,0.35)',
-                        }}>
-                        {short}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              <button type="submit"
-                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider transition-all active:scale-[0.98] rounded-[6px] mt-2"
-                style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
-                Guardar Cambios
-              </button>
-            </form>
-          </div>
-        </>
-      )}
+      {/* Modal para Editar Plantilla */}
+      <AnchorFormModal
+        isOpen={showEditModal}
+        onClose={() => { setShowEditModal(false); setEditingAnchor(null); }}
+        onSubmit={handleUpdateAnchor}
+        anchor={editingAnchor}
+        activeAccounts={activeAccounts}
+        institutions={institutions}
+        macetas={macetas}
+      />
 
       {/* FAB Radial */}
       <FAB />
