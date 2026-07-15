@@ -4,13 +4,11 @@ import { db } from '../db/db.js';
 import Header from '../components/Header.jsx';
 import BottomNav from '../components/BottomNav.jsx';
 import FAB from '../components/FAB.jsx';
-import { Plus, Landmark, CreditCard, Target, Trash2, Pencil, Wallet, TrendingUp, X, Check, Archive, ArrowUpRight, ArrowDownLeft, Eye, ArchiveRestore } from 'lucide-react';
+import { Plus, Landmark, CreditCard, Target, Trash2, Pencil, Wallet, TrendingUp, X, Check, Archive, ArrowUpRight, ArrowDownLeft, Eye, ArchiveRestore, ChevronDown, ChevronUp } from 'lucide-react';
 
 import CuentasFuentesTab from '../components/CuentasFuentesTab.jsx';
 import MetasTab from '../components/MetasTab.jsx';
-import HistorialTab from '../components/HistorialTab.jsx';
-
-const TABS = ['Cuentas', 'Metas', 'Historial'];
+import FuentesIngresoSection from '../components/FuentesIngresoSection.jsx';
 
 // Map parameters for readable instrument types
 const INSTRUMENT_TYPES = [
@@ -266,8 +264,8 @@ function AddAccountModal({ onClose, institutions, onCreated }) {
           {error && <p className="text-[12px] font-[500]" style={{ color: '#B8860B' }}>{error}</p>}
 
           <button type="submit"
-            className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider rounded-[6px] mt-2 active:scale-[0.98] transition-all"
-            style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
+            className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider border mt-2 transition-colors"
+            style={{ background: 'transparent', color: '#1A1A1A', borderColor: '#1A1A1A' }}>
             Crear Cuenta
           </button>
         </form>
@@ -446,8 +444,8 @@ function EditAccountForm({ account, institutions, onUpdated, onCancel }) {
           Atrás
         </button>
         <button type="submit"
-          className="flex-1 py-2 text-[12px] font-[500] uppercase tracking-wider rounded-[6px]"
-          style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
+          className="flex-1 py-2 text-[12px] font-[500] uppercase tracking-wider border transition-colors"
+          style={{ background: 'transparent', color: '#1A1A1A', borderColor: '#1A1A1A' }}>
           Guardar
         </button>
       </div>
@@ -458,12 +456,68 @@ function EditAccountForm({ account, institutions, onUpdated, onCancel }) {
 
 
 /* ── Pantalla Principal ── */
+function AccordionSection({ id, title, open, onToggle, action, children }) {
+  return (
+    <section className="border-t border-[#1A1A1A]" id={id}>
+      <div className="flex items-center justify-between py-3.5 border-b border-[rgba(26,26,26,0.12)]">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex items-center space-x-2 text-left focus:outline-none"
+        >
+          {open ? <ChevronUp size={14} strokeWidth={2} /> : <ChevronDown size={14} strokeWidth={2} />}
+          <h2 className="text-[17px] font-[600] text-noria-text leading-tight">{title}</h2>
+        </button>
+        {action}
+      </div>
+      {open && <div className="pt-5 pb-7 animate-fade-in">{children}</div>}
+    </section>
+  );
+}
+
+function PatrimonioSummary({ summary }) {
+  const pct = (value) => summary.netWorth > 0 ? Math.round((value / summary.netWorth) * 100) : 0;
+  const rows = [
+    ['Efectivo', summary.cash],
+    ['Bancos', summary.banks],
+    ['Wallets', summary.wallets],
+    ['Metas', summary.goals],
+  ];
+
+  return (
+    <div className="border-2 border-[#1A1A1A] p-5 font-mono text-noria-text bg-transparent">
+      <div className="flex items-start justify-between gap-3 mb-6">
+        <p className="text-[10px] font-[700] tracking-[0.16em] uppercase opacity-55">RESUMEN GLOBAL</p>
+        <span className="border border-[#1A1A1A] px-2 py-1 text-[9px] font-[700] tracking-[0.12em] uppercase leading-none">USD BASE</span>
+      </div>
+      <p className="text-[11px] font-[700] uppercase tracking-[0.12em] opacity-70">Patrimonio Neto</p>
+      <p className="font-sans text-[38px] font-[600] tracking-normal leading-none mt-1 mb-6">${fmt(summary.netWorth)}</p>
+      <div className="border-t border-[#1A1A1A] pt-4">
+      <p className="text-[10px] font-[700] uppercase tracking-[0.12em] opacity-60 mb-2">Distribucion</p>
+      <div className="space-y-1.5 text-[12px]">
+        {rows.map(([label, value]) => (
+          <div key={label} className="flex justify-between gap-3">
+            <span>{label}:</span>
+            <span>${fmt(value)} ({pct(value)}%)</span>
+          </div>
+        ))}
+      </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AccountsScreen() {
-  const [tab, setTab] = useState(0);
   const [showAddAccModal, setShowAddAccModal] = useState(false);
   const [showAddMacetaModal, setShowAddMacetaModal] = useState(false);
   const [showAddSourceModal, setShowAddSourceModal] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [openSections, setOpenSections] = useState({
+    summary: true,
+    accounts: true,
+    goals: true,
+    sources: true,
+  });
 
   // ID de la cuenta abierta en el Panel de detalle
   const [selectedAccountId, setSelectedAccountId] = useState(null);
@@ -524,6 +578,27 @@ export default function AccountsScreen() {
 
   const activeAccounts = accounts.filter(a => !a.isArchived);
   const archivedAccounts = accounts.filter(a => a.isArchived);
+  const toggleSection = (key) => setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
+  const allocationsByAccount = macetaAllocations.reduce((map, allocation) => {
+    map[allocation.accountId] = (map[allocation.accountId] || 0) + allocation.amount;
+    return map;
+  }, {});
+  const goalsDistribution = macetaAllocations.reduce((sum, allocation) => sum + allocation.amount, 0);
+  const accountCategory = (account) => {
+    const institution = institutions.find(i => i.id === account.institutionId);
+    const instType = institution?.type;
+    if (instType === 'CASH' || account.type === 'CASH') return 'cash';
+    if (['EXCHANGE', 'HOT_WALLET', 'COLD_WALLET'].includes(instType) || ['WALLET', 'CRYPTO_SPOT', 'CRYPTO_FUND'].includes(account.type)) return 'wallets';
+    return 'banks';
+  };
+  const patrimonioSummary = activeAccounts.reduce((summary, account) => {
+    const category = accountCategory(account);
+    const allocated = allocationsByAccount[account.id] || 0;
+    const availableBalance = Math.max(0, account.balance - allocated);
+    summary.netWorth += account.balance;
+    summary[category] += availableBalance;
+    return summary;
+  }, { netWorth: 0, cash: 0, banks: 0, wallets: 0, goals: goalsDistribution });
 
   // Active / Selected Account properties
   const selectedAccount = useLiveQuery(async () => {
@@ -625,13 +700,17 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
 
     try {
       await db.transaction('rw', [db.maceta_allocations, db.macetas, db.anchors], async () => {
-        // 1. Borrar asignaciones
+        // 1. Borrar asignaciones (macetaId está indexado)
         await db.maceta_allocations.where('macetaId').equals(id).delete();
 
-        // 2. Borrar anclas asociadas (tanto plantillas como instancias de ahorro tipo SAVE vinculadas a esta maceta)
-        await db.anchors.where('macetaId').equals(id).delete();
+        // 2. Borrar anclas asociadas en memoria (ya que macetaId no está indexado en la tabla anchors)
+        const allAnchors = await db.anchors.toArray();
+        const anchorsToRemove = allAnchors.filter(a => a.macetaId === id);
+        for (const a of anchorsToRemove) {
+          await db.anchors.delete(a.id);
+        }
 
-        // 3. Borrar la maceta
+        // 3. Borrar la meta
         await db.macetas.delete(id);
       });
     } catch (err) {
@@ -929,17 +1008,6 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
     }
   };
 
-  const addButtonLabel = ['Añadir Cuenta', 'Nueva Meta', null][tab];
-  const addButtonAction = [
-    () => {
-      setIsEditingAccount(false);
-      setShowAddAccModal(true);
-    },
-    () => { setMacetaError(''); setShowAddMacetaModal(true); },
-    null
-  ][tab];
-
-
   return (
     <div className="min-h-screen pb-32 pt-16 flex flex-col md:flex-row md:max-w-6xl md:mx-auto" style={{ background: '#F5F2ED' }}>
 
@@ -947,41 +1015,37 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
       <div className="flex-1 w-full max-w-md mx-auto px-6">
         <Header title="Patrimonio" />
 
-        {/* ── Tab bar ── */}
-        <div className="flex border-b border-[rgba(0,0,0,0.07)] mt-4 mb-6">
-          {TABS.map((label, i) => (
-            <button
-              key={label}
-              id={`patrimonio-tab-${label.toLowerCase()}`}
-              onClick={() => setTab(i)}
-              className="flex-1 pb-3 text-[13px] font-[400] transition-all focus:outline-none relative"
-              style={{ color: tab === i ? '#1A1A1A' : 'rgba(26,26,26,0.4)' }}
-            >
-              {label}
-              {tab === i && (
-                <span className="absolute bottom-0 left-0 right-0 h-[2px] rounded-full" style={{ background: '#5C7A52' }} />
-              )}
-            </button>
-          ))}
-        </div>
+        <div className="mt-4">
 
-        {/* ── Add button row ── */}
-        {addButtonLabel && (
-          <div className="flex justify-end mb-5">
-            <button
-              id={`add-btn-${tab}`}
-              onClick={addButtonAction}
-              className="flex items-center space-x-1 focus:outline-none"
-              style={{ color: '#5C7A52', fontSize: '11px', fontWeight: 500, letterSpacing: '0.06em', textTransform: 'uppercase' }}
-            >
-              <Plus size={12} strokeWidth={2} />
-              <span>{addButtonLabel}</span>
-            </button>
-          </div>
-        )}
+          <AccordionSection
+            id="patrimonio-summary-section"
+            title="Resumen"
+            open={openSections.summary}
+            onToggle={() => toggleSection('summary')}
+          >
+            <PatrimonioSummary summary={patrimonioSummary} />
+          </AccordionSection>
 
-        {/* ── Tab content ── */}
-        {tab === 0 && (
+          <AccordionSection
+            id="patrimonio-accounts-section"
+            title="Cuentas"
+            open={openSections.accounts}
+            onToggle={() => toggleSection('accounts')}
+            action={(
+              <button
+                id="add-btn-accounts"
+                onClick={() => {
+                  setIsEditingAccount(false);
+                  setShowAddAccModal(true);
+                }}
+                className="flex items-center space-x-1 focus:outline-none"
+                style={{ color: '#647C78', fontSize: '11px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', fontFamily: 'Space Mono, monospace' }}
+              >
+                <Plus size={12} strokeWidth={2} />
+                <span>Añadir</span>
+              </button>
+            )}
+          >
           <CuentasFuentesTab
             institutions={institutions}
             accounts={activeAccounts}
@@ -1001,9 +1065,28 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
             onAddSource={() => setShowAddSourceModal(true)}
             onEditSource={handleEditSourceClick}
             onDeleteSource={handleDeleteSource}
+            showSources={false}
+            selectedAccountId={selectedAccountId}
           />
-        )}
-        {tab === 1 && (
+          </AccordionSection>
+
+          <AccordionSection
+            id="patrimonio-goals-section"
+            title="Metas de ahorro"
+            open={openSections.goals}
+            onToggle={() => toggleSection('goals')}
+            action={(
+              <button
+                id="add-btn-goals"
+                onClick={() => { setMacetaError(''); setShowAddMacetaModal(true); }}
+                className="flex items-center space-x-1 focus:outline-none"
+                style={{ color: '#647C78', fontSize: '11px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', fontFamily: 'Space Mono, monospace' }}
+              >
+                <Plus size={12} strokeWidth={2} />
+                <span>Nueva meta</span>
+              </button>
+            )}
+          >
           <MetasTab
             macetas={macetas}
             accounts={activeAccounts}
@@ -1015,15 +1098,33 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
             onDistribute={setDistributingMaceta}
             onProgramSavings={handleProgramSavings}
           />
-        )}
-        {tab === 2 && (
-          <HistorialTab
-            transactions={transactions}
-            accounts={accounts}
-            onDeleteTransaction={handleDeleteTransaction}
-            onUpdateTransaction={handleUpdateTransaction}
+          </AccordionSection>
+
+          <AccordionSection
+            id="patrimonio-sources-section"
+            title="Fuentes de ingreso"
+            open={openSections.sources}
+            onToggle={() => toggleSection('sources')}
+            action={(
+              <button
+                id="add-btn-sources"
+                onClick={() => setShowAddSourceModal(true)}
+                className="flex items-center space-x-1 focus:outline-none"
+                style={{ color: '#647C78', fontSize: '11px', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', fontFamily: 'Space Mono, monospace' }}
+              >
+                <Plus size={12} strokeWidth={2} />
+                <span>Añadir</span>
+              </button>
+            )}
+          >
+          <FuentesIngresoSection
+            incomeSources={incomeSources}
+            onAddSource={() => setShowAddSourceModal(true)}
+            onEditSource={handleEditSourceClick}
+            onDeleteSource={handleDeleteSource}
           />
-        )}
+          </AccordionSection>
+        </div>
       </div>
 
       {/* ── PC lateral Drawer Panel / Mobile Bottom Sheet (Unified UI) ── */}
@@ -1300,8 +1401,8 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
               {macetaError && <p className="text-[12px] font-[500]" style={{ color: '#B8860B' }} id="add-maceta-error">{macetaError}</p>}
 
               <button id="submit-new-maceta-btn" type="submit"
-                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider rounded-[6px] mt-2 active:scale-[0.98] transition-all"
-                style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
+                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider border mt-2 transition-colors"
+                style={{ background: 'transparent', color: '#1A1A1A', borderColor: '#1A1A1A' }}>
                 Crear Meta
               </button>
             </form>
@@ -1366,8 +1467,8 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
               })()}
 
               <button type="submit"
-                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider rounded-[6px] mt-2 active:scale-[0.98] transition-all"
-                style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
+                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider border mt-2 transition-colors"
+                style={{ background: 'transparent', color: '#1A1A1A', borderColor: '#1A1A1A' }}>
                 Guardar Cambios
               </button>
             </form>
@@ -1408,8 +1509,8 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
                 </select>
               </div>
               <button id="submit-new-source-btn" type="submit"
-                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider rounded-[6px] mt-2 active:scale-[0.98] transition-all"
-                style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
+                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider border mt-2 transition-colors"
+                style={{ background: 'transparent', color: '#1A1A1A', borderColor: '#1A1A1A' }}>
                 Crear Fuente
               </button>
             </form>
@@ -1450,8 +1551,8 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
                 </select>
               </div>
               <button type="submit"
-                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider rounded-[6px] mt-2 active:scale-[0.98] transition-all"
-                style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
+                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider border mt-2 transition-colors"
+                style={{ background: 'transparent', color: '#1A1A1A', borderColor: '#1A1A1A' }}>
                 Guardar Cambios
               </button>
             </form>
@@ -1521,8 +1622,8 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
               </div>
 
               <button type="submit"
-                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider transition-all active:scale-[0.98] rounded-[6px] mt-2"
-                style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
+                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider border mt-2 transition-colors"
+                style={{ background: 'transparent', color: '#1A1A1A', borderColor: '#1A1A1A' }}>
                 Programar Gasto Fijo
               </button>
             </form>
@@ -1595,8 +1696,8 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
               </div>
 
               <button type="submit"
-                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider transition-all active:scale-[0.98] rounded-[6px] mt-2"
-                style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
+                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider border mt-2 transition-colors"
+                style={{ background: 'transparent', color: '#1A1A1A', borderColor: '#1A1A1A' }}>
                 Guardar Cambios
               </button>
             </form>
@@ -1761,8 +1862,8 @@ function AssignFundsModal({ maceta, onClose, accounts, macetaAllocations, onSave
           {error && <p className="text-[12px] font-[500]" style={{ color: '#B8860B' }}>{error}</p>}
 
           <button type="submit"
-            className="w-full py-3 text-[12px] font-[500] uppercase tracking-wider rounded-[6px] mt-2 active:scale-[0.98] transition-all"
-            style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
+            className="w-full py-3 text-[12px] font-[500] uppercase tracking-wider border mt-2 transition-colors"
+            style={{ background: 'transparent', color: '#1A1A1A', borderColor: '#1A1A1A' }}>
             Guardar Distribución
           </button>
         </form>
@@ -1770,4 +1871,3 @@ function AssignFundsModal({ maceta, onClose, accounts, macetaAllocations, onSave
     </>
   );
 }
-

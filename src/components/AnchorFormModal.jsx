@@ -27,11 +27,15 @@ export default function AnchorFormModal({
       setAmount(anchor.amount || '');
       // Formatear fecha para input type="date" (YYYY-MM-DD)
       if (anchor.nextDueDate) {
-        const d = anchor.nextDueDate instanceof Date ? anchor.nextDueDate : new Date(anchor.nextDueDate);
-        if (!isNaN(d.getTime())) {
-          setDueDate(d.toISOString().slice(0, 10));
+        if (typeof anchor.nextDueDate === 'string') {
+          setDueDate(anchor.nextDueDate.slice(0, 10));
         } else {
-          setDueDate('');
+          const d = anchor.nextDueDate instanceof Date ? anchor.nextDueDate : new Date(anchor.nextDueDate);
+          if (!isNaN(d.getTime())) {
+            setDueDate(d.toISOString().slice(0, 10));
+          } else {
+            setDueDate('');
+          }
         }
       } else {
         setDueDate('');
@@ -86,7 +90,7 @@ export default function AnchorFormModal({
     const data = {
       name: name.trim(),
       amount: parsedAmount,
-      nextDueDate: dueDate ? new Date(dueDate) : null,
+      nextDueDate: dueDate || null,
       pillar,
       accountId: pillar !== 'SAVE' ? parseInt(accountId) : null,
       macetaId: pillar === 'SAVE' ? parseInt(macetaId) : null,
@@ -101,13 +105,10 @@ export default function AnchorFormModal({
 
   return (
     <>
-      <div className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40" onClick={onClose} />
-      <div className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto animate-slide-up"
-        style={{ background: '#F5F2ED', borderRadius: '20px 20px 0 0', boxShadow: '0 -8px 40px rgba(0,0,0,0.08)' }}>
-        <form onSubmit={handleSubmit} className="px-6 pt-4 pb-10 space-y-4" id="anchor-form">
-          <div className="flex justify-center mb-2">
-            <div className="w-8 h-[3px] rounded-full" style={{ background: 'rgba(26,26,26,0.12)' }} />
-          </div>
+      <div className="fixed inset-0 bg-[rgba(26,26,26,0.15)] z-40" onClick={onClose} />
+      <div className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto animate-slide-up border-t-2 border-l-2 border-r-2 border-[#1A1A1A]"
+        style={{ background: '#F5F2ED' }}>
+        <form onSubmit={handleSubmit} className="px-6 pt-6 pb-10 space-y-4" id="anchor-form">
 
           <div className="flex justify-between items-center">
             <h4 className="text-[16px] font-[400] text-noria-text">
@@ -269,8 +270,7 @@ export default function AnchorFormModal({
 
           <button
             type="submit"
-            className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider transition-all active:scale-[0.98] rounded-[6px] mt-2"
-            style={{ background: '#1A1A1A', color: '#F5F2ED' }}
+            className="brut-btn w-full py-3.5 mt-2"
           >
             {isEdit ? 'Guardar Cambios' : 'Confirmar Programación'}
           </button>

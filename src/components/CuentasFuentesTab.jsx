@@ -1,10 +1,10 @@
 import React from 'react';
-import { Landmark, Wallet, CreditCard, Archive, Trash2, TrendingUp, Plus, Pencil } from 'lucide-react';
+import { Landmark, Wallet, CreditCard, Archive, TrendingUp } from 'lucide-react';
 
 const INSTRUMENT_TYPES = [
-  { value: 'DEBIT_CARD', label: 'Tarjeta de Débito' },
-  { value: 'MOBILE_PAYMENT', label: 'Pago Móvil' },
-  { value: 'CREDIT_CARD', label: 'Tarjeta de Crédito' },
+  { value: 'DEBIT_CARD', label: 'Tarjeta de Debito' },
+  { value: 'MOBILE_PAYMENT', label: 'Pago Movil' },
+  { value: 'CREDIT_CARD', label: 'Tarjeta de Credito' },
 ];
 
 export default function CuentasFuentesTab({
@@ -12,16 +12,13 @@ export default function CuentasFuentesTab({
   accounts,
   instruments,
   onSelectAccount,
-  onAddAccount,
   showArchived,
   setShowArchived,
   archivedAccounts,
   incomeSources,
-  onAddSource,
-  onEditSource,
-  onDeleteSource
+  showSources = true,
+  selectedAccountId = null
 }) {
-
   const fmt = (n) => {
     if (typeof n !== 'number') return '0.00';
     return n.toLocaleString('es-ES', { minimumFractionDigits: 2 });
@@ -36,31 +33,13 @@ export default function CuentasFuentesTab({
 
   return (
     <div className="space-y-8 pb-8">
-      {/* ── SECCIÓN CUENTAS ── */}
       <div>
-        <div className="flex justify-between items-center mb-4">
-          <h4 className="text-[12px] font-[600] uppercase tracking-wider text-noria-text opacity-40">Cuentas</h4>
-          {instGroups.length > 0 && (
-            <button
-              onClick={onAddAccount}
-              className="text-[11px] font-[500] uppercase tracking-wider flex items-center space-x-1"
-              style={{ color: '#5C7A52' }}
-            >
-              <Plus size={10} />
-              <span>Añadir</span>
-            </button>
-          )}
-        </div>
-
         {instGroups.length === 0 && archivedAccounts.length === 0 ? (
-          <div className="flex flex-col items-center py-8 space-y-3" style={{ background: 'rgba(26,26,26,0.01)', border: '1px dashed rgba(26,26,26,0.08)', borderRadius: '8px' }}>
-            <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.04)' }}>
+          <div className="flex flex-col items-center py-8 space-y-3 border border-[rgba(26,26,26,0.18)]">
+            <div className="w-10 h-10 flex items-center justify-center">
               <Landmark size={18} strokeWidth={1.5} style={{ color: 'rgba(26,26,26,0.2)' }} />
             </div>
-            <p className="text-[12px]" style={{ color: 'rgba(26,26,26,0.35)' }}>Sin cuentas añadidas aún</p>
-            <button onClick={onAddAccount} className="text-[11px] font-[500] uppercase tracking-wider underline underline-offset-2 focus:outline-none" style={{ color: '#5C7A52' }}>
-              Añadir cuenta
-            </button>
+            <p className="text-[12px]" style={{ color: 'rgba(26,26,26,0.35)' }}>Sin cuentas anadidas aun</p>
           </div>
         ) : (
           <div className="space-y-6">
@@ -72,7 +51,6 @@ export default function CuentasFuentesTab({
               const totalUSD = accs.filter(a => a.currency === 'USD').reduce((sum, a) => sum + a.balance, 0);
               const totalUSDT = accs.filter(a => a.currency === 'USDT').reduce((sum, a) => sum + a.balance, 0);
               const totalUSDC = accs.filter(a => a.currency === 'USDC').reduce((sum, a) => sum + a.balance, 0);
-
               const balanceStr = [
                 totalUSD > 0 ? `$${fmt(totalUSD, 0)}` : '',
                 totalUSDT > 0 ? `${fmt(totalUSDT, 0)} USDT` : '',
@@ -81,34 +59,38 @@ export default function CuentasFuentesTab({
 
               return (
                 <div key={inst.id} className="animate-fade-in">
-                  <div className="flex justify-between items-baseline mb-2 pb-2 border-b border-[rgba(0,0,0,0.07)]">
-                    <div className="flex items-center space-x-2">
-                      <Landmark size={12} strokeWidth={1.5} style={{ color: 'rgba(26,26,26,0.35)' }} />
-                      <span className="label-section">{inst.name}</span>
-                      <span className="label-section" style={{ color: 'rgba(26,26,26,0.2)' }}>· {inst.type}</span>
+                  <div className="flex justify-between items-baseline mb-3 pb-2 border-b border-[rgba(26,26,26,0.16)]">
+                    <div className="flex items-center space-x-2 min-w-0">
+                      <Landmark size={12} strokeWidth={1.5} className="shrink-0" style={{ color: 'rgba(26,26,26,0.35)' }} />
+                      <span className="label-section truncate">{inst.name}</span>
+                      <span className="label-section shrink-0" style={{ color: 'rgba(26,26,26,0.2)' }}>· {inst.type}</span>
                     </div>
-                    <span className="text-[11px] font-[500]" style={{ color: 'rgba(26,26,26,0.45)' }}>
+                    <span className="text-[11px] font-[500] shrink-0" style={{ color: 'rgba(26,26,26,0.45)' }}>
                       {balanceStr}
                     </span>
                   </div>
 
-                  <div className="divide-y divide-noria-text/5">
+                  <div className="space-y-3">
                     {accs.map(acc => {
                       const accInstrs = instruments.filter(i => i.accountId === acc.id);
+                      const isSelected = selectedAccountId === acc.id;
                       return (
                         <button
                           key={acc.id}
                           onClick={() => onSelectAccount(acc.id)}
                           className="w-full text-left focus:outline-none transition-colors"
                         >
-                          <div className="noria-row hover:bg-noria-text/2 px-2 -mx-2 rounded transition-colors">
-                            <div className="flex items-center space-x-3">
-                              <div className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.04)', color: 'rgba(26,26,26,0.3)' }}>
+                          <div
+                            className="flex items-center justify-between gap-3 border border-[#1A1A1A] px-4 py-4 transition-colors hover:bg-noria-text/[0.03]"
+                            style={{ borderLeftWidth: isSelected ? 6 : 1, borderLeftColor: isSelected ? '#647C78' : '#1A1A1A' }}
+                          >
+                            <div className="flex items-center space-x-3 min-w-0">
+                              <div className="w-8 h-8 flex items-center justify-center shrink-0" style={{ color: 'rgba(26,26,26,0.46)' }}>
                                 <Wallet size={16} strokeWidth={1.5} />
                               </div>
-                              <div>
-                                <p className="text-[15px] font-[400] text-noria-text">{acc.name}</p>
-                                <div className="flex items-center space-x-2 mt-0.5">
+                              <div className="min-w-0">
+                                <p className="text-[15px] font-[600] text-noria-text truncate">{acc.name}</p>
+                                <div className="flex items-center flex-wrap gap-x-2 gap-y-1 mt-1">
                                   <span className="label-section">{acc.type}</span>
                                   {accInstrs.map(instr => (
                                     <span key={instr.id} className="flex items-center space-x-1 label-section">
@@ -119,8 +101,8 @@ export default function CuentasFuentesTab({
                                 </div>
                               </div>
                             </div>
-                            <div className="text-right">
-                              <p className="text-[15px] font-[400] text-noria-text">${fmt(acc.balance)}</p>
+                            <div className="text-right shrink-0">
+                              <p className="font-mono text-[18px] font-[700] text-noria-text">${fmt(acc.balance)}</p>
                               <p className="label-section">{acc.currency}</p>
                             </div>
                           </div>
@@ -132,9 +114,8 @@ export default function CuentasFuentesTab({
               );
             })}
 
-            {/* Cuentas Archivadas */}
             {archivedAccounts.length > 0 && (
-              <div className="pt-4 border-t border-[rgba(0,0,0,0.07)]">
+              <div className="pt-4 border-t border-[rgba(26,26,26,0.16)]">
                 <button
                   onClick={() => setShowArchived(!showArchived)}
                   className="w-full flex justify-between items-center focus:outline-none py-1.5"
@@ -149,19 +130,19 @@ export default function CuentasFuentesTab({
                 </button>
 
                 {showArchived && (
-                  <div className="divide-y divide-noria-text/5 mt-2 animate-fade-in">
+                  <div className="space-y-2 mt-3 animate-fade-in">
                     {archivedAccounts.map(acc => {
                       const inst = institutions.find(i => i.id === acc.institutionId);
                       return (
                         <button
                           key={acc.id}
                           onClick={() => onSelectAccount(acc.id)}
-                          className="w-full text-left py-2.5 flex justify-between items-center hover:bg-noria-text/2 px-2 -mx-2 rounded transition-colors opacity-60"
+                          className="w-full text-left py-3 px-4 flex justify-between items-center border border-[rgba(26,26,26,0.16)] hover:bg-noria-text/[0.03] transition-colors opacity-60"
                         >
                           <div>
                             <p className="text-[14px] font-[400] text-noria-text">{acc.name}</p>
                             <p className="label-section mt-0.5">
-                              {inst?.name || 'Institución'} · {acc.type}
+                              {inst?.name || 'Institucion'} · {acc.type}
                             </p>
                           </div>
                           <div className="text-right">
@@ -179,80 +160,21 @@ export default function CuentasFuentesTab({
         )}
       </div>
 
-      <div className="h-[1px]" style={{ background: 'rgba(26,26,26,0.06)' }} />
-
-      {/* ── SECCIÓN FUENTES DE INGRESO ── */}
-      <div>
-        <div className="flex justify-between items-center mb-4">
-          <h4 className="text-[12px] font-[600] uppercase tracking-wider text-noria-text opacity-40">Fuentes de Ingreso</h4>
-          {incomeSources.length > 0 && (
-            <button
-              onClick={onAddSource}
-              className="text-[11px] font-[500] uppercase tracking-wider flex items-center space-x-1"
-              style={{ color: '#5C7A52' }}
-            >
-              <Plus size={10} />
-              <span>Añadir</span>
-            </button>
-          )}
-        </div>
-
-        {incomeSources.length === 0 ? (
-          <div className="flex flex-col items-center py-8 space-y-3" style={{ background: 'rgba(26,26,26,0.01)', border: '1px dashed rgba(26,26,26,0.08)', borderRadius: '8px' }}>
-            <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.04)' }}>
-              <TrendingUp size={18} strokeWidth={1.5} style={{ color: 'rgba(26,26,26,0.2)' }} />
-            </div>
-            <p className="text-[12px]" style={{ color: 'rgba(26,26,26,0.35)' }}>Sin fuentes de ingreso definidas</p>
-            <button onClick={onAddSource} className="text-[11px] font-[500] uppercase tracking-wider underline underline-offset-2 focus:outline-none" style={{ color: '#5C7A52' }}>
-              Añadir fuente
-            </button>
-          </div>
-        ) : (
-          <div className="divide-y divide-noria-text/5 animate-fade-in">
-            {incomeSources.map(src => (
-              <div key={src.id} className="noria-row py-3" id={`source-row-${src.id}`}>
-                <div className="flex items-center space-x-3">
-                  <div className="w-9 h-9 rounded-full flex items-center justify-center text-[15px]" style={{ background: 'rgba(92,122,82,0.08)' }}>
-                    {(() => {
-                      switch (src.type) {
-                        case 'SALARY': return '💼';
-                        case 'FREELANCE': return '💻';
-                        case 'INVESTMENT': return '📈';
-                        case 'GIFT': return '🎁';
-                        case 'BUSINESS': return '🏪';
-                        default: return '💰';
-                      }
-                    })()}
-                  </div>
-                  <div>
-                    <p className="text-[15px] font-[400] text-noria-text">{src.name}</p>
-                    <p className="text-[10px] text-noria-muted uppercase tracking-wider font-[500] mt-0.5">
-                      {(() => {
-                        switch (src.type) {
-                          case 'SALARY': return 'Salario / Empleo';
-                          case 'FREELANCE': return 'Freelance / Servicios';
-                          case 'INVESTMENT': return 'Inversiones / Dividendos';
-                          case 'GIFT': return 'Regalos / Bonos';
-                          case 'BUSINESS': return 'Ventas / Negocio';
-                          default: return 'Otro';
-                        }
-                      })()}
-                    </p>
-                  </div>
+      {showSources && (
+        <>
+          <div className="h-[1px]" style={{ background: 'rgba(26,26,26,0.06)' }} />
+          <div>
+            {incomeSources.length === 0 ? (
+              <div className="flex flex-col items-center py-8 space-y-3 border border-[rgba(26,26,26,0.18)]">
+                <div className="w-10 h-10 flex items-center justify-center">
+                  <TrendingUp size={18} strokeWidth={1.5} style={{ color: 'rgba(26,26,26,0.2)' }} />
                 </div>
-                <div className="flex items-center space-x-1">
-                  <button onClick={() => onEditSource(src)} className="p-2 focus:outline-none hover:bg-noria-text/5 rounded transition-colors text-noria-muted hover:text-noria-text" title="Editar Fuente">
-                    <Pencil size={13} strokeWidth={1.5} />
-                  </button>
-                  <button onClick={() => onDeleteSource(src.id, src.name)} className="p-2 focus:outline-none hover:bg-noria-text/5 rounded transition-colors text-noria-muted hover:text-[#9F2F2D]" title="Eliminar Fuente">
-                    <Trash2 size={13} strokeWidth={1.5} />
-                  </button>
-                </div>
+                <p className="text-[12px]" style={{ color: 'rgba(26,26,26,0.35)' }}>Sin fuentes de ingreso definidas</p>
               </div>
-            ))}
+            ) : null}
           </div>
-        )}
-      </div>
+        </>
+      )}
     </div>
   );
 }

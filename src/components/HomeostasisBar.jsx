@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { ChevronUp } from 'lucide-react';
 
 export default function HomeostasisBar() {
   const [expanded, setExpanded] = useState(null); // 'NEED' | 'WANT' | 'SAVE' | null
@@ -37,32 +37,35 @@ export default function HomeostasisBar() {
   const pillars = [
     {
       key: 'NEED',
-      label: `NEEDS (${pillarPct.NEED}%)`,
+      label: `NECESIDADES (${pillarPct.NEED}%)`,
+      shortLabel: 'NECESIDADES',
       spent: spentNeeds,
       goal:  goalNeeds,
-      color: '#5C7A52',          // salvia
-      barBg: 'rgba(92,122,82,0.12)',
-      textColor: '#5C7A52',
+      color: '#4F8F58',          // necesidades
+      barBg: 'rgba(79,143,88,0.12)',
+      textColor: '#4F8F58',
       desc: 'Gastos vitales: alquiler, comida, luz, servicios básicos.',
     },
     {
       key: 'WANT',
-      label: `WANTS (${pillarPct.WANT}%)`,
+      label: `DESEOS (${pillarPct.WANT}%)`,
+      shortLabel: 'DESEOS',
       spent: spentWants,
       goal:  goalWants,
-      color: '#4A6475',          // slate
-      barBg: 'rgba(74,100,117,0.12)',
-      textColor: '#4A6475',
+      color: '#3F7F9C',          // deseos
+      barBg: 'rgba(63,127,156,0.12)',
+      textColor: '#3F7F9C',
       desc: 'Estilo de vida, salidas, entretenimiento, suscripciones.',
     },
     {
       key: 'SAVE',
-      label: `SAVINGS (${pillarPct.SAVE}%)`,
+      label: `AHORRO (${pillarPct.SAVE}%)`,
+      shortLabel: 'AHORRO',
       spent: spentSavings,
       goal:  goalSavings,
-      color: '#B8860B',          // amber
-      barBg: 'rgba(184,134,11,0.12)',
-      textColor: '#B8860B',
+      color: '#C58A14',          // ahorro
+      barBg: 'rgba(197,138,20,0.12)',
+      textColor: '#C58A14',
       desc: 'Dinero reservado para el futuro y fondo de emergencia.',
     },
   ];
@@ -73,7 +76,7 @@ export default function HomeostasisBar() {
     return (
       <article>
         <div className="flex justify-between items-center mb-3">
-          <h3 className="text-subtitle font-sans font-[400] text-noria-text">Homeostasis</h3>
+          <h3 className="text-[17px] font-[600] text-noria-text leading-tight">Homeostasis</h3>
           <span className="label-section">{new Date().toLocaleString('es-ES', { month: 'long' }).toUpperCase()}</span>
         </div>
         <p className="text-body text-noria-muted py-3">
@@ -87,7 +90,7 @@ export default function HomeostasisBar() {
     <article>
       {/* Header */}
       <div className="flex justify-between items-center mb-5">
-        <h3 className="text-subtitle font-sans font-[400] text-noria-text">Homeostasis</h3>
+        <h3 className="text-[17px] font-[600] text-noria-text leading-tight">Homeostasis</h3>
         <span className="label-section">{new Date().toLocaleString('es-ES', { month: 'long' }).toUpperCase()}</span>
       </div>
 
@@ -99,11 +102,12 @@ export default function HomeostasisBar() {
             id={`homeostasis-col-${p.key.toLowerCase()}`}
             onClick={() => setExpanded(prev => prev === p.key ? null : p.key)}
             className="flex flex-col space-y-2 text-left focus:outline-none group"
+            style={{ paddingTop: '0' }}
           >
-            {/* Barra gruesa superior (fiel a referencia, 5px, radio 20px) */}
-            <div className="w-full h-[5px] rounded-[20px] overflow-hidden" style={{ background: 'rgba(26,26,26,0.06)' }}>
+            {/* Barra superior recta */}
+            <div className="w-full h-[5px] overflow-hidden" style={{ background: 'rgba(26,26,26,0.12)' }}>
               <div
-                className="h-full rounded-[20px] transition-all duration-500"
+                className="h-full transition-all duration-500"
                 style={{
                   width: `${Math.min(100, p.goal > 0 ? (p.spent / p.goal) * 100 : 0)}%`,
                   background: p.color,
@@ -111,7 +115,7 @@ export default function HomeostasisBar() {
               />
             </div>
             {/* Label */}
-            <p className="label-section leading-tight" style={{ color: 'rgba(26,26,26,0.5)', fontSize: '10px' }}>
+            <p className="label-section leading-tight" style={{ color: '#1A1A1A', fontSize: '9px', opacity: 0.58 }}>
               {p.label}
             </p>
             {/* Monto gastado */}
@@ -127,13 +131,13 @@ export default function HomeostasisBar() {
         <div
           key={`detail-${p.key}`}
           id={`homeostasis-detail-${p.key.toLowerCase()}`}
-          className="animate-fade-in border border-[rgba(0,0,0,0.07)] rounded-[8px] p-4 mb-2 space-y-3"
-          style={{ background: p.barBg }}
+          className="animate-fade-in border border-[#1A1A1A] p-4 mb-2 space-y-3"
+          style={{ background: 'transparent' }}
         >
           {/* Barra de progreso individual */}
           <div className="space-y-1.5">
             <div className="flex justify-between items-center">
-              <span className="label-section" style={{ color: p.textColor }}>{p.key}</span>
+              <span className="label-section" style={{ color: p.textColor }}>{p.shortLabel}</span>
               <span className="label-section text-noria-muted">
                 {p.goal > 0 ? `${Math.min(100, Math.round((p.spent / p.goal) * 100))}%` : '–'}
               </span>
@@ -163,7 +167,7 @@ export default function HomeostasisBar() {
               <p className="label-section mb-0.5">Restante</p>
               <p
                 className="text-[15px] font-[400]"
-                style={{ color: p.spent > p.goal ? '#B8860B' : '#5C7A52' }}
+                style={{ color: p.spent > p.goal ? '#C58A14' : '#4F8F58' }}
               >
                 ${fmt(Math.max(0, p.goal - p.spent))}
               </p>
@@ -173,7 +177,7 @@ export default function HomeostasisBar() {
           {/* Descripción + alerta si se superó */}
           <p className="text-[12px] text-noria-muted leading-relaxed">{p.desc}</p>
           {p.spent > p.goal && (
-            <p className="text-[11px] font-[500]" style={{ color: '#B8860B' }}>
+            <p className="text-[11px] font-[500]" style={{ color: '#C58A14' }}>
               Superaste el límite por ${fmt(p.spent - p.goal)} {baseCurrency}.
             </p>
           )}

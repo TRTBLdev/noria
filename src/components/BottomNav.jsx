@@ -41,9 +41,9 @@ export default function BottomNav() {
   return (
     <nav
       className="fixed bottom-0 left-0 right-0 border-t z-40 max-w-md mx-auto"
-      style={{ background: 'rgba(245,242,237,0.95)', borderColor: 'rgba(0,0,0,0.07)', backdropFilter: 'blur(12px)' }}
+      style={{ background: '#F5F2ED', borderColor: 'rgba(26,26,26,0.16)' }}
     >
-      <div className="flex justify-between items-center h-16 px-6">
+      <div className="flex justify-between items-stretch h-16 px-5">
         {navItems.map((item, idx) => {
           const Icon     = item.icon;
           const isActive = currentPath === item.path;
@@ -54,27 +54,30 @@ export default function BottomNav() {
               key={idx}
               id={`nav-tab-${item.name.toLowerCase()}`}
               onClick={() => handleTabClick(item.path, item.name)}
-              className="flex flex-col items-center justify-center flex-1 py-1 focus:outline-none transition-colors duration-200"
+              className="relative flex flex-col items-center justify-center flex-1 py-1 focus:outline-none transition-colors duration-200"
             >
               <div className="relative">
                 <Icon
-                  size={21}
-                  strokeWidth={1.5}
-                  style={{ color: isActive ? '#5C7A52' : 'rgba(26,26,26,0.3)' }}
+                  size={19}
+                  strokeWidth={1.8}
+                  style={{ color: isActive ? '#1A1A1A' : 'rgba(26,26,26,0.34)' }}
                 />
                 {showDot && (
                   <span
-                    className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full"
-                    style={{ background: '#B8860B', border: '1.5px solid #F5F2ED' }}
+                    className="absolute -top-1 -right-1 w-2 h-2"
+                    style={{ background: '#B8860B', border: '1px solid #F5F2ED' }}
                   />
                 )}
               </div>
               <span
-                className="text-[9px] tracking-wider mt-1 uppercase"
-                style={{ color: isActive ? '#5C7A52' : 'rgba(26,26,26,0.3)', fontWeight: isActive ? 500 : 400 }}
+                className="text-[8px] font-mono tracking-wider mt-1 uppercase"
+                style={{ color: isActive ? '#647C78' : 'rgba(26,26,26,0.34)', fontWeight: isActive ? 700 : 400 }}
               >
                 {item.name}
               </span>
+              {isActive && (
+                <span className="absolute bottom-0 h-[3px] w-7" style={{ background: '#647C78' }} />
+              )}
             </button>
           );
         })}

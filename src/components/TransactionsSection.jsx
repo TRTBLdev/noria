@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Search, Calendar, Filter, Trash2, Pencil, X, Check, ArrowDownRight, ArrowUpRight, ArrowLeftRight } from 'lucide-react';
 
-export default function HistorialTab({
+export default function TransactionsSection({
   transactions,
   accounts,
   onDeleteTransaction,
@@ -130,7 +130,7 @@ export default function HistorialTab({
               onChange={e => setDateRange(e.target.value)}
               className="muji-input text-[12px] py-1.5 px-2"
             >
-              <option value="ALL">Todo el Historial</option>
+              <option value="ALL">Todas las transacciones</option>
               <option value="THIS_MONTH">Este Mes</option>
               <option value="LAST_MONTH">Mes Pasado</option>
               <option value="3_MONTHS">Últimos 3 Meses</option>
@@ -382,8 +382,8 @@ export default function HistorialTab({
 
               <button
                 type="submit"
-                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider transition-all active:scale-[0.98] rounded-[6px] mt-2"
-                style={{ background: '#1A1A1A', color: '#F5F2ED' }}
+                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider border mt-2 transition-colors"
+                style={{ background: 'transparent', color: '#1A1A1A', borderColor: '#1A1A1A' }}
               >
                 Guardar Cambios
               </button>

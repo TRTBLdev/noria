@@ -12,14 +12,16 @@ export default {
           text: '#1A1A1A',     // Near-black for strong contrast
           muted: '#787674',    // Secondary text
           border: 'rgba(0,0,0,0.07)', // Ultra-light borders
-          salvia: '#5C7A52',   // Sage green — richer saturation (Needs)
-          slate: '#4A6475',    // Slate blue — richer saturation (Wants)
-          amber: '#B8860B',    // Dark gold — richer (Savings / warnings)
+          salvia: '#4F8F58',   // Vivid sage (Needs)
+          slate: '#3F7F9C',    // Clear blue (Wants)
+          amber: '#C58A14',    // Warm ochre (Savings / warnings)
+          accent: '#647C78',   // Blue-sage global UI accent
         }
       },
       fontFamily: {
         sans: ['DM Sans', 'system-ui', 'sans-serif'],
         display: ['DM Sans', 'system-ui', 'sans-serif'],
+        mono: ['Space Mono', 'Courier New', 'monospace'],
       },
       fontSize: {
         // Typographic scale

@@ -5,12 +5,27 @@ import Header from '../components/Header.jsx';
 import BottomNav from '../components/BottomNav.jsx';
 import FAB from '../components/FAB.jsx';
 import AnchorFormModal from '../components/AnchorFormModal.jsx';
-import { Plus, Pencil, Archive, ArchiveRestore, Trash2, Wallet } from 'lucide-react';
+import TransactionsSection from '../components/TransactionsSection.jsx';
+import { useLocation } from 'react-router-dom';
+import { Plus, Pencil, Archive, ArchiveRestore, Trash2, Wallet, ChevronDown, ChevronUp } from 'lucide-react';
 
 export default function BudgetScreen() {
+  const location = useLocation();
   const [showArchived, setShowArchived] = useState(false);
   const [templatesTab, setTemplatesTab] = useState('GASTOS'); // 'GASTOS' o 'AHORROS'
-  const [projectionInterval, setProjectionInterval] = useState('MONTH'); // 'WEEK', 'MONTH', 'NEXT_MONTH', 'ALL'
+  const [showTransactions, setShowTransactions] = useState(false);
+
+  // Estados de Rango Dinámico de Fechas de Proyección
+  const [projectionStart, setProjectionStart] = useState(() => {
+    const d = new Date();
+    const firstDay = new Date(d.getFullYear(), d.getMonth(), 1, 12, 0, 0);
+    return firstDay.toISOString().slice(0, 10);
+  });
+  const [projectionEnd, setProjectionEnd] = useState(() => {
+    const d = new Date();
+    const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0, 12, 0, 0);
+    return lastDay.toISOString().slice(0, 10);
+  });
 
   // Estados para modales componentizados
   const [showAddModal, setShowAddModal] = useState(false);
@@ -23,6 +38,7 @@ export default function BudgetScreen() {
   const anchors = useLiveQuery(() => db.anchors.toArray()) || [];
   const macetas = useLiveQuery(() => db.macetas.toArray()) || [];
   const macetaAllocations = useLiveQuery(() => db.maceta_allocations.toArray()) || [];
+  const transactions = useLiveQuery(() => db.transactions.toArray()) || [];
 
   // Migración retrospectiva en caliente de anclas heredadas
   React.useEffect(() => {
@@ -40,6 +56,16 @@ export default function BudgetScreen() {
 
   const activeAccounts = accounts.filter(a => !a.isArchived);
 
+  React.useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('section') === 'transactions') {
+      setShowTransactions(true);
+      requestAnimationFrame(() => {
+        document.getElementById('transactions-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+  }, [location.search]);
+
   // 1. Cálculos de Homeostasis Mensual (Mes Actual)
   const now = new Date();
   const currentYear = now.getFullYear();
@@ -47,10 +73,17 @@ export default function BudgetScreen() {
   const startOfMonth = new Date(currentYear, currentMonth, 1);
   const endOfMonth = new Date(currentYear, currentMonth + 1, 0, 23, 59, 59, 999);
 
+  // Ingresos reales de este mes
+  const thisMonthIncomes = transactions.filter(t => {
+    const d = new Date(t.date);
+    return d >= startOfMonth && d <= endOfMonth && t.type === 'IN';
+  });
+  const totalIngresosMes = thisMonthIncomes.reduce((sum, t) => sum + t.amount, 0);
+
   // Instancias de este mes
   const thisMonthInstances = anchors.filter(a => {
     if (a.isTemplate !== false) return false;
-    const d = a.nextDueDate instanceof Date ? a.nextDueDate : new Date(a.nextDueDate);
+    const d = a.nextDueDate instanceof Date ? a.nextDueDate : new Date(a.nextDueDate + 'T12:00:00');
     return d >= startOfMonth && d <= endOfMonth;
   });
 
@@ -104,7 +137,7 @@ export default function BudgetScreen() {
         currency,
         accountId: data.accountId || null,
         macetaId: data.macetaId || null,
-        nextDueDate: data.nextDueDate ? new Date(data.nextDueDate.getTime() + 12*60*60*1000) : new Date(), // Ajustar a mediodía para evitar problemas de zona horaria
+        nextDueDate: data.nextDueDate || new Date().toISOString().slice(0, 10),
         status: 'PENDING',
         pillar: data.pillar,
         isTemplate: true,
@@ -114,6 +147,68 @@ export default function BudgetScreen() {
     } catch (err) {
       console.error(err);
       alert('Error al crear el elemento programado');
+    }
+  };
+
+  const handleDeleteTransaction = async (tx) => {
+    if (!confirm('¿Seguro que deseas eliminar esta transacción permanentemente? Se revertirá su impacto en los balances.')) return;
+    try {
+      await db.transaction('rw', [db.accounts, db.transactions, db.anchors], async () => {
+        if (tx.type === 'IN') {
+          const acc = await db.accounts.get(tx.accountId);
+          if (acc) await db.accounts.update(tx.accountId, { balance: acc.balance - tx.amount });
+        } else if (tx.type === 'OUT') {
+          const acc = await db.accounts.get(tx.accountId);
+          if (acc) await db.accounts.update(tx.accountId, { balance: acc.balance + tx.amount });
+        } else if (tx.type === 'TRANSFER_OUT' || tx.type === 'TRANSFER_IN') {
+          const linkedTxs = await db.transactions.where('transferId').equals(tx.transferId).toArray();
+          for (const ltx of linkedTxs) {
+            const acc = await db.accounts.get(ltx.accountId);
+            if (acc) {
+              const delta = ltx.type === 'TRANSFER_OUT' ? ltx.amount : -ltx.amount;
+              await db.accounts.update(ltx.accountId, { balance: acc.balance + delta });
+            }
+            await db.transactions.delete(ltx.id);
+          }
+          return;
+        }
+
+        if (tx.anchorId) {
+          await db.anchors.update(tx.anchorId, { status: 'PENDING' });
+        } else if (tx.description && tx.description.startsWith('Ancla: ')) {
+          const anchorName = tx.description.replace('Ancla: ', '');
+          const matchingAnchor = await db.anchors.where('name').equals(anchorName).first();
+          if (matchingAnchor) {
+            await db.anchors.update(matchingAnchor.id, { status: 'PENDING' });
+          }
+        }
+
+        await db.transactions.delete(tx.id);
+      });
+    } catch (err) {
+      alert('Error al revertir la transacción');
+    }
+  };
+
+  const handleUpdateTransaction = async (txId, updatedFields) => {
+    try {
+      await db.transaction('rw', [db.accounts, db.transactions], async () => {
+        const originalTx = await db.transactions.get(txId);
+        if (!originalTx) return;
+
+        if (updatedFields.amount !== undefined && updatedFields.amount !== originalTx.amount) {
+          const acc = await db.accounts.get(originalTx.accountId);
+          if (acc) {
+            const diff = updatedFields.amount - originalTx.amount;
+            const delta = originalTx.type === 'OUT' ? -diff : diff;
+            await db.accounts.update(originalTx.accountId, { balance: acc.balance + delta });
+          }
+        }
+
+        await db.transactions.update(txId, updatedFields);
+      });
+    } catch (err) {
+      alert('Error al actualizar la transacción');
     }
   };
 
@@ -142,7 +237,7 @@ export default function BudgetScreen() {
         pillar: data.pillar,
         accountId: data.accountId || null,
         macetaId: data.macetaId || null,
-        nextDueDate: data.nextDueDate ? new Date(data.nextDueDate.getTime() + 12*60*60*1000) : null
+        nextDueDate: data.nextDueDate || null
       });
 
       // 2. Propagar a instancias activas del mes
@@ -157,7 +252,7 @@ export default function BudgetScreen() {
       );
 
       for (const inst of activeInstances) {
-        const instDate = inst.nextDueDate instanceof Date ? inst.nextDueDate : new Date(inst.nextDueDate);
+        const instDate = inst.nextDueDate instanceof Date ? inst.nextDueDate : new Date(inst.nextDueDate + 'T12:00:00');
         if (instDate >= startOfCurrentMonth && instDate <= endOfCurrentMonth) {
           await db.anchors.update(inst.id, {
             name: data.name,
@@ -261,7 +356,7 @@ export default function BudgetScreen() {
           </div>
           <p className="text-[11px] text-noria-muted uppercase tracking-wider mt-0.5 font-mono">
             ${fmt(src.amount)} {getFrequencyLabel(src.frequencyInterval, src.frequencyUnit)} {src.accountId && `· De: ${getAccountName(src.accountId)}`}
-            {src.nextDueDate && ` · Inicio/Prox: ${new Date(src.nextDueDate).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' })}`}
+            {src.nextDueDate && ` · Inicio/Prox: ${typeof src.nextDueDate === 'string' ? src.nextDueDate.slice(5, 10).replace('-', '/') : new Date(src.nextDueDate).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' })}`}
           </p>
         </div>
         <div className="flex items-center space-x-1">
@@ -283,30 +378,13 @@ export default function BudgetScreen() {
     );
   };
 
-  // Lógica de Proyección de cobros por Intervalo
+  // Lógica de Proyección de cobros por Rango de Fechas (Strings YYYY-MM-DD)
   const getProjectedInstances = () => {
-    const today = new Date();
-    let start, end;
-    if (projectionInterval === 'WEEK') {
-      const currentDay = today.getDay();
-      const distance = currentDay === 0 ? -6 : 1 - currentDay;
-      start = new Date(today); start.setDate(today.getDate() + distance); start.setHours(0,0,0,0);
-      end = new Date(start); end.setDate(start.getDate() + 6); end.setHours(23,59,59,999);
-    } else if (projectionInterval === 'MONTH') {
-      start = new Date(today.getFullYear(), today.getMonth(), 1, 0, 0, 0);
-      end = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999);
-    } else if (projectionInterval === 'NEXT_MONTH') {
-      start = new Date(today.getFullYear(), today.getMonth() + 1, 1, 0, 0, 0);
-      end = new Date(today.getFullYear(), today.getMonth() + 2, 0, 23, 59, 59, 999);
-    } else {
-      return anchors.filter(a => a.isTemplate === false).sort((a, b) => new Date(a.nextDueDate) - new Date(b.nextDueDate));
-    }
-
+    if (!projectionStart || !projectionEnd) return [];
     return anchors.filter(a => {
       if (a.isTemplate !== false) return false;
-      const d = new Date(a.nextDueDate);
-      return d >= start && d <= end;
-    }).sort((a, b) => new Date(a.nextDueDate) - new Date(b.nextDueDate));
+      return a.nextDueDate >= projectionStart && a.nextDueDate <= projectionEnd;
+    }).sort((a, b) => a.nextDueDate.localeCompare(b.nextDueDate));
   };
 
   const projectedInstances = getProjectedInstances();
@@ -322,113 +400,211 @@ export default function BudgetScreen() {
     return a.pillar === 'SAVE';
   });
 
+  // Atajos rápidos de rango dinámico
+  const setMonthShortcut = () => {
+    const d = new Date();
+    const start = new Date(d.getFullYear(), d.getMonth(), 1, 12, 0, 0);
+    const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 12, 0, 0);
+    setProjectionStart(start.toISOString().slice(0, 10));
+    setProjectionEnd(end.toISOString().slice(0, 10));
+  };
+
+  const setRangeShortcut = (days) => {
+    const start = new Date();
+    start.setHours(12,0,0,0);
+    const end = new Date();
+    end.setDate(start.getDate() + days);
+    end.setHours(12,0,0,0);
+
+    setProjectionStart(start.toISOString().slice(0, 10));
+    setProjectionEnd(end.toISOString().slice(0, 10));
+  };
+
+  const setQuarterShortcut = () => {
+    const start = new Date();
+    start.setHours(12,0,0,0);
+    // Fin de trimestre (90 días o fin del mes actual + 2)
+    const end = new Date(start.getFullYear(), start.getMonth() + 3, 0, 12, 0, 0);
+    setProjectionStart(start.toISOString().slice(0, 10));
+    setProjectionEnd(end.toISOString().slice(0, 10));
+  };
+
+  const setYearShortcut = () => {
+    const start = new Date();
+    start.setHours(12,0,0,0);
+    const end = new Date(start.getFullYear(), 11, 31, 12, 0, 0);
+    setProjectionStart(start.toISOString().slice(0, 10));
+    setProjectionEnd(end.toISOString().slice(0, 10));
+  };
+
+  const months = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC'];
+  const formatTimelineDate = (str) => {
+    if (!str || typeof str !== 'string') return '';
+    const parts = str.split('-');
+    if (parts.length !== 3) return str;
+    return `${parts[2]} ${months[parseInt(parts[1]) - 1]} ${parts[0]}`;
+  };
+
+  // Agrupar instancias por fecha para el timeline
+  const groupedInstances = projectedInstances.reduce((groups, inst) => {
+    const dateStr = formatTimelineDate(inst.nextDueDate).toUpperCase();
+    if (!groups[dateStr]) groups[dateStr] = [];
+    groups[dateStr].push(inst);
+    return groups;
+  }, {});
+
+  // Cálculos para widgets ASCII
+  const porcentajeComprometido = totalIngresosMes > 0 ? Math.round((totalComprometido / totalIngresosMes) * 100) : 0;
+  const paidTotal = paidGastos + paidAhorros;
+  const porcentajePagado = totalComprometido > 0 ? Math.round((paidTotal / totalComprometido) * 100) : 0;
+
+  const filledBlocks = Math.round((porcentajePagado / 100) * 20);
+  const progressBarAscii = '█'.repeat(filledBlocks) + '░'.repeat(Math.max(0, 20 - filledBlocks));
+
   return (
     <div className="min-h-screen pb-32 pt-16" style={{ background: '#F5F2ED' }}>
       <div className="w-full max-w-md mx-auto px-6">
         <Header title="Línea de Flotación" />
 
-        {/* ── 1. Resumen de Homeostasis Mensual ── */}
-        <section className="py-5 space-y-4" id="homeostasis-summary-section">
-          {/* Bento Disponible Libre */}
-          <div className="p-4 border border-[rgba(0,0,0,0.06)] rounded-[8px] bg-[rgba(26,26,26,0.015)]">
-            <span className="text-[10px] text-noria-muted font-[500] uppercase tracking-wider block mb-1">Disponible Libre Real</span>
-            <span className="text-[28px] font-[400] text-noria-text font-mono block" style={{ lineHeight: 1 }}>
-              ${fmt(disponibleLibreReal)}
-            </span>
-            <span className="text-[9px] text-noria-muted tracking-wider block mt-1.5 uppercase">
-              Descontando allocations de metas y pagos pendientes del mes
-            </span>
-          </div>
+        {/* ── 1. Resumen de Homeostasis Mensual (ASCII) ── */}
+        <section className="py-4 space-y-4" id="homeostasis-summary-section">
+          {/* Widget 1: Disponible Libre Real */}
+          <pre className="p-3 border border-[#1A1A1A] bg-white font-mono text-[11px] leading-tight text-noria-text overflow-x-auto">
+{`┌─ DISPONIBLE LIBRE REAL ──────────┐
+│  $${fmt(disponibleLibreReal).padEnd(31)}│
+│  De $${fmt(totalIngresosMes).padEnd(6)} ingresos este mes       │
+└──────────────────────────────────┘`}
+          </pre>
 
-          {/* Grids de Comprometido y Desglose */}
-          <div className="grid grid-cols-2 gap-3 text-[12px]">
-            <div className="p-3 border border-[rgba(0,0,0,0.05)] rounded-[6px] bg-white">
-              <span className="text-[9px] text-noria-muted uppercase tracking-wider block mb-0.5">Comprometido Mes</span>
-              <span className="font-mono text-noria-text font-[500]">${fmt(totalComprometido)}</span>
-            </div>
-            <div className="p-3 border border-[rgba(0,0,0,0.05)] rounded-[6px] bg-white">
-              <span className="text-[9px] text-noria-muted uppercase tracking-wider block mb-0.5">Realizado / Pagado</span>
-              <span className="font-mono text-[#5C7A52] font-[500]">${fmt(paidGastos + paidAhorros)}</span>
-            </div>
-          </div>
+          {/* Widget 2: Comprometido */}
+          <pre className="p-3 border border-[#1A1A1A] bg-white font-mono text-[11px] leading-tight text-noria-text overflow-x-auto">
+{`┌─ COMPROMETIDO ──────────────────┐
+│  $${fmt(totalComprometido).padEnd(6)} (${porcentajeComprometido}% del ingreso)          │
+│  ├─ Gastos: $${fmt(planifiedGastos).padEnd(20)}│
+│  └─ Ahorros: $${fmt(planifiedAhorros).padEnd(19)}│
+└──────────────────────────────────┘`}
+          </pre>
 
-          <div className="grid grid-cols-2 gap-3 text-[11px] opacity-75">
-            <div className="px-3 py-1 flex justify-between">
-              <span className="text-noria-muted">Gastos:</span>
-              <span className="font-mono text-noria-text font-[500]">${fmt(paidGastos)} / ${fmt(planifiedGastos)}</span>
-            </div>
-            <div className="px-3 py-1 flex justify-between">
-              <span className="text-noria-muted">Ahorros:</span>
-              <span className="font-mono text-noria-text font-[500]">${fmt(paidAhorros)} / ${fmt(planifiedAhorros)}</span>
-            </div>
-          </div>
+          {/* Widget 3: Pagado */}
+          <pre className="p-3 border border-[#1A1A1A] bg-white font-mono text-[11px] leading-tight text-noria-text overflow-x-auto">
+{`┌─ PAGADO ESTE MES ────────────────┐
+│  $${fmt(paidTotal).padEnd(6)} de $${fmt(totalComprometido).padEnd(6)} (${porcentajePagado}%)         │
+│  ${progressBarAscii.padEnd(32)}│
+└──────────────────────────────────┘`}
+          </pre>
         </section>
 
         <div className="noria-divider my-2" />
 
-        {/* ── 2. Proyección de Cobros/Ahorros por Intervalo ── */}
+        {/* ── 2. Proyección de Cobros/Ahorros por Rango Dinámico ── */}
         <section className="py-4" id="projections-section">
-          <div className="flex justify-between items-baseline mb-3">
-            <h4 className="text-[12px] font-[600] uppercase tracking-wider text-noria-text opacity-40">Proyección de Pagos</h4>
-            {/* Filtros de Intervalo */}
-            <div className="flex space-x-1 bg-[rgba(26,26,26,0.04)] p-0.5 rounded">
-              {[
-                ['WEEK', 'Semana'],
-                ['MONTH', 'Mes'],
-                ['NEXT_MONTH', 'Siguiente'],
-                ['ALL', 'Todo']
-              ].map(([val, label]) => {
-                const isSelected = projectionInterval === val;
-                return (
-                  <button
-                    key={val}
-                    onClick={() => setProjectionInterval(val)}
-                    className="text-[9px] font-[600] px-2 py-0.5 rounded transition-all focus:outline-none uppercase"
-                    style={{
-                      background: isSelected ? '#1A1A1A' : 'transparent',
-                      color: isSelected ? '#F5F2ED' : 'rgba(26,26,26,0.45)'
-                    }}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
+          <h4 className="text-[11px] font-[600] uppercase tracking-wider text-noria-text opacity-50 mb-3 font-mono">
+            [ TELEMETRÍA DE PROYECCIÓN ]
+          </h4>
+
+          {/* Controles de Rango Dinámico */}
+          <div className="space-y-3 p-3 border border-[#1A1A1A] bg-white mb-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[9px] font-mono font-[600] uppercase text-noria-muted block mb-1">Desde:</label>
+                <input
+                  type="date"
+                  value={projectionStart}
+                  onChange={(e) => setProjectionStart(e.target.value)}
+                  className="muji-input w-full font-mono text-[11px] px-2 py-1.5 border border-[#1A1A1A]"
+                />
+              </div>
+              <div>
+                <label className="text-[9px] font-mono font-[600] uppercase text-noria-muted block mb-1">Hasta:</label>
+                <input
+                  type="date"
+                  value={projectionEnd}
+                  onChange={(e) => setProjectionEnd(e.target.value)}
+                  className="muji-input w-full font-mono text-[11px] px-2 py-1.5 border border-[#1A1A1A]"
+                />
+              </div>
+            </div>
+
+            {/* Atajos Rápidos */}
+            <div className="grid grid-cols-5 gap-1 pt-1">
+              <button onClick={setMonthShortcut} className="brut-btn brut-btn-secondary py-1 text-[7px] font-mono leading-none px-0.5">
+                [ MES ]
+              </button>
+              <button onClick={() => setRangeShortcut(7)} className="brut-btn brut-btn-secondary py-1 text-[7px] font-mono leading-none px-0.5">
+                [ 7 D ]
+              </button>
+              <button onClick={() => setRangeShortcut(30)} className="brut-btn brut-btn-secondary py-1 text-[7px] font-mono leading-none px-0.5">
+                [ 30 D ]
+              </button>
+              <button onClick={setQuarterShortcut} className="brut-btn brut-btn-secondary py-1 text-[7px] font-mono leading-none px-0.5">
+                [ 90 D ]
+              </button>
+              <button onClick={setYearShortcut} className="brut-btn brut-btn-secondary py-1 text-[7px] font-mono leading-none px-0.5">
+                [ AÑO ]
+              </button>
             </div>
           </div>
 
+          {/* Timeline Scrollable con Conectores ASCII */}
           {projectedInstances.length === 0 ? (
-            <p className="text-[12px] text-noria-muted text-center py-4">No hay pagos proyectados en este periodo.</p>
+            <p className="text-[12px] text-noria-muted font-mono text-center py-4">[ Sin telemetry para este periodo ]</p>
           ) : (
-            <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-              {projectedInstances.map(inst => {
-                const dateObj = inst.nextDueDate instanceof Date ? inst.nextDueDate : new Date(inst.nextDueDate);
-                const isPaid = inst.status === 'PAID';
-                const isOverdue = !isPaid && dateObj < new Date(new Date().setHours(0,0,0,0));
-
-                let statusColor = 'rgba(26,26,26,0.45)';
-                if (isPaid) statusColor = '#5C7A52';
-                else if (isOverdue) statusColor = '#9F2F2D';
-
+            <div className="max-h-72 overflow-y-auto pr-1 bg-[rgba(26,26,26,0.015)] p-3 border border-[#1A1A1A] font-mono text-[12px] leading-relaxed">
+              {Object.keys(groupedInstances).map((dateKey, gIdx, gArray) => {
+                const dayInstances = groupedInstances[dateKey];
                 return (
-                  <div key={inst.id} className="flex justify-between items-center text-[12px] py-1.5 px-2 border border-[rgba(0,0,0,0.03)] rounded bg-white/40">
-                    <div className="flex items-center space-x-2 min-w-0 flex-1">
-                      <span className="text-[9px] font-[500] px-1 rounded uppercase tracking-wider text-noria-muted" style={{ background: 'rgba(0,0,0,0.04)' }}>
-                        {dateObj.toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }).toUpperCase()}
-                      </span>
-                      <span className={`truncate font-[450] text-noria-text ${isPaid ? 'line-through opacity-40' : ''}`}>
-                        {inst.name}
-                      </span>
+                  <div key={dateKey} className="mb-3">
+                    {/* Encabezado del Día */}
+                    <div className="text-noria-text font-[600] text-[10px]">
+                      ┌─ {dateKey}
                     </div>
-                    <div className="flex items-center space-x-2 pl-2">
-                      <span className="font-mono font-[500] text-noria-text">${fmt(inst.amount)}</span>
-                      <span className="text-[9px] font-[600] px-1.5 py-0.5 rounded uppercase tracking-wider" 
-                        style={{
-                          background: isPaid ? 'rgba(92,122,82,0.1)' : isOverdue ? 'rgba(159,47,45,0.1)' : 'rgba(0,0,0,0.04)',
-                          color: statusColor
-                        }}>
-                        {isPaid ? 'Listo' : isOverdue ? 'Vencido' : 'Pendiente'}
-                      </span>
-                    </div>
+
+                    {/* Mapeo de Cobros del Día con Conectores */}
+                    {dayInstances.map((inst, idx) => {
+                      const isLastOfCurrentGroup = idx === dayInstances.length - 1;
+                      const isLastOfAll = isLastOfCurrentGroup && gIdx === gArray.length - 1;
+                      const connector = isLastOfCurrentGroup ? '└─' : '├─';
+
+                      const todayStr = new Date().toISOString().slice(0, 10);
+                      const upcomingLimitStr = new Date(Date.now() + 3*24*60*60*1000).toISOString().slice(0, 10);
+
+                      const isPaid = inst.status === 'PAID';
+                      const isOverdue = !isPaid && inst.nextDueDate < todayStr;
+                      const isUpcoming = !isPaid && !isOverdue && inst.nextDueDate <= upcomingLimitStr;
+
+                      let statusLabel = 'PROGRAMADO';
+                      let statusBg = 'rgba(26,26,26,0.05)';
+                      let statusTextCol = 'rgba(26,26,26,0.5)';
+
+                      if (isPaid) {
+                        statusLabel = 'PAGADO';
+                        statusBg = 'rgba(92,122,82,0.1)';
+                        statusTextCol = '#346538';
+                      } else if (isOverdue) {
+                        statusLabel = 'VENCIDO';
+                        statusBg = 'rgba(255,42,42,0.1)';
+                        statusTextCol = '#FF2A2A';
+                      } else if (isUpcoming) {
+                        statusLabel = 'PRÓXIMO';
+                        statusBg = 'rgba(184,134,11,0.1)';
+                        statusTextCol = '#956400';
+                      }
+
+                      return (
+                        <div key={inst.id} className="flex justify-between items-baseline pl-4 hover:bg-black/5 transition-colors">
+                          <span className={`text-[11px] truncate flex-1 ${isPaid ? 'line-through opacity-40' : ''}`}>
+                            {connector} {inst.name.toUpperCase()}
+                          </span>
+                          <div className="flex items-center space-x-2 pl-2">
+                            <span>${fmt(inst.amount)}</span>
+                            <span className="text-[8px] font-[600] px-1.5 py-0.5 rounded tracking-wide border border-[#1A1A1A]"
+                              style={{ background: statusBg, color: statusTextCol }}>
+                              {statusLabel}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 );
               })}
@@ -500,6 +676,33 @@ export default function BudgetScreen() {
                   {filteredPaused.map(renderAnchorRow)}
                 </div>
               )}
+            </div>
+          )}
+        </section>
+
+        <div className="noria-divider my-2" />
+
+        <section className="py-4" id="transactions-section">
+          <button
+            type="button"
+            onClick={() => setShowTransactions(prev => !prev)}
+            className="w-full flex items-center justify-between focus:outline-none"
+          >
+            <h4 className="text-[18px] font-[400] text-noria-text leading-tight">Transacciones</h4>
+            {showTransactions
+              ? <ChevronUp size={15} strokeWidth={1.7} />
+              : <ChevronDown size={15} strokeWidth={1.7} />
+            }
+          </button>
+
+          {showTransactions && (
+            <div className="pt-4 animate-fade-in">
+              <TransactionsSection
+                transactions={transactions}
+                accounts={accounts}
+                onDeleteTransaction={handleDeleteTransaction}
+                onUpdateTransaction={handleUpdateTransaction}
+              />
             </div>
           )}
         </section>

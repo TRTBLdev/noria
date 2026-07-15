@@ -268,25 +268,25 @@ export default function FAB() {
       type: 'GASTO',
       icon: <ArrowDownLeft size={18} strokeWidth={1.5} />,
       label: 'Gasto',
-      color: '#B8860B',
-      bg: 'rgba(184,134,11,0.10)',
-      border: 'rgba(184,134,11,0.25)',
+      color: '#C58A14',
+      bg: 'rgba(197,138,20,0.10)',
+      border: 'rgba(197,138,20,0.28)',
     },
     {
       type: 'TRANSFERENCIA',
       icon: <ArrowLeftRight size={18} strokeWidth={1.5} />,
       label: 'Transf.',
-      color: '#4A6475',
-      bg: 'rgba(74,100,117,0.10)',
-      border: 'rgba(74,100,117,0.25)',
+      color: '#3F7F9C',
+      bg: 'rgba(63,127,156,0.10)',
+      border: 'rgba(63,127,156,0.28)',
     },
     {
       type: 'INGRESO',
       icon: <ArrowUpRight size={18} strokeWidth={1.5} />,
       label: 'Ingreso',
-      color: '#5C7A52',
-      bg: 'rgba(92,122,82,0.10)',
-      border: 'rgba(92,122,82,0.25)',
+      color: '#4F8F58',
+      bg: 'rgba(79,143,88,0.10)',
+      border: 'rgba(79,143,88,0.28)',
     },
   ];
 
@@ -314,13 +314,13 @@ export default function FAB() {
             }}
           >
             <div
-              className="w-11 h-11 rounded-full flex items-center justify-center shadow-float"
-              style={{ background: opt.bg, border: `1px solid ${opt.border}`, color: opt.color, backdropFilter: 'blur(8px)' }}
+              className="w-11 h-11 flex items-center justify-center"
+              style={{ background: '#F5F2ED', border: `1px solid ${opt.border}`, color: opt.color }}
             >
               {opt.icon}
             </div>
             <span
-              className="text-[10px] font-[500] uppercase tracking-wider whitespace-nowrap"
+              className="text-[9px] font-mono font-[700] uppercase tracking-wider whitespace-nowrap"
               style={{ color: opt.color }}
             >
               {opt.label}
@@ -328,11 +328,11 @@ export default function FAB() {
           </button>
         ))}
 
-        {/* Main FAB — circle with + (exactly like reference mockup) */}
+        {/* Main FAB */}
         <button
           id="fab-main-btn"
           onClick={handleFabClick}
-          className="w-14 h-14 rounded-full border border-[rgba(26,26,26,0.15)] bg-noria-bg flex items-center justify-center shadow-float active:scale-95 transition-all focus:outline-none"
+          className="w-14 h-14 border-2 border-[#1A1A1A] bg-noria-bg flex items-center justify-center active:scale-95 transition-all focus:outline-none"
           aria-label="Nuevo registro"
           style={{ position: 'relative', zIndex: 1 }}
         >
@@ -364,8 +364,7 @@ export default function FAB() {
           />
           <div
             ref={sheetRef}
-            className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto bg-[#F5F2ED] rounded-t-[20px] animate-slide-up"
-            style={{ boxShadow: '0 -8px 40px rgba(0,0,0,0.08)' }}
+            className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto bg-[#F5F2ED] border-t border-[#1A1A1A] animate-slide-up"
           >
             <form onSubmit={handleSubmit} id="fab-transaction-form">
               {/* Handle bar */}
@@ -374,9 +373,9 @@ export default function FAB() {
               </div>
 
               {success ? (
-                <div className="flex flex-col items-center justify-center py-14 space-y-3" style={{ color: '#5C7A52' }}>
-                  <div className="w-12 h-12 rounded-full border border-[rgba(92,122,82,0.3)] flex items-center justify-center text-xl">✓</div>
-                  <p className="label-section" style={{ color: '#5C7A52' }}>Guardado</p>
+                <div className="flex flex-col items-center justify-center py-14 space-y-3" style={{ color: '#647C78' }}>
+                  <div className="w-12 h-12 border border-[rgba(100,124,120,0.45)] flex items-center justify-center text-xl">✓</div>
+                  <p className="label-section" style={{ color: '#647C78' }}>Guardado</p>
                 </div>
               ) : (
                 <div className="px-6 pb-8 space-y-5">
@@ -440,7 +439,7 @@ export default function FAB() {
                                     type="number" step="0.0001"
                                     value={exchangeRate} onChange={e => handleRateChange(e.target.value)}
                                     placeholder="Tasa"
-                                    className="w-20 text-right bg-transparent border-b border-transparent focus:border-[#5C7A52] outline-none font-mono text-[13px] font-[500]"
+                                    className="w-20 text-right bg-transparent border-b border-transparent focus:border-[#4F8F58] outline-none font-mono text-[13px] font-[500]"
                                   />
                                   <span className="text-[10px] text-noria-muted">{targetAcc?.currency}/{sourceAcc?.currency}</span>
                                 </div>
@@ -532,9 +531,9 @@ export default function FAB() {
                     <div>
                       <p className="muji-header mb-2">Pilar</p>
                       <div className="flex space-x-2">
-                        {[['NEED','Necesidad','#5C7A52','rgba(92,122,82,0.12)'],
-                          ['WANT','Deseo','#4A6475','rgba(74,100,117,0.12)'],
-                          ['SAVE','Ahorro','#B8860B','rgba(184,134,11,0.12)']].map(([val, label, col, bg]) => (
+                        {[['NEED','Necesidad','#4F8F58','rgba(79,143,88,0.12)'],
+                          ['WANT','Deseo','#3F7F9C','rgba(63,127,156,0.12)'],
+                          ['SAVE','Ahorro','#C58A14','rgba(197,138,20,0.12)']].map(([val, label, col, bg]) => (
                           <button key={val} type="button" onClick={() => setPillar(val)}
                             className="flex-1 py-1.5 text-[10px] font-[500] uppercase tracking-wider rounded-pill border transition-all"
                             style={{
@@ -605,12 +604,12 @@ export default function FAB() {
                     </div>
                   )}
 
-                  {error && <p className="text-[12px] font-[500]" style={{ color: '#B8860B' }} id="fab-error">{error}</p>}
+                  {error && <p className="text-[12px] font-[500]" style={{ color: '#C58A14' }} id="fab-error">{error}</p>}
 
                   {/* Submit */}
                   <button type="submit" id="fab-submit-btn"
-                    className="w-full py-3.5 rounded-[6px] text-[13px] font-[500] uppercase tracking-wider transition-all active:scale-[0.98]"
-                    style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
+                    className="w-full py-3.5 border text-[13px] font-[500] uppercase tracking-wider transition-colors"
+                    style={{ background: 'transparent', color: '#1A1A1A', borderColor: '#1A1A1A' }}>
                     Guardar
                   </button>
                 </div>
