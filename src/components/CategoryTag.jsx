@@ -16,7 +16,6 @@ export default function CategoryTag({ name, size = 'sm', className = '' }) {
       ].join(' ')}
       title={name}
     >
-      <span className="opacity-50">#</span>
       <span className="truncate">{name}</span>
     </span>
   );

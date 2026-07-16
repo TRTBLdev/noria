@@ -25,9 +25,9 @@
 }
 
 @layer components {
-  /* ─── Clases Utilitarias Brutalistas (Swiss Industrial Print) ─── */
+  /* Clases utilitarias brutalistas (Swiss Industrial Print) */
 
-  /* Botón Brutalista */
+  /* Boton Brutalista */
   .brut-btn {
     display: inline-flex;
     align-items: center;
@@ -84,7 +84,7 @@
     border-width: 2px;
   }
 
-  /* ─── Typographic utilities ─── */
+  /* Typographic utilities */
   .label-section {
     font-size: 10px;
     font-weight: 600;
@@ -105,7 +105,7 @@
     font-family: 'Space Mono', 'Courier New', monospace;
   }
 
-  /* Input — flat style heredado */
+  /* Input - flat style heredado */
   .muji-input {
     width: 100%;
     background: #FFFFFF;
@@ -146,7 +146,7 @@
     height: 100%;
   }
 
-  /* ─── Pill badge ─── */
+  /* Pill badge */
   .noria-pill {
     display: inline-flex;
     align-items: center;
@@ -162,10 +162,10 @@
   .noria-pill-want  { background: rgba(63,127,156,0.12); color: #3F7F9C; }
   .noria-pill-save  { background: rgba(197,138,20,0.12); color: #C58A14; }
 
-  /* ─── Divider ─── */
-  .noria-divider { border-top: 1px solid #1A1A1A; }
+  /* Divider */
+  /* Divider */
 
-  /* ─── List item row ─── */
+  /* List item row */
   .noria-row {
     display: flex;
     align-items: center;
@@ -175,7 +175,7 @@
   }
   .noria-row:last-child { border-bottom: none; }
 
-  /* ─── Progress bar ─── */
+  /* Progress bar */
   .progress-track {
     width: 100%;
     height: 6px;
@@ -189,7 +189,7 @@
     transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  /* ─── Fade in animation ─── */
+  /* Fade in animation */
   .animate-fade-in {
     animation: fadeIn 0.2s ease-out;
   }
@@ -198,7 +198,7 @@
     to   { opacity: 1; }
   }
 
-  /* ─── Slide up animation ─── */
+  /* Slide up animation */
   .animate-slide-up {
     animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   }
@@ -207,13 +207,4 @@
     to   { transform: translateY(0); }
   }
 
-  /* ─── Radial FAB menu ─── */
-  .fab-radial-item {
-    position: absolute;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
-  }
 }

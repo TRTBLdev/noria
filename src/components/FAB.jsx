@@ -6,14 +6,6 @@ import CategorySelect from './CategorySelect.jsx';
 import IncomeTypeSelect from './IncomeTypeSelect.jsx';
 import { getIncomeType } from './IncomeTypeIcon.jsx';
 
-// Radial menu item positions (relative to FAB center)
-// For 3 items: Gasto (left), Transfer (middle), Ingreso (right)
-const RADIAL_POSITIONS = [
-  { dx: -110, dy: 0,   delay: '0ms' },   // Gasto - left
-  { dx: -80,  dy: -60, delay: '40ms' },  // Transferencia - up-left
-  { dx: 0,    dy: -90, delay: '80ms' },  // Ingreso - up
-];
-
 const fmt = (n, d = 2) => {
   if (typeof n !== 'number') return '0.00';
   return n.toLocaleString('es-ES', { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -277,71 +269,52 @@ export default function FAB() {
     }
   };
 
-  // Radial options definition
   const options = [
     {
-      type: 'GASTO',
-      icon: <ArrowDownLeft size={18} strokeWidth={1.5} />,
-      label: 'Gasto',
-      color: '#C58A14',
-      bg: 'rgba(197,138,20,0.10)',
-      border: 'rgba(197,138,20,0.28)',
+      type: 'INGRESO',
+      icon: <ArrowUpRight size={17} strokeWidth={1.6} />,
+      label: 'Ingreso',
+      color: '#4F8F58',
     },
     {
       type: 'TRANSFERENCIA',
-      icon: <ArrowLeftRight size={18} strokeWidth={1.5} />,
-      label: 'Transf.',
+      icon: <ArrowLeftRight size={17} strokeWidth={1.6} />,
+      label: 'Transferencia',
       color: '#3F7F9C',
-      bg: 'rgba(63,127,156,0.10)',
-      border: 'rgba(63,127,156,0.28)',
     },
     {
-      type: 'INGRESO',
-      icon: <ArrowUpRight size={18} strokeWidth={1.5} />,
-      label: 'Ingreso',
-      color: '#4F8F58',
-      bg: 'rgba(79,143,88,0.10)',
-      border: 'rgba(79,143,88,0.28)',
+      type: 'GASTO',
+      icon: <ArrowDownLeft size={17} strokeWidth={1.6} />,
+      label: 'Gasto',
+      color: '#C58A14',
     },
   ];
 
   return (
     <>
-      {/* -- FAB + Radial Menu -- */}
+      {/* FAB + action panel */}
       <div className="fixed bottom-20 right-6 z-40" id="fab-container">
 
-        {/* Radial items */}
-        {options.map((opt, i) => (
-          <button
-            key={opt.type}
-            id={`fab-radial-${opt.type.toLowerCase()}`}
-            onClick={() => openForm(opt.type)}
-            className="fab-radial-item"
-            style={{
-              bottom: '0px',
-              right: '0px',
-              transform: isOpen
-                ? `translate(${RADIAL_POSITIONS[i].dx}px, ${RADIAL_POSITIONS[i].dy}px) scale(1)`
-                : 'translate(0px, 0px) scale(0.3)',
-              opacity: isOpen ? 1 : 0,
-              pointerEvents: isOpen ? 'all' : 'none',
-              transitionDelay: isOpen ? RADIAL_POSITIONS[i].delay : '0ms',
-            }}
-          >
-            <div
-              className="w-11 h-11 flex items-center justify-center"
-              style={{ background: '#F5F2ED', border: `1px solid ${opt.border}`, color: opt.color }}
-            >
-              {opt.icon}
-            </div>
-            <span
-              className="text-[9px] font-mono font-[700] uppercase tracking-wider whitespace-nowrap"
-              style={{ color: opt.color }}
-            >
-              {opt.label}
-            </span>
-          </button>
-        ))}
+        {isOpen && (
+          <div className="absolute bottom-[66px] right-0 w-48 border-2 border-[#1A1A1A] bg-[#F5F2ED]">
+            {options.map((opt, index) => (
+              <button
+                key={opt.type}
+                id={`fab-action-${opt.type.toLowerCase()}`}
+                type="button"
+                onClick={() => openForm(opt.type)}
+                className={`flex h-12 w-full items-center gap-3 px-3 text-left text-noria-text focus:outline-none active:bg-[#E8E2D8] ${index > 0 ? 'border-t border-[#1A1A1A]' : ''}`}
+              >
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center" style={{ color: opt.color }}>
+                  {opt.icon}
+                </span>
+                <span className="font-mono text-[11px] font-[700] uppercase tracking-[0.08em]" style={{ color: opt.color }}>
+                  {opt.label}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Main FAB */}
         <button

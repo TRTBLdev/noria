@@ -10,6 +10,7 @@ import CategoryTag from '../components/CategoryTag.jsx';
 import CategorySelect from '../components/CategorySelect.jsx';
 import CategoryIcon from '../components/CategoryIcon.jsx';
 import IncomeTypeIcon, { getIncomeType } from '../components/IncomeTypeIcon.jsx';
+import IncomeTypeTag from '../components/IncomeTypeTag.jsx';
 import { Plus, Check, ChevronDown, ChevronUp } from 'lucide-react';
 
 import { useNavigate } from 'react-router-dom';
@@ -886,9 +887,9 @@ export default function HomeScreen() {
                         </div>
                         <div className="min-w-0">
                           <p className="text-[15px] font-[500] text-noria-text truncate">{inc.description || 'Ingreso'}</p>
-                          <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                          <div className="mt-1 flex flex-wrap items-center gap-1.5">
                             {source?.name && <p className="label-section">{source.name}</p>}
-                            {incomeType?.name && <p className="label-section">{incomeType.name}</p>}
+                            {incomeType?.name && <IncomeTypeTag name={incomeType.name} />}
                           </div>
                         </div>
                       </div>
