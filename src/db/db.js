@@ -74,6 +74,24 @@ db.version(6).stores({
   for (const tag of incomeTags) await tags.delete(tag.id);
 });
 
+db.version(7).stores({
+  currencies: '++id, &code, isActive',
+  transactions: '++id, date, type, amount, currency, accountId, tagId, anchorId, incomeSourceId, pillar, description, transferId',
+  lots: '++id, transactionId, currency, status',
+  anchors: '++id, name, type, amount, currency, accountId, nextDueDate, status, pillar, tagId, macetaId',
+}).upgrade(async tx => {
+  const currenciesTable = tx.table('currencies');
+  const count = await currenciesTable.count();
+  if (count === 0) {
+    await currenciesTable.bulkAdd([
+      { code: 'USD', name: 'Dólar', symbol: '$', isFiat: true, isActive: true, decimalPlaces: 2 },
+      { code: 'VES', name: 'Bolívar', symbol: 'Bs', isFiat: true, isActive: true, decimalPlaces: 2 },
+      { code: 'USDT', name: 'Tether', symbol: 'USDT', isFiat: false, isActive: true, decimalPlaces: 2 },
+      { code: 'EUR', name: 'Euro', symbol: '€', isFiat: true, isActive: false, decimalPlaces: 2 }
+    ]);
+  }
+});
+
 
 // Seed data function to populate catalogs on first open
 export async function seedDatabase() {
@@ -95,4 +113,15 @@ export async function seedDatabase() {
   if (incomeTypesCount === 0) {
     await db.income_types.bulkAdd(DEFAULT_INCOME_TYPES.map(type => ({ ...type })));
   }
+
+  const currenciesCount = await db.currencies.count();
+  if (currenciesCount === 0) {
+    await db.currencies.bulkAdd([
+      { code: 'USD', name: 'Dólar', symbol: '$', isFiat: true, isActive: true, decimalPlaces: 2 },
+      { code: 'VES', name: 'Bolívar', symbol: 'Bs', isFiat: true, isActive: true, decimalPlaces: 2 },
+      { code: 'USDT', name: 'Tether', symbol: 'USDT', isFiat: false, isActive: true, decimalPlaces: 2 },
+      { code: 'EUR', name: 'Euro', symbol: '€', isFiat: true, isActive: false, decimalPlaces: 2 }
+    ]);
+  }
 }
+

@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
 import Header from '../components/Header.jsx';
@@ -143,7 +143,8 @@ export default function SettingsScreen() {
     danger: false,
     institutions: false,
     expenseTags: false,
-    incomeTypes: false
+    incomeTypes: false,
+    currencies: false
   });
 
   const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
@@ -158,6 +159,7 @@ export default function SettingsScreen() {
   const incomeTypes = useLiveQuery(() => db.income_types.orderBy('name').toArray()) || [];
   const incomeSources = useLiveQuery(() => db.income_sources.toArray()) || [];
   const accounts = useLiveQuery(() => db.accounts.toArray()) || [];
+  const currencies = useLiveQuery(() => db.currencies.toArray()) || [];
 
   const baseCurrency = baseCurrencyObj?.value || 'USD';
   const monthlyIncome = monthlyIncomeObj?.value || 0;
@@ -183,6 +185,21 @@ export default function SettingsScreen() {
   const [showAddIncomeTypeForm, setShowAddIncomeTypeForm] = useState(false);
   const [newIncomeTypeName, setNewIncomeTypeName] = useState('');
   const [newIncomeTypeIconKey, setNewIncomeTypeIconKey] = useState('');
+
+  const [editingCurrencyId, setEditingCurrencyId] = useState(null);
+  const [editCurrencyName, setEditCurrencyName] = useState('');
+  const [editCurrencySymbol, setEditCurrencySymbol] = useState('');
+  const [editCurrencyIsFiat, setEditCurrencyIsFiat] = useState(true);
+  const [editCurrencyIsActive, setEditCurrencyIsActive] = useState(true);
+  const [editCurrencyDecimalPlaces, setEditCurrencyDecimalPlaces] = useState(2);
+
+  const [showAddCurrencyForm, setShowAddCurrencyForm] = useState(false);
+  const [newCurrencyCode, setNewCurrencyCode] = useState('');
+  const [newCurrencyName, setNewCurrencyName] = useState('');
+  const [newCurrencySymbol, setNewCurrencySymbol] = useState('');
+  const [newCurrencyIsFiat, setNewCurrencyIsFiat] = useState(true);
+  const [newCurrencyIsActive, setNewCurrencyIsActive] = useState(true);
+  const [newCurrencyDecimalPlaces, setNewCurrencyDecimalPlaces] = useState(2);
 
   const [isConfiguringPin, setIsConfiguringPin] = useState(false);
   const [isDeactivatingPin, setIsDeactivatingPin] = useState(false);
@@ -532,6 +549,79 @@ export default function SettingsScreen() {
     }
   };
 
+  const handleCreateCurrency = async (e) => {
+    e.preventDefault();
+    const code = newCurrencyCode.trim().toUpperCase();
+    if (!code || !newCurrencyName.trim() || !newCurrencySymbol.trim()) {
+      setError('Por favor completa todos los campos');
+      return;
+    }
+    if (code.length < 3 || code.length > 4) {
+      setError('El código debe tener entre 3 y 4 letras');
+      return;
+    }
+    try {
+      const exists = currencies.some(c => c.code === code);
+      if (exists) {
+        setError('El código de divisa ya existe');
+        return;
+      }
+      await db.currencies.add({
+        code,
+        name: newCurrencyName.trim(),
+        symbol: newCurrencySymbol.trim(),
+        isFiat: newCurrencyIsFiat,
+        isActive: newCurrencyIsActive,
+        decimalPlaces: parseInt(newCurrencyDecimalPlaces, 10) || 2
+      });
+      setNewCurrencyCode('');
+      setNewCurrencyName('');
+      setNewCurrencySymbol('');
+      setNewCurrencyIsFiat(true);
+      setNewCurrencyIsActive(true);
+      setNewCurrencyDecimalPlaces(2);
+      setShowAddCurrencyForm(false);
+      setMessage('Divisa añadida');
+      setTimeout(() => setMessage(''), 2000);
+    } catch {
+      setError('Error al crear divisa');
+    }
+  };
+
+  const handleUpdateCurrency = async (id) => {
+    if (!editCurrencyName.trim() || !editCurrencySymbol.trim()) return;
+    try {
+      await db.currencies.update(id, {
+        name: editCurrencyName.trim(),
+        symbol: editCurrencySymbol.trim(),
+        isFiat: editCurrencyIsFiat,
+        isActive: editCurrencyIsActive,
+        decimalPlaces: parseInt(editCurrencyDecimalPlaces, 10) || 2
+      });
+      setEditingCurrencyId(null);
+      setMessage('Divisa actualizada');
+      setTimeout(() => setMessage(''), 2000);
+    } catch {
+      setError('Error al actualizar divisa');
+    }
+  };
+
+  const handleDeleteCurrency = async (id, code) => {
+    const count = accounts.filter(a => a.currency === code).length;
+    if (count > 0) {
+      alert(`No puedes eliminar la divisa "${code}" porque tiene ${count} cuenta(s) asociada(s).`);
+      return;
+    }
+    if (!confirm(`¿Eliminar la divisa "${code}"?`)) return;
+    try {
+      await db.currencies.delete(id);
+      setMessage('Divisa eliminada');
+      setTimeout(() => setMessage(''), 2000);
+    } catch {
+      setError('Error al eliminar divisa');
+    }
+  };
+
   const handleClearAll = async () => {
     if (!confirm('¿Estás COMPLETAMENTE seguro? Esta acción es irreversible.')) return;
     setLoading(true);
@@ -723,6 +813,192 @@ export default function SettingsScreen() {
     </>
   );
 
+  const renderCurrenciesCatalog = () => {
+    const isAddingHere = showAddCurrencyForm;
+
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => toggleSection('currencies')}
+          className="flex w-full items-center justify-between gap-3 border-b border-[#1A1A1A] py-4 text-left focus:outline-none"
+        >
+          <div>
+            <p className="text-[15px] font-[600] text-noria-text">Divisas</p>
+            <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-noria-muted">
+              {currencies.length} divisas registradas
+            </p>
+          </div>
+          <span className="h-10 w-10 border border-[#1A1A1A] flex items-center justify-center">
+            {openSections.currencies ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </span>
+        </button>
+
+        {openSections.currencies && (
+          <div className="space-y-3 border-b border-[#1A1A1A] py-4">
+            <button
+              type="button"
+              onClick={() => {
+                setShowAddCurrencyForm(!isAddingHere);
+                setNewCurrencyCode('');
+                setNewCurrencyName('');
+                setNewCurrencySymbol('');
+                setNewCurrencyIsFiat(true);
+                setNewCurrencyIsActive(true);
+                setNewCurrencyDecimalPlaces(2);
+              }}
+              className="flex items-center gap-1 font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-[#647C78] focus:outline-none"
+            >
+              <Plus size={12} />
+              Añadir divisa
+            </button>
+
+            {isAddingHere && (
+              <form onSubmit={handleCreateCurrency} className="space-y-3 border border-[#1A1A1A] p-3">
+                <p className="font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-noria-muted">Nueva divisa</p>
+                
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Código (3-4 letras)</label>
+                    <input type="text" value={newCurrencyCode} onChange={e => setNewCurrencyCode(e.target.value)} placeholder="Ej. USD" className="muji-input text-[12px]" required />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Nombre</label>
+                    <input type="text" value={newCurrencyName} onChange={e => setNewCurrencyName(e.target.value)} placeholder="Ej. Dólar" className="muji-input text-[12px]" required />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Símbolo</label>
+                    <input type="text" value={newCurrencySymbol} onChange={e => setNewCurrencySymbol(e.target.value)} placeholder="Ej. $" className="muji-input text-[12px]" required />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Decimales</label>
+                    <input type="number" min="0" max="8" value={newCurrencyDecimalPlaces} onChange={e => setNewCurrencyDecimalPlaces(e.target.value)} className="muji-input text-[12px] font-mono" required />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Tipo</label>
+                    <select value={newCurrencyIsFiat ? 'fiat' : 'crypto'} onChange={e => setNewCurrencyIsFiat(e.target.value === 'fiat')} className="muji-input text-[12px]">
+                      <option value="fiat">Fiat</option>
+                      <option value="crypto">Crypto</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Estado</label>
+                  <select value={newCurrencyIsActive ? 'active' : 'inactive'} onChange={e => setNewCurrencyIsActive(e.target.value === 'active')} className="muji-input text-[12px]">
+                    <option value="active">Activo</option>
+                    <option value="inactive">Inactivo</option>
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <OutlineButton onClick={() => setShowAddCurrencyForm(false)}>Cancelar</OutlineButton>
+                  <OutlineButton type="submit">Crear</OutlineButton>
+                </div>
+              </form>
+            )}
+
+            {currencies.map(currency => {
+              const isEditing = editingCurrencyId === currency.id;
+              const relatedCount = accounts.filter(a => a.currency === currency.code).length;
+
+              return (
+                <div key={currency.id} className="border-b border-[#1A1A1A]/14 py-3">
+                  {isEditing ? (
+                    <div className="space-y-3 border border-[#1A1A1A] p-3">
+                      <p className="font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-noria-muted">
+                        Editar divisa: {currency.code}
+                      </p>
+                      
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Nombre</label>
+                          <input type="text" value={editCurrencyName} onChange={e => setEditCurrencyName(e.target.value)} className="muji-input text-[12px]" required />
+                        </div>
+                        <div>
+                          <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Símbolo</label>
+                          <input type="text" value={editCurrencySymbol} onChange={e => setEditCurrencySymbol(e.target.value)} className="muji-input text-[12px]" required />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Decimales</label>
+                          <input type="number" min="0" max="8" value={editCurrencyDecimalPlaces} onChange={e => setEditCurrencyDecimalPlaces(e.target.value)} className="muji-input text-[12px] font-mono" required />
+                        </div>
+                        <div>
+                          <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Tipo</label>
+                          <select value={editCurrencyIsFiat ? 'fiat' : 'crypto'} onChange={e => setEditCurrencyIsFiat(e.target.value === 'fiat')} className="muji-input text-[12px]">
+                            <option value="fiat">Fiat</option>
+                            <option value="crypto">Crypto</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Estado</label>
+                          <select value={editCurrencyIsActive ? 'active' : 'inactive'} onChange={e => setEditCurrencyIsActive(e.target.value === 'active')} className="muji-input text-[12px]">
+                            <option value="active">Activo</option>
+                            <option value="inactive">Inactivo</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <OutlineButton onClick={() => setEditingCurrencyId(null)}>Cancelar</OutlineButton>
+                        <OutlineButton onClick={() => handleUpdateCurrency(currency.id)}>Guardar</OutlineButton>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="flex items-baseline gap-2">
+                          <span className="font-mono text-[14px] font-[700] text-noria-text">{currency.code}</span>
+                          <span className="text-[12px] text-noria-muted">({currency.symbol})</span>
+                          <span className="truncate text-[13px] text-noria-text">{currency.name}</span>
+                        </div>
+                        <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-noria-muted mt-0.5">
+                          {currency.isFiat ? 'Fiat' : 'Crypto'} / {currency.decimalPlaces} decimales / {currency.isActive ? 'Activo' : 'Inactivo'} {relatedCount > 0 ? `· ${relatedCount} cuenta(s)` : ''}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingCurrencyId(currency.id);
+                            setEditCurrencyName(currency.name);
+                            setEditCurrencySymbol(currency.symbol);
+                            setEditCurrencyIsFiat(currency.isFiat);
+                            setEditCurrencyIsActive(currency.isActive);
+                            setEditCurrencyDecimalPlaces(currency.decimalPlaces);
+                          }}
+                          className="p-1.5 text-noria-muted hover:text-noria-text focus:outline-none"
+                          title="Editar divisa"
+                        >
+                          <Pencil size={12} strokeWidth={1.5} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteCurrency(currency.id, currency.code)}
+                          disabled={relatedCount > 0}
+                          className="p-1.5 text-noria-muted hover:text-[#9F2F2D] disabled:opacity-30 focus:outline-none"
+                          title={relatedCount > 0 ? 'No se puede eliminar' : 'Eliminar divisa'}
+                        >
+                          <Trash2 size={12} strokeWidth={1.5} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </>
+    );
+  };
+
   return (
     <div className="min-h-screen pb-24 pt-16" style={{ background: '#F5F2ED' }}>
       <Header title="Configuración" showBack={true} />
@@ -887,6 +1163,7 @@ export default function SettingsScreen() {
             <div className="border-y border-[#1A1A1A]">
               {renderTagCatalog('EXPENSE', 'Categorías de gasto', expenseTags, 'Añadir categoría')}
               {renderIncomeTypeCatalog()}
+              {renderCurrenciesCatalog()}
 
               <button
                 type="button"
