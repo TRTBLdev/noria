@@ -7,6 +7,7 @@ import AccountsScreen from './screens/AccountsScreen.jsx';
 import BudgetScreen from './screens/BudgetScreen.jsx';
 import TransactionsScreen from './screens/TransactionsScreen.jsx';
 import SettingsScreen from './screens/SettingsScreen.jsx';
+import DivisasScreen from './screens/DivisasScreen.jsx';
 
 export default function App() {
   return (
@@ -22,6 +23,7 @@ export default function App() {
         <Route path="/budget" element={<BudgetScreen />} />
         <Route path="/transactions" element={<TransactionsScreen />} />
         <Route path="/settings" element={<SettingsScreen />} />
+        <Route path="/divisas" element={<DivisasScreen />} />
         
         {/* Fallback to root */}
         <Route path="*" element={<Navigate to="/" replace />} />

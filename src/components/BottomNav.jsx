@@ -2,7 +2,7 @@ import React from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
-import { Home, Wallet, CalendarRange, ArrowLeftRight, TrendingDown } from 'lucide-react';
+import { Home, Wallet, CalendarRange, Coins, TrendingDown } from 'lucide-react';
 
 export default function BottomNav() {
   const navigate    = useNavigate();
@@ -23,7 +23,7 @@ export default function BottomNav() {
   }) || false;
 
   const handleTabClick = (path, name) => {
-    if (path === '/operations' || path === '/debts') {
+    if (path === '/debts') {
       alert(`${name} estará disponible próximamente.`);
       return;
     }
@@ -34,7 +34,7 @@ export default function BottomNav() {
     { icon: Home,           name: 'Home',      path: '/home' },
     { icon: Wallet,         name: 'Patrimonio', path: '/accounts' },
     { icon: CalendarRange,  name: 'Flotación', path: '/budget' },
-    { icon: ArrowLeftRight, name: 'Lotes P2P', path: '/operations' },
+    { icon: Coins,          name: 'Divisas',    path: '/divisas' },
     { icon: TrendingDown,   name: 'Deudas',    path: '/debts' },
   ];
 
