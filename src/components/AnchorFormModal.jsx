@@ -9,7 +9,9 @@ export default function AnchorFormModal({
   activeAccounts = [],
   institutions = [],
   macetas = [],
+  allowedPillars = ['NEED', 'WANT', 'SAVE'],
 }) {
+  const defaultPillar = allowedPillars[0] || 'NEED';
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
   const [dueDate, setDueDate] = useState('');
@@ -42,7 +44,7 @@ export default function AnchorFormModal({
       }
       setAccountId(anchor.accountId ? anchor.accountId.toString() : '');
       setMacetaId(anchor.macetaId ? anchor.macetaId.toString() : '');
-      setPillar(anchor.pillar || 'NEED');
+      setPillar(allowedPillars.includes(anchor.pillar) ? anchor.pillar : defaultPillar);
       setFrequencyInterval(anchor.frequencyInterval || 1);
       setFrequencyUnit(anchor.frequencyUnit || 'MONTHS');
     } else {
@@ -52,7 +54,7 @@ export default function AnchorFormModal({
       setDueDate(new Date().toISOString().slice(0, 10));
       setAccountId('');
       setMacetaId('');
-      setPillar('NEED');
+      setPillar(defaultPillar);
       setFrequencyInterval(1);
       setFrequencyUnit('MONTHS');
     }
@@ -74,6 +76,11 @@ export default function AnchorFormModal({
     const intervalVal = parseInt(frequencyInterval);
     if (isNaN(intervalVal) || intervalVal <= 0) {
       setError('El intervalo de frecuencia debe ser al menos 1.');
+      return;
+    }
+
+    if (!allowedPillars.includes(pillar)) {
+      setError('Este tipo de programacion no esta disponible en esta seccion.');
       return;
     }
 
@@ -102,6 +109,11 @@ export default function AnchorFormModal({
   };
 
   const isEdit = !!anchor;
+  const pillarOptions = [
+    ['NEED', 'N', '#5C7A52'],
+    ['WANT', 'W', '#4A6475'],
+    ['SAVE', 'S', '#B8860B']
+  ].filter(([val]) => allowedPillars.includes(val));
 
   return (
     <>
@@ -196,7 +208,7 @@ export default function AnchorFormModal({
             <div>
               <label className="muji-header block mb-2">Pilar</label>
               <div className="flex space-x-1">
-                {[['NEED', 'N', '#5C7A52'], ['WANT', 'W', '#4A6475'], ['SAVE', 'S', '#B8860B']].map(([val, short, col]) => {
+                {pillarOptions.map(([val, short, col]) => {
                   const isSelected = pillar === val;
                   // Si estamos editando y el anchor es de tipo SAVE, deshabilitamos cambiar a otros pilares
                   // para evitar desastres y pérdida de consistencia con las macetas

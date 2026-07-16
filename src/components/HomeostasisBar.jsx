@@ -75,7 +75,7 @@ export default function HomeostasisBar() {
   if (monthlyIncome === 0) {
     return (
       <article>
-        <div className="flex justify-between items-center mb-3">
+        <div className="flex justify-between items-center pb-3 mb-3 border-b border-[#1A1A1A]">
           <h3 className="text-[17px] font-[600] text-noria-text leading-tight">Homeostasis</h3>
           <span className="label-section">{new Date().toLocaleString('es-ES', { month: 'long' }).toUpperCase()}</span>
         </div>
@@ -89,7 +89,7 @@ export default function HomeostasisBar() {
   return (
     <article>
       {/* Header */}
-      <div className="flex justify-between items-center mb-5">
+      <div className="flex justify-between items-center pb-3 mb-5 border-b border-[#1A1A1A]">
         <h3 className="text-[17px] font-[600] text-noria-text leading-tight">Homeostasis</h3>
         <span className="label-section">{new Date().toLocaleString('es-ES', { month: 'long' }).toUpperCase()}</span>
       </div>

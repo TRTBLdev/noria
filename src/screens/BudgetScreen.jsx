@@ -6,12 +6,16 @@ import BottomNav from '../components/BottomNav.jsx';
 import FAB from '../components/FAB.jsx';
 import AnchorFormModal from '../components/AnchorFormModal.jsx';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Pencil, Archive, ArchiveRestore, Trash2, Check } from 'lucide-react';
+import { Plus, Pencil, Archive, ArchiveRestore, Trash2, Check, ChevronDown, ChevronUp, MoreHorizontal } from 'lucide-react';
 
 export default function BudgetScreen() {
   const navigate = useNavigate();
   const [showArchived, setShowArchived] = useState(false);
-  const [templatesTab, setTemplatesTab] = useState('GASTOS'); // 'GASTOS' o 'AHORROS'
+  const [isPaymentCalendarOpen, setIsPaymentCalendarOpen] = useState(true);
+  const [isFixedExpensesOpen, setIsFixedExpensesOpen] = useState(true);
+  const [isSavingsTemplatesOpen, setIsSavingsTemplatesOpen] = useState(true);
+  const [addAllowedPillars, setAddAllowedPillars] = useState(['NEED', 'WANT']);
+  const [openAnchorMenuId, setOpenAnchorMenuId] = useState(null);
 
   // Estados de Rango Dinámico de Fechas de Proyección
   const [projectionStart, setProjectionStart] = useState(() => {
@@ -506,37 +510,71 @@ export default function BudgetScreen() {
   const renderAnchorRow = (src) => {
     const pilarColor = src.pillar === 'NEED' ? '#5C7A52' : src.pillar === 'WANT' ? '#4A6475' : '#B8860B';
     const pilarBg = src.pillar === 'NEED' ? 'rgba(92,122,82,0.10)' : src.pillar === 'WANT' ? 'rgba(74,100,117,0.10)' : 'rgba(184,134,11,0.10)';
+    const pilarLabel = src.pillar === 'NEED' ? 'NECESIDAD' : src.pillar === 'WANT' ? 'DESEO' : 'AHORRO';
+    const nextDate = src.nextDueDate
+      ? (typeof src.nextDueDate === 'string'
+        ? src.nextDueDate.slice(5, 10).replace('-', '/')
+        : new Date(src.nextDueDate).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' }))
+      : '--';
+    const isMenuOpen = openAnchorMenuId === src.id;
 
     return (
-      <div key={src.id} className="noria-row py-3.5" id={`anchor-row-${src.id}`} style={{ opacity: src.isArchived ? 0.5 : 1 }}>
-        <div className="flex-1 min-w-0 pr-2">
-          <div className="flex items-center space-x-2">
-            <span className="text-[14px] font-[500] text-noria-text truncate">{src.name}</span>
-            <span className="text-[9px] font-[600] px-1.5 py-0.5 rounded uppercase tracking-wider" 
-              style={{ background: pilarBg, color: pilarColor }}>
-              {src.pillar}
-            </span>
+      <div key={src.id} className="relative py-4 border-b border-[rgba(26,26,26,0.10)]" id={`anchor-row-${src.id}`} style={{ opacity: src.isArchived ? 0.5 : 1 }}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-[15px] font-[600] text-noria-text truncate">{src.name}</span>
+              <span className="text-[9px] font-mono font-[700] px-1.5 py-0.5 uppercase tracking-[0.08em] border border-[#1A1A1A]"
+                style={{ background: pilarBg, color: pilarColor }}>
+                {pilarLabel}
+              </span>
+            </div>
+            <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.09em] text-noria-muted leading-relaxed">
+              <span>${fmt(src.amount)}</span>
+              <span> · {getFrequencyLabel(src.frequencyInterval, src.frequencyUnit)}</span>
+              {src.accountId && <span> · De: {getAccountName(src.accountId)}</span>}
+              <span> · Inicio/Prox: {nextDate}</span>
+            </div>
           </div>
-          <p className="text-[11px] text-noria-muted uppercase tracking-wider mt-0.5 font-mono">
-            ${fmt(src.amount)} {getFrequencyLabel(src.frequencyInterval, src.frequencyUnit)} {src.accountId && `· De: ${getAccountName(src.accountId)}`}
-            {src.nextDueDate && ` · Inicio/Prox: ${typeof src.nextDueDate === 'string' ? src.nextDueDate.slice(5, 10).replace('-', '/') : new Date(src.nextDueDate).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' })}`}
-          </p>
-        </div>
-        <div className="flex items-center space-x-1">
-          <button onClick={() => handleEditClick(src)} className="p-1.5 focus:outline-none hover:bg-noria-text/5 rounded transition-colors" title="Editar">
-            <Pencil size={13} strokeWidth={1.5} style={{ color: 'rgba(26,26,26,0.5)' }} />
-          </button>
-          <button onClick={() => handleToggleArchiveAnchor(src)} className="p-1.5 focus:outline-none hover:bg-noria-text/5 rounded transition-colors" title={src.isArchived ? "Re-activar" : "Pausar/Archivar"}>
-            {src.isArchived ? (
-              <ArchiveRestore size={13} strokeWidth={1.5} style={{ color: '#5C7A52' }} />
-            ) : (
-              <Archive size={13} strokeWidth={1.5} style={{ color: '#B8860B' }} />
-            )}
-          </button>
-          <button onClick={() => handleDeleteAnchorMaster(src)} className="p-1.5 focus:outline-none hover:bg-[#9F2F2D]/10 rounded transition-colors" title="Eliminar definitivamente">
-            <Trash2 size={13} strokeWidth={1.5} style={{ color: '#9F2F2D' }} />
+          <button
+            type="button"
+            onClick={() => setOpenAnchorMenuId(isMenuOpen ? null : src.id)}
+            className="w-8 h-8 shrink-0 border border-transparent flex items-center justify-center text-noria-muted hover:text-noria-text focus:outline-none"
+            title="Acciones"
+          >
+            <MoreHorizontal size={17} strokeWidth={1.8} />
           </button>
         </div>
+
+        {isMenuOpen && (
+          <div className="absolute right-0 top-11 z-20 w-40 border border-[#1A1A1A] bg-[#F5F2ED] font-mono text-[10px] uppercase tracking-[0.08em] shadow-none">
+            <button
+              type="button"
+              onClick={() => { setOpenAnchorMenuId(null); handleEditClick(src); }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-noria-text/5 focus:outline-none"
+            >
+              <Pencil size={12} strokeWidth={1.5} />
+              <span>Editar</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => { setOpenAnchorMenuId(null); handleToggleArchiveAnchor(src); }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-noria-text/5 focus:outline-none"
+            >
+              {src.isArchived ? <ArchiveRestore size={12} strokeWidth={1.5} /> : <Archive size={12} strokeWidth={1.5} />}
+              <span>{src.isArchived ? 'Reactivar' : 'Pausar'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => { setOpenAnchorMenuId(null); handleDeleteAnchorMaster(src); }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-[#9F2F2D]/10 focus:outline-none"
+              style={{ color: '#9F2F2D' }}
+            >
+              <Trash2 size={12} strokeWidth={1.5} />
+              <span>Eliminar</span>
+            </button>
+          </div>
+        )}
       </div>
     );
   };
@@ -552,16 +590,12 @@ export default function BudgetScreen() {
 
   const projectedInstances = getProjectedInstances();
 
-  // Filtrar plantillas según la pestaña activa
-  const filteredActive = templatesActive.filter(a => {
-    if (templatesTab === 'GASTOS') return a.pillar === 'NEED' || a.pillar === 'WANT';
-    return a.pillar === 'SAVE';
-  });
-
-  const filteredPaused = templatesPaused.filter(a => {
-    if (templatesTab === 'GASTOS') return a.pillar === 'NEED' || a.pillar === 'WANT';
-    return a.pillar === 'SAVE';
-  });
+  const fixedExpenseTemplates = (anchor) => anchor.pillar === 'NEED' || anchor.pillar === 'WANT';
+  const filteredActive = templatesActive.filter(fixedExpenseTemplates);
+  const filteredPaused = templatesPaused.filter(fixedExpenseTemplates);
+  const savingsTemplates = (anchor) => anchor.pillar === 'SAVE';
+  const savingsActive = templatesActive.filter(savingsTemplates);
+  const savingsPaused = templatesPaused.filter(savingsTemplates);
 
   // Atajos rápidos de rango dinámico
   const setMonthShortcut = () => {
@@ -600,6 +634,51 @@ export default function BudgetScreen() {
     setProjectionEnd(end.toISOString().slice(0, 10));
   };
 
+  const dateToInputValue = (date) => date.toISOString().slice(0, 10);
+  const getShortcutRange = (key) => {
+    const now = new Date();
+    now.setHours(12, 0, 0, 0);
+
+    if (key === 'month') {
+      return [
+        dateToInputValue(new Date(now.getFullYear(), now.getMonth(), 1, 12, 0, 0)),
+        dateToInputValue(new Date(now.getFullYear(), now.getMonth() + 1, 0, 12, 0, 0))
+      ];
+    }
+    if (key === 'year') {
+      return [
+        dateToInputValue(now),
+        dateToInputValue(new Date(now.getFullYear(), 11, 31, 12, 0, 0))
+      ];
+    }
+    if (key === 'quarter') {
+      return [
+        dateToInputValue(now),
+        dateToInputValue(new Date(now.getFullYear(), now.getMonth() + 3, 0, 12, 0, 0))
+      ];
+    }
+
+    const days = Number(key);
+    const end = new Date(now);
+    end.setDate(now.getDate() + days);
+    end.setHours(12, 0, 0, 0);
+    return [dateToInputValue(now), dateToInputValue(end)];
+  };
+
+  const getActiveShortcut = () => {
+    const shortcuts = ['month', '7', '30', 'quarter', 'year'];
+    return shortcuts.find((key) => {
+      const [start, end] = getShortcutRange(key);
+      return projectionStart === start && projectionEnd === end;
+    });
+  };
+
+  const activeShortcut = getActiveShortcut();
+  const shortcutButtonClass = (key) => [
+    'py-1.5 text-[9px] font-mono font-[700] uppercase tracking-[0.12em] leading-none border-b-2 bg-transparent focus:outline-none',
+    activeShortcut === key ? 'text-noria-text border-[#647C78]' : 'text-noria-muted border-transparent'
+  ].join(' ');
+
   const months = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC'];
   const formatTimelineDate = (str) => {
     if (!str || typeof str !== 'string') return '';
@@ -616,85 +695,124 @@ export default function BudgetScreen() {
     return groups;
   }, {});
 
-  // Cálculos para widgets ASCII
+  // Calculos para resumen superior
   const porcentajeComprometido = totalIngresosMes > 0 ? Math.round((totalComprometido / totalIngresosMes) * 100) : 0;
   const paidTotal = paidGastos + paidAhorros;
   const porcentajePagado = totalComprometido > 0 ? Math.round((paidTotal / totalComprometido) * 100) : 0;
 
-  const filledBlocks = Math.round((porcentajePagado / 100) * 20);
-  const progressBarAscii = '█'.repeat(filledBlocks) + '░'.repeat(Math.max(0, 20 - filledBlocks));
+  const paidSegments = Math.round((porcentajePagado / 100) * 14);
+
+  const SummaryCard = ({ label, value, meta, rows, children }) => (
+    <div className="border-2 border-[#1A1A1A] p-4 bg-transparent text-noria-text">
+      <p className="font-mono text-[10px] font-[700] uppercase tracking-[0.16em] mb-1" style={{ color: '#647C78' }}>
+        {label}
+      </p>
+      <div className="flex items-baseline gap-2">
+        <p className="font-sans text-[26px] font-[700] leading-none tracking-normal">{value}</p>
+        {meta && <span className="font-mono text-[12px] font-[700] text-noria-muted">{meta}</span>}
+      </div>
+      {rows && (
+        <div className="mt-4 space-y-1 font-mono text-[11px]">
+          {rows.map(([rowLabel, rowValue]) => (
+            <div key={rowLabel} className="flex justify-between gap-3">
+              <span className="uppercase">{rowLabel}</span>
+              <span>{rowValue}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {children}
+    </div>
+  );
 
   return (
     <div className="min-h-screen pb-32 pt-16" style={{ background: '#F5F2ED' }}>
       <div className="w-full max-w-md mx-auto px-6">
         <Header title="Línea de Flotación" />
 
-        {/* ── 1. Resumen de Homeostasis Mensual (ASCII) ── */}
         <section className="py-4 space-y-4" id="homeostasis-summary-section">
-          {/* Widget 1: Disponible Libre Real */}
-          <pre className="p-3 border border-[#1A1A1A] bg-white font-mono text-[11px] leading-tight text-noria-text overflow-x-auto">
-{`┌─ DISPONIBLE LIBRE REAL ──────────┐
-│  $${fmt(disponibleLibreReal).padEnd(31)}│
-│  De $${fmt(totalIngresosMes).padEnd(6)} ingresos este mes       │
-└──────────────────────────────────┘`}
-          </pre>
+          <SummaryCard
+            label="Disponible Libre Real"
+            value={`$${fmt(disponibleLibreReal)}`}
+          >
+            <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.12em] text-noria-muted">
+              De ${fmt(totalIngresosMes)} ingresos este mes
+            </p>
+          </SummaryCard>
 
-          {/* Widget 2: Comprometido */}
-          <pre className="p-3 border border-[#1A1A1A] bg-white font-mono text-[11px] leading-tight text-noria-text overflow-x-auto">
-{`┌─ COMPROMETIDO ──────────────────┐
-│  $${fmt(totalComprometido).padEnd(6)} (${porcentajeComprometido}% del ingreso)          │
-│  ├─ Gastos: $${fmt(planifiedGastos).padEnd(20)}│
-│  └─ Ahorros: $${fmt(planifiedAhorros).padEnd(19)}│
-└──────────────────────────────────┘`}
-          </pre>
+          <SummaryCard
+            label="Comprometido"
+            value={`$${fmt(totalComprometido)}`}
+            meta={`(${porcentajeComprometido}%)`}
+            rows={[
+              ['Gastos', `$${fmt(planifiedGastos)}`],
+              ['Ahorros', `$${fmt(planifiedAhorros)}`]
+            ]}
+          />
 
-          {/* Widget 3: Pagado */}
-          <pre className="p-3 border border-[#1A1A1A] bg-white font-mono text-[11px] leading-tight text-noria-text overflow-x-auto">
-{`┌─ PAGADO ESTE MES ────────────────┐
-│  $${fmt(paidTotal).padEnd(6)} de $${fmt(totalComprometido).padEnd(6)} (${porcentajePagado}%)         │
-│  ${progressBarAscii.padEnd(32)}│
-└──────────────────────────────────┘`}
-          </pre>
+          <SummaryCard
+            label="Pagado Este Mes"
+            value={`$${fmt(paidTotal)}`}
+            meta={`de $${fmt(totalComprometido)} (${porcentajePagado}%)`}
+          >
+            <div className="mt-4 grid gap-1" style={{ gridTemplateColumns: 'repeat(14, minmax(0, 1fr))' }} aria-label={`Pagado ${porcentajePagado}%`}>
+              {Array.from({ length: 14 }).map((_, idx) => (
+                <span
+                  key={idx}
+                  className="h-4 border border-[rgba(26,26,26,0.12)]"
+                  style={{ background: idx < paidSegments ? '#647C78' : 'rgba(26,26,26,0.08)' }}
+                />
+              ))}
+            </div>
+          </SummaryCard>
         </section>
-
-        <div className="noria-divider my-2" />
-
         {/* Calendario de pagos */}
-        <section className="py-4" id="projections-section">
-          <h4 className="text-[17px] font-[600] text-noria-text leading-tight mb-4">Calendario de pagos</h4>
-
-          <div className="space-y-3 p-3 border border-[#1A1A1A] bg-transparent mb-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-[9px] font-mono font-[600] uppercase text-noria-muted block mb-1">Desde:</label>
-                <input
-                  type="date"
-                  value={projectionStart}
-                  onChange={(e) => setProjectionStart(e.target.value)}
-                  className="muji-input w-full font-mono text-[11px] px-2 py-1.5 border border-[#1A1A1A]"
-                />
-              </div>
-              <div>
-                <label className="text-[9px] font-mono font-[600] uppercase text-noria-muted block mb-1">Hasta:</label>
-                <input
-                  type="date"
-                  value={projectionEnd}
-                  onChange={(e) => setProjectionEnd(e.target.value)}
-                  className="muji-input w-full font-mono text-[11px] px-2 py-1.5 border border-[#1A1A1A]"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-5 gap-1 pt-1">
-              <button onClick={setMonthShortcut} className="border border-[#1A1A1A] bg-transparent py-1 text-[7px] font-mono leading-none px-0.5">MES</button>
-              <button onClick={() => setRangeShortcut(7)} className="border border-[#1A1A1A] bg-transparent py-1 text-[7px] font-mono leading-none px-0.5">7 D</button>
-              <button onClick={() => setRangeShortcut(30)} className="border border-[#1A1A1A] bg-transparent py-1 text-[7px] font-mono leading-none px-0.5">30 D</button>
-              <button onClick={setQuarterShortcut} className="border border-[#1A1A1A] bg-transparent py-1 text-[7px] font-mono leading-none px-0.5">90 D</button>
-              <button onClick={setYearShortcut} className="border border-[#1A1A1A] bg-transparent py-1 text-[7px] font-mono leading-none px-0.5">ANO</button>
-            </div>
+        <section className="py-0" id="projections-section">
+          <div className="flex items-center justify-between py-3.5 border-b border-[#1A1A1A]">
+            <button
+              type="button"
+              onClick={() => setIsPaymentCalendarOpen(prev => !prev)}
+              className="flex items-center space-x-2 text-left focus:outline-none"
+            >
+              {isPaymentCalendarOpen ? <ChevronUp size={14} strokeWidth={2} /> : <ChevronDown size={14} strokeWidth={2} />}
+              <h4 className="text-[17px] font-[600] text-noria-text leading-tight">Calendario de pagos</h4>
+            </button>
           </div>
 
-          {projectedInstances.length === 0 ? (
+          {isPaymentCalendarOpen && (
+            <div className="pt-5 pb-4 animate-fade-in">
+              <div className="space-y-3 mb-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[9px] font-mono font-[700] uppercase tracking-[0.14em] text-noria-muted block mb-1">Desde</label>
+                    <input
+                      type="date"
+                      value={projectionStart}
+                      onChange={(e) => setProjectionStart(e.target.value)}
+                      className="muji-input w-full font-mono text-[11px] px-0 py-1.5 border-0 border-b border-[rgba(26,26,26,0.35)] bg-transparent focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-mono font-[700] uppercase tracking-[0.14em] text-noria-muted block mb-1">Hasta</label>
+                    <input
+                      type="date"
+                      value={projectionEnd}
+                      onChange={(e) => setProjectionEnd(e.target.value)}
+                      className="muji-input w-full font-mono text-[11px] px-0 py-1.5 border-0 border-b border-[rgba(26,26,26,0.35)] bg-transparent focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-5 gap-2 pt-1">
+                  <button type="button" onClick={setMonthShortcut} className={shortcutButtonClass('month')}>MES</button>
+                  <button type="button" onClick={() => setRangeShortcut(7)} className={shortcutButtonClass('7')}>7 D</button>
+                  <button type="button" onClick={() => setRangeShortcut(30)} className={shortcutButtonClass('30')}>30 D</button>
+                  <button type="button" onClick={setQuarterShortcut} className={shortcutButtonClass('quarter')}>90 D</button>
+                  <button type="button" onClick={setYearShortcut} className={shortcutButtonClass('year')}>AÑO</button>
+                </div>
+              </div>
+
+              {projectedInstances.length === 0 ? (
             <p className="text-[12px] text-noria-muted font-mono text-center py-4">Sin pagos programados para este periodo</p>
           ) : (
             <div className="max-h-72 overflow-y-auto pr-1 bg-transparent p-3 border border-[#1A1A1A] font-mono text-[12px] leading-relaxed">
@@ -757,81 +875,124 @@ export default function BudgetScreen() {
               })}
             </div>
           )}
+            </div>
+          )}
         </section>
 
-        <div className="noria-divider my-2" />
-        {/* ── 3. Gestión de Plantillas Maestras ── */}
-        <section className="py-4" id="templates-section">
-          <div className="flex justify-between items-center mb-3">
-            {/* Selector de Pestaña */}
-            <div className="flex space-x-3">
-              {[
-                ['GASTOS', 'Gastos Fijos'],
-                ['AHORROS', 'Metas Ahorro']
-              ].map(([val, label]) => {
-                const isSelected = templatesTab === val;
-                return (
-                  <button
-                    key={val}
-                    onClick={() => setTemplatesTab(val)}
-                    className="text-[12px] font-[600] uppercase tracking-wider focus:outline-none transition-colors border-b-2 pb-0.5"
-                    style={{
-                      borderColor: isSelected ? '#5C7A52' : 'transparent',
-                      color: isSelected ? '#1A1A1A' : 'rgba(26,26,26,0.35)'
-                    }}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Botón Añadir Plantilla */}
+        <section className="py-0" id="templates-section">
+          <div className="flex items-center justify-between py-3.5 border-b border-[#1A1A1A]">
             <button
-              onClick={() => setShowAddModal(true)}
-              className="flex items-center space-x-1 focus:outline-none text-[10px] font-[500] uppercase tracking-wider text-[#5C7A52]"
+              type="button"
+              onClick={() => setIsFixedExpensesOpen(prev => !prev)}
+              className="flex items-center space-x-2 text-left focus:outline-none"
             >
-              <Plus size={10} strokeWidth={2} />
+              {isFixedExpensesOpen ? <ChevronUp size={14} strokeWidth={2} /> : <ChevronDown size={14} strokeWidth={2} />}
+              <h4 className="text-[17px] font-[600] text-noria-text leading-tight">Gastos fijos</h4>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => { setAddAllowedPillars(['NEED', 'WANT']); setShowAddModal(true); }}
+              className="flex items-center space-x-1 focus:outline-none font-mono text-[10px] font-[700] uppercase tracking-[0.08em]"
+              style={{ color: '#647C78' }}
+            >
+              <Plus size={12} strokeWidth={2} />
               <span>Añadir</span>
             </button>
           </div>
 
-          {/* Listado de Plantillas Activas */}
-          {filteredActive.length === 0 ? (
-            <div className="flex flex-col items-center py-8 space-y-2 border border-dashed border-[rgba(0,0,0,0.08)] rounded-[6px] bg-[rgba(0,0,0,0.005)]">
-              <p className="text-[12px]" style={{ color: 'rgba(26,26,26,0.35)' }}>Sin plantillas programadas en esta pestaña</p>
-            </div>
-          ) : (
-            <div className="divide-y divide-noria-text/5 bg-transparent rounded-lg">
-              {filteredActive.map(renderAnchorRow)}
-            </div>
-          )}
+          {isFixedExpensesOpen && (
+            <div className="pt-4 pb-4 animate-fade-in">
+              {filteredActive.length === 0 ? (
+                <div className="flex flex-col items-center py-8 space-y-2 border border-[rgba(26,26,26,0.18)]">
+                  <p className="text-[12px]" style={{ color: 'rgba(26,26,26,0.35)' }}>Sin gastos fijos programados</p>
+                </div>
+              ) : (
+                <div className="bg-transparent">
+                  {filteredActive.map(renderAnchorRow)}
+                </div>
+              )}
 
-          {/* Listado de Plantillas Pausadas */}
-          {filteredPaused.length > 0 && (
-            <div className="pt-4 mt-4 border-t border-[rgba(0,0,0,0.05)]">
-              <button
-                onClick={() => setShowArchived(!showArchived)}
-                className="w-full flex justify-between items-center py-1 focus:outline-none text-[10px] font-[500] uppercase tracking-wider text-noria-muted"
-              >
-                <span>Pausadas / Suscripciones desactivadas ({filteredPaused.length})</span>
-                <span>{showArchived ? 'Ocultar' : 'Ver'}</span>
-              </button>
-              {showArchived && (
-                <div className="divide-y divide-noria-text/5 mt-2 animate-fade-in">
-                  {filteredPaused.map(renderAnchorRow)}
+              {filteredPaused.length > 0 && (
+                <div className="pt-4 mt-4 border-t border-[rgba(26,26,26,0.12)]">
+                  <button
+                    type="button"
+                    onClick={() => setShowArchived(!showArchived)}
+                    className="w-full flex justify-between items-center py-1 focus:outline-none text-[10px] font-mono font-[700] uppercase tracking-[0.1em] text-noria-muted"
+                  >
+                    <span>Pausados ({filteredPaused.length})</span>
+                    <span>{showArchived ? 'Ocultar' : 'Ver'}</span>
+                  </button>
+                  {showArchived && (
+                    <div className="mt-2 animate-fade-in">
+                      {filteredPaused.map(renderAnchorRow)}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           )}
         </section>
 
-        <div className="noria-divider my-2" />
+        <section className="py-0" id="savings-templates-section">
+          <div className="flex items-center justify-between py-3.5 border-b border-[#1A1A1A]">
+            <button
+              type="button"
+              onClick={() => setIsSavingsTemplatesOpen(prev => !prev)}
+              className="flex items-center space-x-2 text-left focus:outline-none"
+            >
+              {isSavingsTemplatesOpen ? <ChevronUp size={14} strokeWidth={2} /> : <ChevronDown size={14} strokeWidth={2} />}
+              <h4 className="text-[17px] font-[600] text-noria-text leading-tight">Metas de ahorro</h4>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => { setAddAllowedPillars(['SAVE']); setShowAddModal(true); }}
+              className="flex items-center space-x-1 focus:outline-none font-mono text-[10px] font-[700] uppercase tracking-[0.08em]"
+              style={{ color: '#647C78' }}
+            >
+              <Plus size={12} strokeWidth={2} />
+              <span>Añadir</span>
+            </button>
+          </div>
+
+          {isSavingsTemplatesOpen && (
+            <div className="pt-4 pb-4 animate-fade-in">
+              {savingsActive.length === 0 ? (
+                <div className="flex flex-col items-center py-8 space-y-2 border border-[rgba(26,26,26,0.18)]">
+                  <p className="text-[12px]" style={{ color: 'rgba(26,26,26,0.35)' }}>Sin aportes de ahorro programados</p>
+                </div>
+              ) : (
+                <div className="bg-transparent">
+                  {savingsActive.map(renderAnchorRow)}
+                </div>
+              )}
+
+              {savingsPaused.length > 0 && (
+                <div className="pt-4 mt-4 border-t border-[rgba(26,26,26,0.12)]">
+                  <button
+                    type="button"
+                    onClick={() => setShowArchived(!showArchived)}
+                    className="w-full flex justify-between items-center py-1 focus:outline-none text-[10px] font-mono font-[700] uppercase tracking-[0.1em] text-noria-muted"
+                  >
+                    <span>Pausados ({savingsPaused.length})</span>
+                    <span>{showArchived ? 'Ocultar' : 'Ver'}</span>
+                  </button>
+                  {showArchived && (
+                    <div className="mt-2 animate-fade-in">
+                      {savingsPaused.map(renderAnchorRow)}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
 
         <button
           type="button"
           onClick={() => navigate('/transactions')}
-          className="mb-4 text-[10px] font-mono font-[700] uppercase tracking-wider text-noria-muted hover:text-noria-text focus:outline-none"
+          className="mt-3 mb-4 text-[10px] font-mono font-[700] uppercase tracking-wider text-noria-muted hover:text-noria-text focus:outline-none"
         >
           Ver transacciones
         </button>
@@ -967,6 +1128,7 @@ export default function BudgetScreen() {
         activeAccounts={activeAccounts}
         institutions={institutions}
         macetas={macetas}
+        allowedPillars={addAllowedPillars}
       />
 
       {/* Modal para Editar Plantilla */}
@@ -978,6 +1140,7 @@ export default function BudgetScreen() {
         activeAccounts={activeAccounts}
         institutions={institutions}
         macetas={macetas}
+        allowedPillars={editingAnchor?.pillar === 'SAVE' ? ['SAVE'] : ['NEED', 'WANT']}
       />
 
       {/* FAB Radial */}
@@ -988,3 +1151,4 @@ export default function BudgetScreen() {
     </div>
   );
 }
+

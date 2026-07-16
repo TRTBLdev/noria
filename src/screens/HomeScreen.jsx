@@ -684,18 +684,14 @@ export default function HomeScreen() {
           )}
         </section>
 
-        <div className="noria-divider" />
-
         {/* ── Homeostasis ── */}
         <section className="py-6">
           <HomeostasisBar />
         </section>
 
-        <div className="noria-divider" />
-
         {/* ── Línea de Flotación Semanal ── */}
         <section className="py-6" id="anchors-list-section">
-          <div className="flex justify-between items-baseline mb-4">
+          <div className="flex justify-between items-baseline pb-3 mb-4 border-b border-[#1A1A1A]">
             <h3 className="text-[17px] font-[600] text-noria-text leading-tight">Línea de Flotación</h3>
             {selectedDate && (
               <button
@@ -773,7 +769,9 @@ export default function HomeScreen() {
             })}
           </div>
 
-          <h4 className="text-[17px] font-[600] text-noria-text leading-tight mb-3">Pagos Pendientes</h4>
+          <div className="pb-3 mb-3 border-b border-[#1A1A1A]">
+            <h4 className="text-[17px] font-[600] text-noria-text leading-tight">Pagos Pendientes</h4>
+          </div>
 
           {pendingAnchors.length === 0 && paidAnchors.length === 0 ? (
             <div className="flex flex-col items-center py-8 space-y-2" id="anchors-empty-state">
@@ -865,14 +863,12 @@ export default function HomeScreen() {
           </button>
         </section>
 
-        <div className="noria-divider" />
-
         {/* ── Ingresos del mes (collapse) ── */}
         <section className="py-6" id="incomes-collapse-section">
           <button
             id="toggle-incomes-btn"
             onClick={() => setShowIncomes(!showIncomes)}
-            className="w-full flex justify-between items-center focus:outline-none"
+            className="w-full flex justify-between items-center pb-3 border-b border-[#1A1A1A] focus:outline-none"
           >
             <div className="flex items-baseline space-x-3">
               <h3 className="text-[17px] font-[600] text-noria-text leading-tight">Ingresos del Mes</h3>

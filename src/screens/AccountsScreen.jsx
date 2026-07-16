@@ -4,6 +4,7 @@ import { db } from '../db/db.js';
 import Header from '../components/Header.jsx';
 import BottomNav from '../components/BottomNav.jsx';
 import FAB from '../components/FAB.jsx';
+import { useLocation } from 'react-router-dom';
 import { Plus, Landmark, CreditCard, Target, Trash2, Pencil, Wallet, TrendingUp, X, Check, Archive, ArrowUpRight, ArrowDownLeft, Eye, ArchiveRestore, ChevronDown, ChevronUp } from 'lucide-react';
 
 import CuentasFuentesTab from '../components/CuentasFuentesTab.jsx';
@@ -458,8 +459,8 @@ function EditAccountForm({ account, institutions, onUpdated, onCancel }) {
 /* ── Pantalla Principal ── */
 function AccordionSection({ id, title, open, onToggle, action, children }) {
   return (
-    <section className="border-t border-[#1A1A1A]" id={id}>
-      <div className="flex items-center justify-between py-3.5 border-b border-[rgba(26,26,26,0.12)]">
+    <section id={id}>
+      <div className="flex items-center justify-between py-3.5 border-b border-[#1A1A1A]">
         <button
           type="button"
           onClick={onToggle}
@@ -508,6 +509,7 @@ function PatrimonioSummary({ summary }) {
 }
 
 export default function AccountsScreen() {
+  const location = useLocation();
   const [showAddAccModal, setShowAddAccModal] = useState(false);
   const [showAddMacetaModal, setShowAddMacetaModal] = useState(false);
   const [showAddSourceModal, setShowAddSourceModal] = useState(false);
@@ -579,6 +581,17 @@ export default function AccountsScreen() {
   const activeAccounts = accounts.filter(a => !a.isArchived);
   const archivedAccounts = accounts.filter(a => a.isArchived);
   const toggleSection = (key) => setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('section') !== 'goals') return;
+
+    setOpenSections(prev => ({ ...prev, goals: true }));
+    window.requestAnimationFrame(() => {
+      document.getElementById('patrimonio-goals-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }, [location.search]);
+
   const allocationsByAccount = macetaAllocations.reduce((map, allocation) => {
     map[allocation.accountId] = (map[allocation.accountId] || 0) + allocation.amount;
     return map;
