@@ -5,15 +5,13 @@ import Header from '../components/Header.jsx';
 import BottomNav from '../components/BottomNav.jsx';
 import FAB from '../components/FAB.jsx';
 import AnchorFormModal from '../components/AnchorFormModal.jsx';
-import TransactionsSection from '../components/TransactionsSection.jsx';
-import { useLocation } from 'react-router-dom';
-import { Plus, Pencil, Archive, ArchiveRestore, Trash2, Wallet, ChevronDown, ChevronUp } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Plus, Pencil, Archive, ArchiveRestore, Trash2, Check } from 'lucide-react';
 
 export default function BudgetScreen() {
-  const location = useLocation();
+  const navigate = useNavigate();
   const [showArchived, setShowArchived] = useState(false);
   const [templatesTab, setTemplatesTab] = useState('GASTOS'); // 'GASTOS' o 'AHORROS'
-  const [showTransactions, setShowTransactions] = useState(false);
 
   // Estados de Rango Dinámico de Fechas de Proyección
   const [projectionStart, setProjectionStart] = useState(() => {
@@ -31,6 +29,16 @@ export default function BudgetScreen() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingAnchor, setEditingAnchor] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [payingGeneralAnchor, setPayingGeneralAnchor] = useState(null);
+  const [generalPayAccountId, setGeneralPayAccountId] = useState('');
+  const [payingSaveAnchor, setPayingSaveAnchor] = useState(null);
+  const [savePayMode, setSavePayMode] = useState('ALLOC');
+  const [allocAccountId, setAllocAccountId] = useState('');
+  const [transFromAccountId, setTransFromAccountId] = useState('');
+  const [transToAccountId, setTransToAccountId] = useState('');
+  const [transAmountReceived, setTransAmountReceived] = useState('');
+  const [transExchangeRate, setTransExchangeRate] = useState('1.00');
+  const [savePayError, setSavePayError] = useState('');
 
   // Dexie Queries
   const accounts = useLiveQuery(() => db.accounts.toArray()) || [];
@@ -55,16 +63,6 @@ export default function BudgetScreen() {
   }, [anchors]);
 
   const activeAccounts = accounts.filter(a => !a.isArchived);
-
-  React.useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    if (params.get('section') === 'transactions') {
-      setShowTransactions(true);
-      requestAnimationFrame(() => {
-        document.getElementById('transactions-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      });
-    }
-  }, [location.search]);
 
   // 1. Cálculos de Homeostasis Mensual (Mes Actual)
   const now = new Date();
@@ -150,65 +148,230 @@ export default function BudgetScreen() {
     }
   };
 
-  const handleDeleteTransaction = async (tx) => {
-    if (!confirm('¿Seguro que deseas eliminar esta transacción permanentemente? Se revertirá su impacto en los balances.')) return;
+  const handleStartQuickPay = (anchor) => {
+    if (anchor.pillar === 'SAVE' || anchor.type === 'SAVE') {
+      setPayingSaveAnchor(anchor);
+      setSavePayMode('ALLOC');
+      setSavePayError('');
+      const firstAccount = activeAccounts[0];
+      const secondAccount = activeAccounts[1] || firstAccount;
+      if (firstAccount) {
+        setAllocAccountId(firstAccount.id.toString());
+        setTransFromAccountId(firstAccount.id.toString());
+      }
+      if (secondAccount) setTransToAccountId(secondAccount.id.toString());
+      setTransAmountReceived(anchor.amount.toString());
+      setTransExchangeRate('1.00');
+      return;
+    }
+
+    setPayingGeneralAnchor(anchor);
+    setGeneralPayAccountId(anchor.accountId ? anchor.accountId.toString() : (activeAccounts[0]?.id.toString() || ''));
+  };
+
+  const handleConfirmGeneralPay = async (e) => {
+    e.preventDefault();
+    if (!payingGeneralAnchor) return;
+    const resolvedAccountId = parseInt(generalPayAccountId);
+    const account = accounts.find(a => a.id === resolvedAccountId);
+    if (!account) { alert('Cuenta no encontrada'); return; }
+
     try {
       await db.transaction('rw', [db.accounts, db.transactions, db.anchors], async () => {
-        if (tx.type === 'IN') {
-          const acc = await db.accounts.get(tx.accountId);
-          if (acc) await db.accounts.update(tx.accountId, { balance: acc.balance - tx.amount });
-        } else if (tx.type === 'OUT') {
-          const acc = await db.accounts.get(tx.accountId);
-          if (acc) await db.accounts.update(tx.accountId, { balance: acc.balance + tx.amount });
-        } else if (tx.type === 'TRANSFER_OUT' || tx.type === 'TRANSFER_IN') {
-          const linkedTxs = await db.transactions.where('transferId').equals(tx.transferId).toArray();
-          for (const ltx of linkedTxs) {
-            const acc = await db.accounts.get(ltx.accountId);
-            if (acc) {
-              const delta = ltx.type === 'TRANSFER_OUT' ? ltx.amount : -ltx.amount;
-              await db.accounts.update(ltx.accountId, { balance: acc.balance + delta });
-            }
-            await db.transactions.delete(ltx.id);
-          }
-          return;
-        }
+        await db.transactions.add({
+          date: new Date(),
+          type: 'OUT',
+          amount: payingGeneralAnchor.amount,
+          currency: payingGeneralAnchor.currency || account.currency || 'USD',
+          accountId: resolvedAccountId,
+          tagId: null,
+          pillar: payingGeneralAnchor.pillar,
+          incomeSourceId: null,
+          anchorId: payingGeneralAnchor.id,
+          description: `Ancla: ${payingGeneralAnchor.name}`
+        });
 
-        if (tx.anchorId) {
-          await db.anchors.update(tx.anchorId, { status: 'PENDING' });
-        } else if (tx.description && tx.description.startsWith('Ancla: ')) {
-          const anchorName = tx.description.replace('Ancla: ', '');
-          const matchingAnchor = await db.anchors.where('name').equals(anchorName).first();
-          if (matchingAnchor) {
-            await db.anchors.update(matchingAnchor.id, { status: 'PENDING' });
-          }
-        }
-
-        await db.transactions.delete(tx.id);
+        await db.accounts.update(resolvedAccountId, { balance: account.balance - payingGeneralAnchor.amount });
+        await db.anchors.update(payingGeneralAnchor.id, { status: 'PAID' });
       });
-    } catch (err) {
-      alert('Error al revertir la transacción');
+
+      setPayingGeneralAnchor(null);
+    } catch {
+      alert('Error al registrar el pago del gasto programado.');
     }
   };
 
-  const handleUpdateTransaction = async (txId, updatedFields) => {
+  const resolveSaveTarget = (anchor) => {
+    let targetMacetaId = anchor.macetaId;
+    if (!targetMacetaId) {
+      const namePart = anchor.name.replace('Ahorro: ', '').trim().toLowerCase();
+      const found = macetas.find(m => m.name.toLowerCase() === namePart);
+      if (found) targetMacetaId = found.id;
+    }
+    return macetas.find(m => m.id === targetMacetaId) || null;
+  };
+
+  const handleExecuteSaveAlloc = async (e) => {
+    e.preventDefault();
+    if (!payingSaveAnchor) return;
+    setSavePayError('');
+
     try {
-      await db.transaction('rw', [db.accounts, db.transactions], async () => {
-        const originalTx = await db.transactions.get(txId);
-        if (!originalTx) return;
+      const maceta = resolveSaveTarget(payingSaveAnchor);
+      if (!maceta) {
+        setSavePayError('Meta de ahorro asociada no encontrada.');
+        return;
+      }
 
-        if (updatedFields.amount !== undefined && updatedFields.amount !== originalTx.amount) {
-          const acc = await db.accounts.get(originalTx.accountId);
-          if (acc) {
-            const diff = updatedFields.amount - originalTx.amount;
-            const delta = originalTx.type === 'OUT' ? -diff : diff;
-            await db.accounts.update(originalTx.accountId, { balance: acc.balance + delta });
-          }
+      const accountId = parseInt(allocAccountId);
+      const account = accounts.find(a => a.id === accountId);
+      if (!account) {
+        setSavePayError('Cuenta no encontrada.');
+        return;
+      }
+
+      const amount = payingSaveAnchor.amount;
+      const currentAllocations = macetaAllocations.filter(a => a.macetaId === maceta.id);
+      let exists = false;
+      const updatedAllocations = currentAllocations.map(a => {
+        if (a.accountId === accountId) {
+          exists = true;
+          return { ...a, amount: a.amount + amount };
         }
-
-        await db.transactions.update(txId, updatedFields);
+        return a;
       });
-    } catch (err) {
-      alert('Error al actualizar la transacción');
+
+      if (!exists) {
+        updatedAllocations.push({
+          macetaId: maceta.id,
+          accountId,
+          amount,
+          currency: maceta.currency || 'USD',
+          locked: false
+        });
+      }
+
+      const totalAllocated = updatedAllocations.reduce((sum, a) => sum + a.amount, 0);
+
+      await db.transaction('rw', [db.maceta_allocations, db.macetas, db.anchors], async () => {
+        await db.maceta_allocations.where('macetaId').equals(maceta.id).delete();
+        for (const alloc of updatedAllocations) {
+          await db.maceta_allocations.add({
+            macetaId: alloc.macetaId,
+            accountId: alloc.accountId,
+            amount: alloc.amount,
+            currency: alloc.currency,
+            locked: !!alloc.locked
+          });
+        }
+        await db.macetas.update(maceta.id, { currentAmount: totalAllocated });
+        await db.anchors.update(payingSaveAnchor.id, { status: 'PAID' });
+      });
+
+      setPayingSaveAnchor(null);
+    } catch {
+      setSavePayError('Error al procesar la asignacion del ahorro.');
+    }
+  };
+
+  const handleExecuteSaveTransfer = async (e) => {
+    e.preventDefault();
+    if (!payingSaveAnchor) return;
+    setSavePayError('');
+
+    try {
+      const fromId = parseInt(transFromAccountId);
+      const toId = parseInt(transToAccountId);
+      const amountSent = payingSaveAnchor.amount;
+      const amountRec = parseFloat(transAmountReceived);
+
+      if (fromId === toId) {
+        setSavePayError('Las cuentas de origen y destino deben ser distintas.');
+        return;
+      }
+      if (isNaN(amountRec) || amountRec <= 0) {
+        setSavePayError('El monto recibido debe ser un numero positivo.');
+        return;
+      }
+
+      const fromAccount = accounts.find(a => a.id === fromId);
+      const toAccount = accounts.find(a => a.id === toId);
+      if (!fromAccount || !toAccount) {
+        setSavePayError('Cuenta de origen o destino no encontrada.');
+        return;
+      }
+      if (fromAccount.balance < amountSent) {
+        setSavePayError(`Saldo insuficiente en la cuenta de origen (${fromAccount.name}).`);
+        return;
+      }
+
+      const maceta = resolveSaveTarget(payingSaveAnchor);
+      if (!maceta) {
+        setSavePayError('Meta de ahorro asociada no encontrada.');
+        return;
+      }
+
+      const transferId = 'TX-' + Date.now();
+      const currentAllocations = macetaAllocations.filter(a => a.macetaId === maceta.id);
+      let exists = false;
+      const updatedAllocations = currentAllocations.map(a => {
+        if (a.accountId === toId) {
+          exists = true;
+          return { ...a, amount: a.amount + amountRec };
+        }
+        return a;
+      });
+
+      if (!exists) {
+        updatedAllocations.push({
+          macetaId: maceta.id,
+          accountId: toId,
+          amount: amountRec,
+          currency: maceta.currency || 'USD',
+          locked: false
+        });
+      }
+
+      const totalAllocated = updatedAllocations.reduce((sum, a) => sum + a.amount, 0);
+
+      await db.transaction('rw', [db.accounts, db.transactions, db.maceta_allocations, db.macetas, db.anchors], async () => {
+        await db.accounts.update(fromId, { balance: fromAccount.balance - amountSent });
+        await db.accounts.update(toId, { balance: toAccount.balance + amountRec });
+        await db.transactions.add({
+          date: new Date(),
+          type: 'TRANSFER_OUT',
+          amount: amountSent,
+          currency: fromAccount.currency,
+          accountId: fromId,
+          description: `Transferencia ahorro meta: ${maceta.name}`,
+          transferId
+        });
+        await db.transactions.add({
+          date: new Date(),
+          type: 'TRANSFER_IN',
+          amount: amountRec,
+          currency: toAccount.currency,
+          accountId: toId,
+          description: `Ahorro asignado meta: ${maceta.name}`,
+          transferId
+        });
+        await db.maceta_allocations.where('macetaId').equals(maceta.id).delete();
+        for (const alloc of updatedAllocations) {
+          await db.maceta_allocations.add({
+            macetaId: alloc.macetaId,
+            accountId: alloc.accountId,
+            amount: alloc.amount,
+            currency: alloc.currency,
+            locked: !!alloc.locked
+          });
+        }
+        await db.macetas.update(maceta.id, { currentAmount: totalAllocated });
+        await db.anchors.update(payingSaveAnchor.id, { status: 'PAID' });
+      });
+
+      setPayingSaveAnchor(null);
+    } catch {
+      setSavePayError('Error al procesar la transferencia del ahorro.');
     }
   };
 
@@ -496,14 +659,11 @@ export default function BudgetScreen() {
 
         <div className="noria-divider my-2" />
 
-        {/* ── 2. Proyección de Cobros/Ahorros por Rango Dinámico ── */}
+        {/* Calendario de pagos */}
         <section className="py-4" id="projections-section">
-          <h4 className="text-[11px] font-[600] uppercase tracking-wider text-noria-text opacity-50 mb-3 font-mono">
-            [ TELEMETRÍA DE PROYECCIÓN ]
-          </h4>
+          <h4 className="text-[17px] font-[600] text-noria-text leading-tight mb-4">Calendario de pagos</h4>
 
-          {/* Controles de Rango Dinámico */}
-          <div className="space-y-3 p-3 border border-[#1A1A1A] bg-white mb-4">
+          <div className="space-y-3 p-3 border border-[#1A1A1A] bg-transparent mb-4">
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-[9px] font-mono font-[600] uppercase text-noria-muted block mb-1">Desde:</label>
@@ -525,82 +685,69 @@ export default function BudgetScreen() {
               </div>
             </div>
 
-            {/* Atajos Rápidos */}
             <div className="grid grid-cols-5 gap-1 pt-1">
-              <button onClick={setMonthShortcut} className="brut-btn brut-btn-secondary py-1 text-[7px] font-mono leading-none px-0.5">
-                [ MES ]
-              </button>
-              <button onClick={() => setRangeShortcut(7)} className="brut-btn brut-btn-secondary py-1 text-[7px] font-mono leading-none px-0.5">
-                [ 7 D ]
-              </button>
-              <button onClick={() => setRangeShortcut(30)} className="brut-btn brut-btn-secondary py-1 text-[7px] font-mono leading-none px-0.5">
-                [ 30 D ]
-              </button>
-              <button onClick={setQuarterShortcut} className="brut-btn brut-btn-secondary py-1 text-[7px] font-mono leading-none px-0.5">
-                [ 90 D ]
-              </button>
-              <button onClick={setYearShortcut} className="brut-btn brut-btn-secondary py-1 text-[7px] font-mono leading-none px-0.5">
-                [ AÑO ]
-              </button>
+              <button onClick={setMonthShortcut} className="border border-[#1A1A1A] bg-transparent py-1 text-[7px] font-mono leading-none px-0.5">MES</button>
+              <button onClick={() => setRangeShortcut(7)} className="border border-[#1A1A1A] bg-transparent py-1 text-[7px] font-mono leading-none px-0.5">7 D</button>
+              <button onClick={() => setRangeShortcut(30)} className="border border-[#1A1A1A] bg-transparent py-1 text-[7px] font-mono leading-none px-0.5">30 D</button>
+              <button onClick={setQuarterShortcut} className="border border-[#1A1A1A] bg-transparent py-1 text-[7px] font-mono leading-none px-0.5">90 D</button>
+              <button onClick={setYearShortcut} className="border border-[#1A1A1A] bg-transparent py-1 text-[7px] font-mono leading-none px-0.5">ANO</button>
             </div>
           </div>
 
-          {/* Timeline Scrollable con Conectores ASCII */}
           {projectedInstances.length === 0 ? (
-            <p className="text-[12px] text-noria-muted font-mono text-center py-4">[ Sin telemetry para este periodo ]</p>
+            <p className="text-[12px] text-noria-muted font-mono text-center py-4">Sin pagos programados para este periodo</p>
           ) : (
-            <div className="max-h-72 overflow-y-auto pr-1 bg-[rgba(26,26,26,0.015)] p-3 border border-[#1A1A1A] font-mono text-[12px] leading-relaxed">
-              {Object.keys(groupedInstances).map((dateKey, gIdx, gArray) => {
+            <div className="max-h-72 overflow-y-auto pr-1 bg-transparent p-3 border border-[#1A1A1A] font-mono text-[12px] leading-relaxed">
+              {Object.keys(groupedInstances).map((dateKey) => {
                 const dayInstances = groupedInstances[dateKey];
                 return (
                   <div key={dateKey} className="mb-3">
-                    {/* Encabezado del Día */}
-                    <div className="text-noria-text font-[600] text-[10px]">
-                      ┌─ {dateKey}
-                    </div>
-
-                    {/* Mapeo de Cobros del Día con Conectores */}
+                    <div className="text-noria-text font-[700] text-[10px] uppercase tracking-[0.12em] mb-1">{dateKey}</div>
                     {dayInstances.map((inst, idx) => {
                       const isLastOfCurrentGroup = idx === dayInstances.length - 1;
-                      const isLastOfAll = isLastOfCurrentGroup && gIdx === gArray.length - 1;
-                      const connector = isLastOfCurrentGroup ? '└─' : '├─';
-
+                      const connector = isLastOfCurrentGroup ? 'L-' : '|-';
                       const todayStr = new Date().toISOString().slice(0, 10);
                       const upcomingLimitStr = new Date(Date.now() + 3*24*60*60*1000).toISOString().slice(0, 10);
-
                       const isPaid = inst.status === 'PAID';
                       const isOverdue = !isPaid && inst.nextDueDate < todayStr;
                       const isUpcoming = !isPaid && !isOverdue && inst.nextDueDate <= upcomingLimitStr;
-
                       let statusLabel = 'PROGRAMADO';
                       let statusBg = 'rgba(26,26,26,0.05)';
                       let statusTextCol = 'rgba(26,26,26,0.5)';
-
                       if (isPaid) {
                         statusLabel = 'PAGADO';
-                        statusBg = 'rgba(92,122,82,0.1)';
-                        statusTextCol = '#346538';
+                        statusBg = 'rgba(79,143,88,0.12)';
+                        statusTextCol = '#4F8F58';
                       } else if (isOverdue) {
                         statusLabel = 'VENCIDO';
-                        statusBg = 'rgba(255,42,42,0.1)';
-                        statusTextCol = '#FF2A2A';
+                        statusBg = 'rgba(159,47,45,0.10)';
+                        statusTextCol = '#9F2F2D';
                       } else if (isUpcoming) {
-                        statusLabel = 'PRÓXIMO';
-                        statusBg = 'rgba(184,134,11,0.1)';
-                        statusTextCol = '#956400';
+                        statusLabel = 'PROXIMO';
+                        statusBg = 'rgba(197,138,20,0.12)';
+                        statusTextCol = '#C58A14';
                       }
 
                       return (
-                        <div key={inst.id} className="flex justify-between items-baseline pl-4 hover:bg-black/5 transition-colors">
+                        <div key={inst.id} className="flex justify-between items-center gap-2 pl-2 py-1 hover:bg-black/5 transition-colors">
                           <span className={`text-[11px] truncate flex-1 ${isPaid ? 'line-through opacity-40' : ''}`}>
                             {connector} {inst.name.toUpperCase()}
                           </span>
-                          <div className="flex items-center space-x-2 pl-2">
-                            <span>${fmt(inst.amount)}</span>
-                            <span className="text-[8px] font-[600] px-1.5 py-0.5 rounded tracking-wide border border-[#1A1A1A]"
-                              style={{ background: statusBg, color: statusTextCol }}>
+                          <div className="flex items-center space-x-2 pl-2 shrink-0">
+                            <span className="text-[11px]">${fmt(inst.amount)}</span>
+                            <span className="text-[8px] font-[700] px-1.5 py-0.5 tracking-wide border border-[#1A1A1A]" style={{ background: statusBg, color: statusTextCol }}>
                               {statusLabel}
                             </span>
+                            {!isPaid && (
+                              <button
+                                type="button"
+                                onClick={() => handleStartQuickPay(inst)}
+                                className="w-6 h-6 border border-[#1A1A1A] bg-transparent flex items-center justify-center text-noria-text focus:outline-none"
+                                title={inst.pillar === 'SAVE' ? 'Cumplir ahorro' : 'Pagar'}
+                              >
+                                <Check size={11} strokeWidth={2} />
+                              </button>
+                            )}
                           </div>
                         </div>
                       );
@@ -613,7 +760,6 @@ export default function BudgetScreen() {
         </section>
 
         <div className="noria-divider my-2" />
-
         {/* ── 3. Gestión de Plantillas Maestras ── */}
         <section className="py-4" id="templates-section">
           <div className="flex justify-between items-center mb-3">
@@ -682,31 +828,136 @@ export default function BudgetScreen() {
 
         <div className="noria-divider my-2" />
 
-        <section className="py-4" id="transactions-section">
-          <button
-            type="button"
-            onClick={() => setShowTransactions(prev => !prev)}
-            className="w-full flex items-center justify-between focus:outline-none"
-          >
-            <h4 className="text-[18px] font-[400] text-noria-text leading-tight">Transacciones</h4>
-            {showTransactions
-              ? <ChevronUp size={15} strokeWidth={1.7} />
-              : <ChevronDown size={15} strokeWidth={1.7} />
-            }
-          </button>
-
-          {showTransactions && (
-            <div className="pt-4 animate-fade-in">
-              <TransactionsSection
-                transactions={transactions}
-                accounts={accounts}
-                onDeleteTransaction={handleDeleteTransaction}
-                onUpdateTransaction={handleUpdateTransaction}
-              />
-            </div>
-          )}
-        </section>
+        <button
+          type="button"
+          onClick={() => navigate('/transactions')}
+          className="mb-4 text-[10px] font-mono font-[700] uppercase tracking-wider text-noria-muted hover:text-noria-text focus:outline-none"
+        >
+          Ver transacciones
+        </button>
       </div>
+
+      {payingGeneralAnchor && (
+        <>
+          <div className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40" onClick={() => setPayingGeneralAnchor(null)} />
+          <div className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto animate-slide-up"
+            style={{ background: '#F5F2ED', borderRadius: '20px 20px 0 0', boxShadow: '0 -8px 40px rgba(0,0,0,0.08)' }}>
+            <form onSubmit={handleConfirmGeneralPay} className="px-6 pt-4 pb-10 space-y-4">
+              <div className="flex justify-center mb-2">
+                <div className="w-8 h-[3px] rounded-full" style={{ background: 'rgba(26,26,26,0.12)' }} />
+              </div>
+              <div className="flex justify-between items-center">
+                <h4 className="text-[17px] font-[600] text-noria-text leading-tight">Confirmar pago</h4>
+                <button type="button" onClick={() => setPayingGeneralAnchor(null)}
+                  className="focus:outline-none p-1" style={{ color: 'rgba(26,26,26,0.4)' }}>x</button>
+              </div>
+              <div className="border border-[#1A1A1A] p-3">
+                <p className="font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-noria-muted">Pago pendiente</p>
+                <div className="flex justify-between items-center mt-1 gap-3">
+                  <span className="text-[15px] font-[600] text-noria-text">{payingGeneralAnchor.name}</span>
+                  <span className="font-mono text-[15px] font-[700] text-noria-text">${fmt(payingGeneralAnchor.amount)}</span>
+                </div>
+              </div>
+              <div>
+                <label className="muji-header block mb-1">Cuenta de pago</label>
+                <select value={generalPayAccountId} onChange={e => setGeneralPayAccountId(e.target.value)} className="muji-input" required>
+                  {activeAccounts.map(acc => {
+                    const inst = institutions.find(i => i.id === acc.institutionId);
+                    const label = inst ? `${inst.name} - ${acc.name} (${acc.type})` : `${acc.name} (${acc.type})`;
+                    return <option key={acc.id} value={acc.id}>{label} (${fmt(acc.balance)})</option>;
+                  })}
+                </select>
+              </div>
+              <button type="submit" className="w-full py-3 text-[12px] font-[600] uppercase tracking-wider border transition-colors" style={{ background: 'transparent', color: '#1A1A1A', borderColor: '#1A1A1A' }}>
+                Confirmar pago
+              </button>
+            </form>
+          </div>
+        </>
+      )}
+
+      {payingSaveAnchor && (
+        <>
+          <div className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40" onClick={() => setPayingSaveAnchor(null)} />
+          <div className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto animate-slide-up"
+            style={{ background: '#F5F2ED', borderRadius: '20px 20px 0 0', boxShadow: '0 -8px 40px rgba(0,0,0,0.08)' }}>
+            <div className="px-6 pt-4 pb-10 space-y-4">
+              <div className="flex justify-center mb-2">
+                <div className="w-8 h-[3px] rounded-full" style={{ background: 'rgba(26,26,26,0.12)' }} />
+              </div>
+              <div className="flex justify-between items-center">
+                <h4 className="text-[17px] font-[600] text-noria-text leading-tight">Cumplir ahorro</h4>
+                <button type="button" onClick={() => setPayingSaveAnchor(null)}
+                  className="focus:outline-none p-1" style={{ color: 'rgba(26,26,26,0.4)' }}>x</button>
+              </div>
+              <div className="border border-[#1A1A1A] p-3">
+                <p className="font-mono text-[10px] font-[700] uppercase tracking-[0.12em]" style={{ color: '#C58A14' }}>Ahorro pendiente</p>
+                <div className="flex justify-between items-center mt-1 gap-3">
+                  <span className="text-[15px] font-[600] text-noria-text">{payingSaveAnchor.name}</span>
+                  <span className="font-mono text-[15px] font-[700] text-noria-text">${fmt(payingSaveAnchor.amount)}</span>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button type="button" onClick={() => setSavePayMode('ALLOC')} className="py-2 text-[10px] font-[700] uppercase tracking-[0.1em] border focus:outline-none" style={{ borderColor: savePayMode === 'ALLOC' ? '#647C78' : 'rgba(26,26,26,0.18)', color: savePayMode === 'ALLOC' ? '#647C78' : 'rgba(26,26,26,0.45)' }}>
+                  Asignar
+                </button>
+                <button type="button" onClick={() => setSavePayMode('TRANSFER')} className="py-2 text-[10px] font-[700] uppercase tracking-[0.1em] border focus:outline-none" style={{ borderColor: savePayMode === 'TRANSFER' ? '#647C78' : 'rgba(26,26,26,0.18)', color: savePayMode === 'TRANSFER' ? '#647C78' : 'rgba(26,26,26,0.45)' }}>
+                  Transferir
+                </button>
+              </div>
+
+              {savePayMode === 'ALLOC' ? (
+                <form onSubmit={handleExecuteSaveAlloc} className="space-y-4">
+                  <div>
+                    <label className="muji-header block mb-1">Cuenta donde se retiene</label>
+                    <select value={allocAccountId} onChange={e => setAllocAccountId(e.target.value)} className="muji-input" required>
+                      {activeAccounts.map(acc => {
+                        const inst = institutions.find(i => i.id === acc.institutionId);
+                        const label = inst ? `${inst.name} - ${acc.name} (${acc.type})` : `${acc.name} (${acc.type})`;
+                        return <option key={acc.id} value={acc.id}>{label} (${fmt(acc.balance)})</option>;
+                      })}
+                    </select>
+                  </div>
+                  {savePayError && <p className="text-[12px] font-[500]" style={{ color: '#C58A14' }}>{savePayError}</p>}
+                  <button type="submit" className="w-full py-3 text-[12px] font-[600] uppercase tracking-wider border transition-colors" style={{ background: 'transparent', color: '#4F8F58', borderColor: '#4F8F58' }}>
+                    Marcar como asignado
+                  </button>
+                </form>
+              ) : (
+                <form onSubmit={handleExecuteSaveTransfer} className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="muji-header block mb-1">Origen</label>
+                      <select value={transFromAccountId} onChange={e => setTransFromAccountId(e.target.value)} className="muji-input" required>
+                        {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} (${fmt(acc.balance)})</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="muji-header block mb-1">Destino</label>
+                      <select value={transToAccountId} onChange={e => setTransToAccountId(e.target.value)} className="muji-input" required>
+                        {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} (${fmt(acc.balance)})</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="muji-header block mb-1">Monto recibido</label>
+                    <input type="number" step="0.01" inputMode="decimal" value={transAmountReceived} onChange={e => {
+                      setTransAmountReceived(e.target.value);
+                      const rate = parseFloat(e.target.value) / payingSaveAnchor.amount;
+                      setTransExchangeRate(isNaN(rate) ? '1.00' : rate.toFixed(4));
+                    }} className="muji-input" required />
+                    <p className="font-mono text-[10px] text-noria-muted mt-1">Tasa efectiva: {transExchangeRate}</p>
+                  </div>
+                  {savePayError && <p className="text-[12px] font-[500]" style={{ color: '#C58A14' }}>{savePayError}</p>}
+                  <button type="submit" className="w-full py-3 text-[12px] font-[600] uppercase tracking-wider border transition-colors" style={{ background: 'transparent', color: '#4F8F58', borderColor: '#4F8F58' }}>
+                    Transferir y asignar
+                  </button>
+                </form>
+              )}
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Modal para Añadir Plantilla */}
       <AnchorFormModal

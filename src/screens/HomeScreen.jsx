@@ -915,7 +915,7 @@ export default function HomeScreen() {
 
           <button
             type="button"
-            onClick={() => navigate('/budget?section=transactions')}
+            onClick={() => navigate('/transactions')}
             className="mt-4 text-[10px] font-mono font-[700] uppercase tracking-wider text-noria-muted hover:text-noria-text focus:outline-none"
           >
             Ver transacciones
