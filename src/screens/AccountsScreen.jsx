@@ -4,6 +4,8 @@ import { db } from '../db/db.js';
 import Header from '../components/Header.jsx';
 import BottomNav from '../components/BottomNav.jsx';
 import FAB from '../components/FAB.jsx';
+import CategorySelect from '../components/CategorySelect.jsx';
+import IncomeTypeSelect from '../components/IncomeTypeSelect.jsx';
 import { useLocation } from 'react-router-dom';
 import { Plus, Landmark, CreditCard, Target, Trash2, Pencil, Wallet, TrendingUp, X, Check, Archive, ArrowUpRight, ArrowDownLeft, Eye, ArchiveRestore, ChevronDown, ChevronUp } from 'lucide-react';
 
@@ -543,12 +545,12 @@ export default function AccountsScreen() {
 
   // Form Source states
   const [sourceName, setSourceName] = useState('');
-  const [sourceType, setSourceType] = useState('SALARY');
+  const [sourceIncomeTypeId, setSourceIncomeTypeId] = useState('');
 
   // Estados para Edición de Fuentes de Ingreso
   const [editingSource, setEditingSource] = useState(null);
   const [editSourceName, setEditSourceName] = useState('');
-  const [editSourceType, setEditSourceType] = useState('SALARY');
+  const [editSourceIncomeTypeId, setEditSourceIncomeTypeId] = useState('');
   const [showEditSourceModal, setShowEditSourceModal] = useState(false);
 
   // Form Anchor states (Edición en Presupuesto)
@@ -558,6 +560,7 @@ export default function AccountsScreen() {
   const [editAnchorPillar, setEditAnchorPillar] = useState('NEED');
   const [editAnchorDueDate, setEditAnchorDueDate] = useState('');
   const [editAnchorAccountId, setEditAnchorAccountId] = useState('');
+  const [editAnchorTagId, setEditAnchorTagId] = useState('');
   const [showEditAnchorModal, setShowEditAnchorModal] = useState(false);
 
   // Form para crear nueva plantilla de gasto fijo (desde pestaña Presupuesto)
@@ -567,6 +570,7 @@ export default function AccountsScreen() {
   const [anchorPillar, setAnchorPillar] = useState('NEED');
   const [anchorAccountId, setAnchorAccountId] = useState('');
   const [anchorDueDate, setAnchorDueDate] = useState('');
+  const [anchorTagId, setAnchorTagId] = useState('');
 
   // Dexie Queries
   const institutions = useLiveQuery(() => db.institutions.toArray()) || [];
@@ -575,12 +579,21 @@ export default function AccountsScreen() {
   const macetas = useLiveQuery(() => db.macetas.toArray()) || [];
   const macetaAllocations = useLiveQuery(() => db.maceta_allocations.toArray()) || [];
   const incomeSources = useLiveQuery(() => db.income_sources.toArray()) || [];
+  const incomeTypes = useLiveQuery(() => db.income_types.orderBy('name').toArray()) || [];
   const anchors = useLiveQuery(() => db.anchors.toArray()) || [];
   const transactions = useLiveQuery(() => db.transactions.toArray()) || [];
+  const tags = useLiveQuery(() => db.tags.orderBy('name').toArray()) || [];
 
   const activeAccounts = accounts.filter(a => !a.isArchived);
   const archivedAccounts = accounts.filter(a => a.isArchived);
   const toggleSection = (key) => setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
+  const defaultIncomeType = incomeTypes.find(type => type.legacyKey === 'OTHER') || incomeTypes[0] || null;
+  const resolveIncomeTypeId = (source) => {
+    if (source?.incomeTypeId) return source.incomeTypeId.toString();
+    const fromLegacy = incomeTypes.find(type => type.legacyKey === source?.type);
+    return (fromLegacy || defaultIncomeType)?.id?.toString() || '';
+  };
+  const legacyTypeFromIncomeTypeId = (id) => incomeTypes.find(type => type.id.toString() === id)?.legacyKey || 'OTHER';
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -591,6 +604,11 @@ export default function AccountsScreen() {
       document.getElementById('patrimonio-goals-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   }, [location.search]);
+
+  useEffect(() => {
+    if (!defaultIncomeType) return;
+    if (!sourceIncomeTypeId) setSourceIncomeTypeId(defaultIncomeType.id.toString());
+  }, [defaultIncomeType, sourceIncomeTypeId]);
 
   const allocationsByAccount = macetaAllocations.reduce((map, allocation) => {
     map[allocation.accountId] = (map[allocation.accountId] || 0) + allocation.amount;
@@ -700,9 +718,18 @@ export default function AccountsScreen() {
     e.preventDefault();
     if (!sourceName.trim()) return;
     const exists = incomeSources.find(s => s.name.toLowerCase() === sourceName.trim().toLowerCase());
-    if (!exists) await db.income_sources.add({ name: sourceName.trim(), type: sourceType, isActive: true });
+    const selectedIncomeTypeId = sourceIncomeTypeId || defaultIncomeType?.id?.toString() || '';
+    if (!exists) {
+      await db.income_sources.add({
+        name: sourceName.trim(),
+        type: legacyTypeFromIncomeTypeId(selectedIncomeTypeId),
+        incomeTypeId: selectedIncomeTypeId ? parseInt(selectedIncomeTypeId, 10) : null,
+        tagId: null,
+        isActive: true
+      });
+    }
     setSourceName('');
-    setSourceType('SALARY');
+    setSourceIncomeTypeId('');
     setShowAddSourceModal(false);
   };
 
@@ -793,7 +820,7 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
   const handleEditSourceClick = (src) => {
     setEditingSource(src);
     setEditSourceName(src.name);
-    setEditSourceType(src.type);
+    setEditSourceIncomeTypeId(resolveIncomeTypeId(src));
     setShowEditSourceModal(true);
   };
 
@@ -803,9 +830,19 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
     if (!editSourceName.trim()) return;
 
     try {
-      await db.income_sources.update(editingSource.id, {
-        name: editSourceName.trim(),
-        type: editSourceType
+      const selectedIncomeTypeId = editSourceIncomeTypeId || defaultIncomeType?.id?.toString() || '';
+      await db.transaction('rw', [db.income_sources, db.transactions], async () => {
+        await db.income_sources.update(editingSource.id, {
+          name: editSourceName.trim(),
+          type: legacyTypeFromIncomeTypeId(selectedIncomeTypeId),
+          incomeTypeId: selectedIncomeTypeId ? parseInt(selectedIncomeTypeId, 10) : null,
+          tagId: null
+        });
+
+        const relatedTransactions = await db.transactions.where('incomeSourceId').equals(editingSource.id).toArray();
+        for (const tx of relatedTransactions) {
+          if (tx.type === 'IN') await db.transactions.update(tx.id, { tagId: null });
+        }
       });
       setShowEditSourceModal(false);
       setEditingSource(null);
@@ -831,6 +868,7 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
     }
     setEditAnchorDueDate(formattedDate);
     setEditAnchorAccountId(anchor.accountId ? anchor.accountId.toString() : '');
+    setEditAnchorTagId(anchor.tagId ? anchor.tagId.toString() : '');
     setShowEditAnchorModal(true);
   };
 
@@ -843,6 +881,7 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
     try {
       const parsedAccountId = editAnchorAccountId ? parseInt(editAnchorAccountId) : null;
       const parsedDueDate = editAnchorDueDate ? new Date(editAnchorDueDate + 'T12:00:00') : null;
+      const normalizedTagId = editAnchorPillar === 'SAVE' ? null : (editAnchorTagId ? parseInt(editAnchorTagId) : null);
 
       // 1. Actualizar la plantilla
       await db.anchors.update(editingAnchor.id, {
@@ -850,6 +889,7 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
         amount: amt,
         pillar: editAnchorPillar,
         accountId: parsedAccountId,
+        tagId: normalizedTagId,
         nextDueDate: parsedDueDate
       });
 
@@ -863,6 +903,10 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
         a.parentAnchorId === editingAnchor.id && 
         a.status === 'PENDING'
       );
+      const childInstances = anchors.filter(a =>
+        a.isTemplate === false &&
+        a.parentAnchorId === editingAnchor.id
+      );
 
       for (const inst of activeInstances) {
         const instDate = inst.nextDueDate instanceof Date ? inst.nextDueDate : new Date(inst.nextDueDate);
@@ -871,9 +915,20 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
             name: editAnchorName.trim(),
             amount: amt,
             pillar: editAnchorPillar,
-            accountId: parsedAccountId
+            accountId: parsedAccountId,
+            tagId: normalizedTagId
           });
         }
+      }
+
+      for (const inst of childInstances) {
+        await db.anchors.update(inst.id, { tagId: normalizedTagId });
+      }
+
+      const relatedAnchorIds = [editingAnchor.id, ...childInstances.map(inst => inst.id)];
+      const relatedTransactions = await db.transactions.where('anchorId').anyOf(relatedAnchorIds).toArray();
+      for (const tx of relatedTransactions) {
+        if (tx.type === 'OUT') await db.transactions.update(tx.id, { tagId: normalizedTagId });
       }
 
       setShowEditAnchorModal(false);
@@ -946,6 +1001,7 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
         amount: amt,
         currency: selectedAcc.currency,
         accountId: parseInt(anchorAccountId),
+        tagId: anchorTagId ? parseInt(anchorTagId) : null,
         nextDueDate: anchorDueDate ? new Date(anchorDueDate + 'T12:00:00') : new Date(),
         status: 'PENDING',
         pillar: anchorPillar,
@@ -953,7 +1009,7 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
         isArchived: false
       });
       setShowAddAnchorMasterModal(false);
-      setAnchorName(''); setAnchorAmount(''); setAnchorDueDate(''); setAnchorAccountId('');
+      setAnchorName(''); setAnchorAmount(''); setAnchorDueDate(''); setAnchorAccountId(''); setAnchorTagId('');
     } catch {
       alert('Error al crear plantilla de gasto fijo');
     }
@@ -1132,6 +1188,7 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
           >
           <FuentesIngresoSection
             incomeSources={incomeSources}
+            incomeTypes={incomeTypes}
             onAddSource={() => setShowAddSourceModal(true)}
             onEditSource={handleEditSourceClick}
             onDeleteSource={handleDeleteSource}
@@ -1493,8 +1550,8 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
       {showAddSourceModal && (
         <>
           <div className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40" onClick={() => setShowAddSourceModal(false)} />
-          <div className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto animate-slide-up"
-            style={{ background: '#F5F2ED', borderRadius: '20px 20px 0 0', boxShadow: '0 -8px 40px rgba(0,0,0,0.08)' }}>
+          <div className="fixed bottom-0 left-0 right-0 z-50 max-h-[88vh] max-w-md mx-auto animate-slide-up overflow-y-auto border-t-2 border-l-2 border-r-2 border-[#1A1A1A]"
+            style={{ background: '#F5F2ED' }}>
             <form onSubmit={handleCreateSource} className="px-6 pt-4 pb-10 space-y-4" id="add-source-form">
               <div className="flex justify-center mb-2">
                 <div className="w-8 h-[3px] rounded-full" style={{ background: 'rgba(26,26,26,0.12)' }} />
@@ -1509,18 +1566,12 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
                 <input id="source-name" type="text" value={sourceName} onChange={e => setSourceName(e.target.value)}
                   placeholder="Ej. Estudio CKM Visualización" className="muji-input" autoFocus required />
               </div>
-              <div>
-                <label className="muji-header block mb-1">Tipo de Ingreso</label>
-                <select id="source-type" value={sourceType} onChange={e => setSourceType(e.target.value)}
-                  className="muji-input" required>
-                  <option value="SALARY">Salario / Empleo</option>
-                  <option value="FREELANCE">💻 Freelance / Servicios</option>
-                  <option value="INVESTMENT">📈 Inversiones / Dividendos</option>
-                  <option value="GIFT">🎁 Regalos / Bonos</option>
-                  <option value="BUSINESS">🏪 Ventas / Negocio</option>
-                  <option value="OTHER">Otro</option>
-                </select>
-              </div>
+              <IncomeTypeSelect
+                id="source-income-type"
+                value={sourceIncomeTypeId || defaultIncomeType?.id?.toString() || ''}
+                onChange={setSourceIncomeTypeId}
+                incomeTypes={incomeTypes}
+              />
               <button id="submit-new-source-btn" type="submit"
                 className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider border mt-2 transition-colors"
                 style={{ background: 'transparent', color: '#1A1A1A', borderColor: '#1A1A1A' }}>
@@ -1551,18 +1602,12 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
                 <input type="text" value={editSourceName} onChange={e => setEditSourceName(e.target.value)}
                   className="muji-input" autoFocus required />
               </div>
-              <div>
-                <label className="muji-header block mb-1">Tipo de Ingreso</label>
-                <select value={editSourceType} onChange={e => setEditSourceType(e.target.value)}
-                  className="muji-input" required>
-                  <option value="SALARY">Salario / Empleo</option>
-                  <option value="FREELANCE">💻 Freelance / Servicios</option>
-                  <option value="INVESTMENT">📈 Inversiones / Dividendos</option>
-                  <option value="GIFT">🎁 Regalos / Bonos</option>
-                  <option value="BUSINESS">🏪 Ventas / Negocio</option>
-                  <option value="OTHER">Otro</option>
-                </select>
-              </div>
+              <IncomeTypeSelect
+                id="edit-source-income-type"
+                value={editSourceIncomeTypeId || defaultIncomeType?.id?.toString() || ''}
+                onChange={setEditSourceIncomeTypeId}
+                incomeTypes={incomeTypes}
+              />
               <button type="submit"
                 className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider border mt-2 transition-colors"
                 style={{ background: 'transparent', color: '#1A1A1A', borderColor: '#1A1A1A' }}>
@@ -1634,6 +1679,17 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
                 </div>
               </div>
 
+              {anchorPillar !== 'SAVE' && (
+                <CategorySelect
+                  id="accounts-anchor-category"
+                  value={anchorTagId}
+                  onChange={setAnchorTagId}
+                  tags={tags}
+                  kind="EXPENSE"
+                  className="max-w-[320px]"
+                />
+              )}
+
               <button type="submit"
                 className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider border mt-2 transition-colors"
                 style={{ background: 'transparent', color: '#1A1A1A', borderColor: '#1A1A1A' }}>
@@ -1648,8 +1704,8 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
       {showEditAnchorModal && editingAnchor && (
         <>
           <div className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40" onClick={() => setShowEditAnchorModal(false)} />
-          <div className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto animate-slide-up"
-            style={{ background: '#F5F2ED', borderRadius: '20px 20px 0 0', boxShadow: '0 -8px 40px rgba(0,0,0,0.08)' }}>
+          <div className="fixed bottom-0 left-0 right-0 z-50 max-h-[88vh] max-w-md mx-auto animate-slide-up overflow-y-auto border-t-2 border-l-2 border-r-2 border-[#1A1A1A]"
+            style={{ background: '#F5F2ED' }}>
             <form onSubmit={handleUpdateAnchor} className="px-6 pt-4 pb-10 space-y-4" id="edit-anchor-form">
               <div className="flex justify-center mb-2">
                 <div className="w-8 h-[3px] rounded-full" style={{ background: 'rgba(26,26,26,0.12)' }} />
@@ -1707,6 +1763,17 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
                   </div>
                 </div>
               </div>
+
+              {editAnchorPillar !== 'SAVE' && (
+                <CategorySelect
+                  id="accounts-edit-anchor-category"
+                  value={editAnchorTagId}
+                  onChange={setEditAnchorTagId}
+                  tags={tags}
+                  kind="EXPENSE"
+                  className="max-w-[320px]"
+                />
+              )}
 
               <button type="submit"
                 className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider border mt-2 transition-colors"

@@ -7,6 +7,7 @@ import FAB from '../components/FAB.jsx';
 import AnchorFormModal from '../components/AnchorFormModal.jsx';
 import PillarTag from '../components/PillarTag.jsx';
 import CategoryTag from '../components/CategoryTag.jsx';
+import CategoryIcon from '../components/CategoryIcon.jsx';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Pencil, Archive, ArchiveRestore, Trash2, Check, ChevronDown, ChevronUp, MoreHorizontal } from 'lucide-react';
 
@@ -123,7 +124,7 @@ export default function BudgetScreen() {
   };
   
   const getAccountName = (id) => accounts.find(a => a.id === id)?.name || 'Ninguna';
-  const getTagName = (id) => tags.find(t => t.id === id)?.name || null;
+  const getTag = (id, kind = 'EXPENSE') => tags.find(t => t.id === id && (t.kind || 'EXPENSE') === kind) || null;
 
   const handleCreateAnchor = async (data) => {
     try {
@@ -402,6 +403,7 @@ export default function BudgetScreen() {
       }
 
       // 1. Actualizar plantilla
+      const normalizedTagId = data.pillar === 'SAVE' ? null : (data.tagId || null);
       await db.anchors.update(editingAnchor.id, {
         name: data.name,
         amount: data.amount,
@@ -409,7 +411,7 @@ export default function BudgetScreen() {
         pillar: data.pillar,
         accountId: data.accountId || null,
         macetaId: data.macetaId || null,
-        tagId: data.tagId || null,
+        tagId: normalizedTagId,
         nextDueDate: data.nextDueDate || null
       });
 
@@ -424,6 +426,11 @@ export default function BudgetScreen() {
         a.status === 'PENDING'
       );
 
+      const childInstances = anchors.filter(a =>
+        a.isTemplate === false &&
+        a.parentAnchorId === editingAnchor.id
+      );
+
       for (const inst of activeInstances) {
         const instDate = inst.nextDueDate instanceof Date ? inst.nextDueDate : new Date(inst.nextDueDate + 'T12:00:00');
         if (instDate >= startOfCurrentMonth && instDate <= endOfCurrentMonth) {
@@ -434,9 +441,19 @@ export default function BudgetScreen() {
             pillar: data.pillar,
             accountId: data.accountId || null,
             macetaId: data.macetaId || null,
-            tagId: data.tagId || null
+            tagId: normalizedTagId
           });
         }
+      }
+
+      for (const inst of childInstances) {
+        await db.anchors.update(inst.id, { tagId: normalizedTagId });
+      }
+
+      const relatedAnchorIds = [editingAnchor.id, ...childInstances.map(inst => inst.id)];
+      const relatedTransactions = await db.transactions.where('anchorId').anyOf(relatedAnchorIds).toArray();
+      for (const tx of relatedTransactions) {
+        if (tx.type === 'OUT') await db.transactions.update(tx.id, { tagId: normalizedTagId });
       }
 
       setShowEditModal(false);
@@ -521,15 +538,19 @@ export default function BudgetScreen() {
         : new Date(src.nextDueDate).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit' }))
       : '--';
     const isMenuOpen = openAnchorMenuId === src.id;
+    const category = getTag(src.tagId, 'EXPENSE');
 
     return (
       <div key={src.id} className="relative py-4 border-b border-[rgba(26,26,26,0.10)]" id={`anchor-row-${src.id}`} style={{ opacity: src.isArchived ? 0.5 : 1 }}>
         <div className="flex items-start justify-between gap-3">
+          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center">
+            <CategoryIcon iconKey={category?.iconKey} size={15} />
+          </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 min-w-0">
               <span className="text-[15px] font-[600] text-noria-text truncate">{src.name}</span>
               <PillarTag pillar={src.pillar} />
-              <CategoryTag name={getTagName(src.tagId)} size="xs" />
+              <CategoryTag name={category?.name} size="xs" />
             </div>
             <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.09em] text-noria-muted leading-relaxed">
               <span>${fmt(src.amount)}</span>
@@ -850,9 +871,12 @@ export default function BudgetScreen() {
 
                       return (
                         <div key={inst.id} className="flex justify-between items-center gap-2 pl-2 py-1 hover:bg-black/5 transition-colors">
-                          <span className={`text-[11px] truncate flex-1 ${isPaid ? 'line-through opacity-40' : ''}`}>
-                            {connector} {inst.name.toUpperCase()}
-                          </span>
+                          <div className={`flex min-w-0 flex-1 items-center gap-2 ${isPaid ? 'line-through opacity-40' : ''}`}>
+                            <CategoryIcon iconKey={getTag(inst.tagId, 'EXPENSE')?.iconKey} size={12} className="shrink-0" />
+                            <span className="text-[11px] truncate">
+                              {connector} {inst.name.toUpperCase()}
+                            </span>
+                          </div>
                           <div className="flex items-center space-x-2 pl-2 shrink-0">
                             <span className="text-[11px]">${fmt(inst.amount)}</span>
                             <span className="text-[8px] font-[700] px-1.5 py-0.5 tracking-wide border border-[#1A1A1A]" style={{ background: statusBg, color: statusTextCol }}>

@@ -1,25 +1,8 @@
 import React from 'react';
-import { Pencil, Trash2, TrendingUp, Briefcase, Monitor, Gift, Store, DollarSign } from 'lucide-react';
+import { Pencil, Trash2, TrendingUp } from 'lucide-react';
+import IncomeTypeIcon, { getIncomeType } from './IncomeTypeIcon.jsx';
 
 const INCOME_COLOR = '#4F8F58';
-
-function SourceIcon({ type }) {
-  const props = { size: 17, strokeWidth: 1.7 };
-  switch (type) {
-    case 'SALARY':
-      return <Briefcase {...props} />;
-    case 'FREELANCE':
-      return <Monitor {...props} />;
-    case 'INVESTMENT':
-      return <TrendingUp {...props} />;
-    case 'GIFT':
-      return <Gift {...props} />;
-    case 'BUSINESS':
-      return <Store {...props} />;
-    default:
-      return <DollarSign {...props} />;
-  }
-}
 
 function sourceTypeLabel(type) {
   switch (type) {
@@ -34,6 +17,7 @@ function sourceTypeLabel(type) {
 
 export default function FuentesIngresoSection({
   incomeSources,
+  incomeTypes = [],
   onEditSource,
   onDeleteSource
 }) {
@@ -48,16 +32,18 @@ export default function FuentesIngresoSection({
         </div>
       ) : (
         <div className="divide-y divide-[rgba(26,26,26,0.14)] animate-fade-in">
-          {incomeSources.map(src => (
+          {incomeSources.map(src => {
+            const incomeType = getIncomeType(incomeTypes, src.incomeTypeId, src.type);
+            return (
             <div key={src.id} className="noria-row py-4" id={`source-row-${src.id}`}>
               <div className="flex items-center space-x-3 min-w-0">
                 <div className="w-9 h-9 flex items-center justify-center shrink-0" style={{ color: 'rgba(26,26,26,0.48)' }}>
-                  <SourceIcon type={src.type} />
+                  <IncomeTypeIcon incomeTypes={incomeTypes} incomeTypeId={src.incomeTypeId} legacyType={src.type} size={17} />
                 </div>
                 <div className="min-w-0">
                   <p className="text-[15px] font-[700] text-noria-text truncate">{src.name}</p>
-                  <p className="font-mono text-[10px] text-noria-muted uppercase tracking-[0.12em] font-[500] mt-0.5">
-                    {sourceTypeLabel(src.type)}
+                  <p className="mt-0.5 font-mono text-[10px] text-noria-muted uppercase tracking-[0.12em] font-[500]">
+                    {incomeType?.name || sourceTypeLabel(src.type)}
                   </p>
                 </div>
               </div>
@@ -71,7 +57,8 @@ export default function FuentesIngresoSection({
                 </button>
               </div>
             </div>
-          ))}
+          );
+          })}
         </div>
       )}
     </div>

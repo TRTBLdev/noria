@@ -2,11 +2,17 @@ import React, { useState } from 'react';
 import { Search, Trash2, Pencil, ArrowDownRight, ArrowUpRight, ArrowLeftRight } from 'lucide-react';
 import PillarTag from './PillarTag.jsx';
 import CategoryTag from './CategoryTag.jsx';
+import CategoryIcon from './CategoryIcon.jsx';
+import CategorySelect from './CategorySelect.jsx';
+import IncomeTypeIcon from './IncomeTypeIcon.jsx';
+import { DateInput, FormActions, FormField, FormSheet, NumberInput, SegmentedChoice, TextInput } from './FormSystem.jsx';
 
 export default function TransactionsSection({
   transactions,
   accounts,
   tags = [],
+  incomeSources = [],
+  incomeTypes = [],
   onDeleteTransaction,
   onUpdateTransaction
 }) {
@@ -40,7 +46,17 @@ export default function TransactionsSection({
   };
 
   const getAccountName = (id) => accounts.find(a => a.id === id)?.name || 'Cuenta desconocida';
-  const getTagName = (id) => tags.find(tag => tag.id === id)?.name || null;
+  const getCategoryKindForTransaction = (tx) => {
+    if (tx.type === 'OUT') return 'EXPENSE';
+    return null;
+  };
+  const getTransactionTag = (tx) => {
+    const expectedKind = getCategoryKindForTransaction(tx);
+    if (!expectedKind) return null;
+    const explicitTagId = tx.tagId;
+    const resolvedTagId = explicitTagId;
+    return tags.find(tag => tag.id === resolvedTagId && (tag.kind || 'EXPENSE') === expectedKind) || null;
+  };
 
   const formatDateLabel = (date) => new Date(date)
     .toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })
@@ -102,7 +118,8 @@ export default function TransactionsSection({
     setEditDesc(tx.description || '');
     setEditAmount(tx.amount.toString());
     setEditPillar(tx.pillar || 'NEED');
-    setEditTagId(tx.tagId ? tx.tagId.toString() : '');
+    const category = getTransactionTag(tx);
+    setEditTagId(category ? category.id.toString() : '');
 
     const d = new Date(tx.date);
     setEditDate(d.toISOString().slice(0, 10));
@@ -117,7 +134,7 @@ export default function TransactionsSection({
       description: editDesc.trim(),
       amount: amt,
       pillar: editingTx.type === 'OUT' ? editPillar : null,
-      tagId: editTagId ? parseInt(editTagId) : null,
+      tagId: getCategoryKindForTransaction(editingTx) && editTagId ? parseInt(editTagId) : null,
       date: new Date(editDate + 'T12:00:00')
     });
     setEditingTx(null);
@@ -127,16 +144,20 @@ export default function TransactionsSection({
     const isIncome = t.type === 'IN' || t.type === 'TRANSFER_IN';
     const isTransfer = t.type.startsWith('TRANSFER_');
     const accountName = getAccountName(t.accountId);
+    const category = getTransactionTag(t);
+    const source = t.incomeSourceId ? incomeSources.find(item => item.id === t.incomeSourceId) : null;
     const amountSign = isIncome ? '+' : '-';
     const amountColor = isTransfer ? '#1A1A1A' : isIncome ? '#4F8F58' : '#1A1A1A';
 
     return (
       <div key={t.id} className="py-3 flex items-center gap-3">
         <div className="pt-0.5 flex-shrink-0">
-          {isTransfer ? (
+          {category ? (
+            <CategoryIcon iconKey={category.iconKey} size={14} />
+          ) : isTransfer ? (
             <ArrowLeftRight size={14} className="text-noria-muted" strokeWidth={1.6} />
           ) : isIncome ? (
-            <ArrowUpRight size={14} style={{ color: '#4F8F58' }} strokeWidth={1.6} />
+            <IncomeTypeIcon incomeTypes={incomeTypes} incomeTypeId={source?.incomeTypeId} legacyType={source?.type} size={14} />
           ) : (
             <ArrowDownRight size={14} style={{ color: '#1A1A1A' }} strokeWidth={1.6} />
           )}
@@ -148,7 +169,7 @@ export default function TransactionsSection({
               {t.description || (isIncome ? 'Ingreso' : 'Gasto')}
             </span>
             <PillarTag pillar={t.pillar} size="xs" />
-            <CategoryTag name={getTagName(t.tagId)} size="xs" />
+            <CategoryTag name={category?.name} size="xs" />
           </div>
           <p className="mt-0.5 text-[10px] text-noria-muted uppercase tracking-[0.1em] font-mono truncate">
             {accountName}
@@ -409,20 +430,14 @@ export default function TransactionsSection({
                 </div>
               )}
 
-              {!editingTx.type.startsWith('TRANSFER_') && (
-                <div>
-                  <label className="muji-header block mb-1">Categoria</label>
-                  <select
-                    value={editTagId}
-                    onChange={e => setEditTagId(e.target.value)}
-                    className="muji-input"
-                  >
-                    <option value="">Sin categoria</option>
-                    {tags.map(tag => (
-                      <option key={tag.id} value={tag.id}>{tag.name}</option>
-                    ))}
-                  </select>
-                </div>
+              {editingTx.type === 'OUT' && (
+                <CategorySelect
+                  id="edit-transaction-category"
+                  value={editTagId}
+                  onChange={setEditTagId}
+                  tags={tags}
+                  kind={getCategoryKindForTransaction(editingTx)}
+                />
               )}
 
               <button

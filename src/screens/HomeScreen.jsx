@@ -7,32 +7,10 @@ import HomeostasisBar from '../components/HomeostasisBar.jsx';
 import FAB from '../components/FAB.jsx';
 import PillarTag from '../components/PillarTag.jsx';
 import CategoryTag from '../components/CategoryTag.jsx';
-import { Plus, Check, ChevronDown, ChevronUp, Home, Zap, Monitor } from 'lucide-react';
-
-// Semantic icon map for anchor types
-const ANCHOR_ICONS = {
-  Alquiler: <Home size={16} strokeWidth={1.5} />,
-  Luz: <Zap size={16} strokeWidth={1.5} />,
-  Internet: <Monitor size={16} strokeWidth={1.5} />,
-  default: null, // Will show a simple circle marker
-};
-
-function AnchorIcon({ name }) {
-  const icon = ANCHOR_ICONS[name] || null;
-  if (icon) return (
-    <div className="w-9 h-9 flex items-center justify-center"
-      style={{ background: 'transparent', color: 'rgba(26,26,26,0.55)' }}>
-      {icon}
-    </div>
-  );
-  // Fallback: first letter
-  return (
-    <div className="w-9 h-9 flex items-center justify-center"
-      style={{ background: 'transparent', color: 'rgba(26,26,26,0.55)' }}>
-      <span className="text-[13px] font-mono font-[700]">{name?.[0]?.toUpperCase() || '?'}</span>
-    </div>
-  );
-}
+import CategorySelect from '../components/CategorySelect.jsx';
+import CategoryIcon from '../components/CategoryIcon.jsx';
+import IncomeTypeIcon, { getIncomeType } from '../components/IncomeTypeIcon.jsx';
+import { Plus, Check, ChevronDown, ChevronUp } from 'lucide-react';
 
 import { useNavigate } from 'react-router-dom';
 
@@ -72,6 +50,7 @@ export default function HomeScreen() {
   const anchors = useLiveQuery(() => db.anchors.toArray()) || [];
   const transactions = useLiveQuery(() => db.transactions.toArray()) || [];
   const incomeSources = useLiveQuery(() => db.income_sources.toArray()) || [];
+  const incomeTypes = useLiveQuery(() => db.income_types.orderBy('name').toArray()) || [];
   const macetas = useLiveQuery(() => db.macetas.toArray()) || [];
   const macetaAllocations = useLiveQuery(() => db.maceta_allocations.toArray()) || [];
   const tags = useLiveQuery(() => db.tags.toArray()) || [];
@@ -340,8 +319,8 @@ export default function HomeScreen() {
   const pendingAnchors = displayedAnchors.filter(a => a.status !== 'PAID').slice(0, 3);
   const paidAnchors = displayedAnchors.filter(a => a.status === 'PAID').slice(0, 3);
 
-  const getSourceName = (id) => incomeSources.find(s => s.id === id)?.name || null;
-  const getTagName = (id) => tags.find(t => t.id === id)?.name || null;
+  const getSource = (id) => incomeSources.find(s => s.id === id) || null;
+  const getTag = (id, kind = 'EXPENSE') => tags.find(t => t.id === id && (t.kind || 'EXPENSE') === kind) || null;
 
   const handlePayAnchor = async (anchor) => {
     if (anchor.pillar === 'SAVE' || anchor.type === 'SAVE') {
@@ -783,10 +762,14 @@ export default function HomeScreen() {
           ) : (
             <div>
               {/* Pending */}
-              {pendingAnchors.map(anchor => (
+              {pendingAnchors.map(anchor => {
+                const category = getTag(anchor.tagId, 'EXPENSE');
+                return (
                 <div key={anchor.id} className="noria-row" id={`anchor-item-${anchor.id}`}>
                   <div className="flex items-center space-x-3">
-                    <AnchorIcon name={anchor.name} />
+                    <div className="w-9 h-9 flex items-center justify-center shrink-0">
+                      <CategoryIcon iconKey={category?.iconKey} size={16} />
+                    </div>
                     <div>
                       <p className="text-[15px] font-[400] text-noria-text">
                         {anchor.name}
@@ -817,7 +800,7 @@ export default function HomeScreen() {
                         ) : (
                           <PillarTag pillar={anchor.pillar} size="xs" />
                         )}
-                        <CategoryTag name={getTagName(anchor.tagId)} size="xs" />
+                        <CategoryTag name={category?.name} size="xs" />
                       </div>
                     </div>
                   </div>
@@ -836,7 +819,8 @@ export default function HomeScreen() {
                     </button>
                   </div>
                 </div>
-              ))}
+              );
+              })}
 
               {/* Paid — muted with strikethrough */}
               {paidAnchors.map(anchor => (
@@ -892,12 +876,21 @@ export default function HomeScreen() {
                 </p>
               ) : (
                 thisMonthIncomes.map(inc => {
-                  const srcName = inc.incomeSourceId ? getSourceName(inc.incomeSourceId) : null;
+                  const source = inc.incomeSourceId ? getSource(inc.incomeSourceId) : null;
+                  const incomeType = source ? getIncomeType(incomeTypes, source.incomeTypeId, source.type) : null;
                   return (
                     <div key={inc.id} className="noria-row">
-                      <div>
-                        <p className="text-[15px] font-[500] text-noria-text">{inc.description || 'Ingreso'}</p>
-                        {srcName && <p className="label-section mt-0.5">{srcName}</p>}
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="w-8 h-8 flex items-center justify-center shrink-0">
+                          <IncomeTypeIcon incomeTypes={incomeTypes} incomeTypeId={source?.incomeTypeId} legacyType={source?.type} size={15} />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-[15px] font-[500] text-noria-text truncate">{inc.description || 'Ingreso'}</p>
+                          <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                            {source?.name && <p className="label-section">{source.name}</p>}
+                            {incomeType?.name && <p className="label-section">{incomeType.name}</p>}
+                          </div>
+                        </div>
                       </div>
                       <p className="text-[15px] font-mono font-[700]" style={{ color: '#647C78' }}>
                         +${fmt(inc.amount)}
@@ -923,8 +916,8 @@ export default function HomeScreen() {
       {showAddAnchorModal && (
         <>
           <div className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40" onClick={() => setShowAddAnchorModal(false)} />
-          <div className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto animate-slide-up"
-            style={{ background: '#F5F2ED', borderRadius: '20px 20px 0 0', boxShadow: '0 -8px 40px rgba(0,0,0,0.08)' }}>
+          <div className="fixed bottom-0 left-0 right-0 z-50 max-h-[88vh] max-w-md mx-auto animate-slide-up overflow-y-auto border-t-2 border-l-2 border-r-2 border-[#1A1A1A]"
+            style={{ background: '#F5F2ED' }}>
             <form onSubmit={handleCreateAnchor} className="px-6 pt-4 pb-10 space-y-4" id="add-anchor-form">
               {/* Handle */}
               <div className="flex justify-center mb-2">
@@ -983,20 +976,14 @@ export default function HomeScreen() {
                 </div>
               </div>
 
-              <div>
-                <label className="muji-header block mb-1">Categoria</label>
-                <select
-                  id="anchor-category"
-                  value={anchorTagId}
-                  onChange={e => setAnchorTagId(e.target.value)}
-                  className="muji-input"
-                >
-                  <option value="">Sin categoria</option>
-                  {tags.map(tag => (
-                    <option key={tag.id} value={tag.id}>{tag.name}</option>
-                  ))}
-                </select>
-              </div>
+              <CategorySelect
+                id="anchor-category"
+                value={anchorTagId}
+                onChange={setAnchorTagId}
+                tags={tags}
+                kind="EXPENSE"
+                className="max-w-[320px]"
+              />
 
               {anchorError && <p className="text-[12px] font-[500]" style={{ color: '#C58A14' }}>{anchorError}</p>}
 

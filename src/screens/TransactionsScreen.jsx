@@ -4,11 +4,14 @@ import { db } from '../db/db.js';
 import Header from '../components/Header.jsx';
 import BottomNav from '../components/BottomNav.jsx';
 import TransactionsSection from '../components/TransactionsSection.jsx';
+import FAB from '../components/FAB.jsx';
 
 export default function TransactionsScreen() {
   const accounts = useLiveQuery(() => db.accounts.toArray()) || [];
   const transactions = useLiveQuery(() => db.transactions.toArray()) || [];
   const tags = useLiveQuery(() => db.tags.toArray()) || [];
+  const incomeSources = useLiveQuery(() => db.income_sources.toArray()) || [];
+  const incomeTypes = useLiveQuery(() => db.income_types.toArray()) || [];
 
   const handleDeleteTransaction = async (tx) => {
     if (!confirm('Seguro que deseas eliminar esta transaccion permanentemente? Se revertira su impacto en los balances.')) return;
@@ -79,12 +82,15 @@ export default function TransactionsScreen() {
             transactions={transactions}
             accounts={accounts}
             tags={tags}
+            incomeSources={incomeSources}
+            incomeTypes={incomeTypes}
             onDeleteTransaction={handleDeleteTransaction}
             onUpdateTransaction={handleUpdateTransaction}
           />
         </section>
       </div>
       <BottomNav />
+      <FAB />
     </div>
   );
 }

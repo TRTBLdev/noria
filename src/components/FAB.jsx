@@ -2,13 +2,16 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
 import { Plus, X, ArrowDownLeft, ArrowUpRight, ArrowLeftRight } from 'lucide-react';
+import CategorySelect from './CategorySelect.jsx';
+import IncomeTypeSelect from './IncomeTypeSelect.jsx';
+import { getIncomeType } from './IncomeTypeIcon.jsx';
 
 // Radial menu item positions (relative to FAB center)
 // For 3 items: Gasto (left), Transfer (middle), Ingreso (right)
 const RADIAL_POSITIONS = [
-  { dx: -110, dy: 0,   delay: '0ms' },   // Gasto — left
-  { dx: -80,  dy: -60, delay: '40ms' },  // Transferencia — up-left
-  { dx: 0,    dy: -90, delay: '80ms' },  // Ingreso — up
+  { dx: -110, dy: 0,   delay: '0ms' },   // Gasto - left
+  { dx: -80,  dy: -60, delay: '40ms' },  // Transferencia - up-left
+  { dx: 0,    dy: -90, delay: '80ms' },  // Ingreso - up
 ];
 
 const fmt = (n, d = 2) => {
@@ -26,6 +29,7 @@ export default function FAB() {
   const activeAccounts = accounts.filter(a => !a.isArchived);
   const tags          = useLiveQuery(() => db.tags.toArray())           || [];
   const incomeSources = useLiveQuery(() => db.income_sources.toArray()) || [];
+  const incomeTypes   = useLiveQuery(() => db.income_types.orderBy('name').toArray()) || [];
   const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
   const baseCurrency  = baseCurrencyObj?.value || 'USD';
 
@@ -40,7 +44,7 @@ export default function FAB() {
   const [description, setDescription] = useState('');
   const [incomeSourceId, setIncomeSourceId] = useState('');
   const [newSourceName, setNewSourceName]   = useState('');
-  const [newSourceType, setNewSourceType]   = useState('SALARY');
+  const [newSourceIncomeTypeId, setNewSourceIncomeTypeId] = useState('');
   const [error, setError]   = useState('');
   const [success, setSuccess] = useState(false);
 
@@ -58,7 +62,8 @@ export default function FAB() {
       }
     }
     if (incomeSources.length > 0 && !incomeSourceId) setIncomeSourceId(incomeSources[0].id.toString());
-  }, [activeAccounts, incomeSources, accountId, toAccountId]);
+    if (incomeTypes.length > 0 && !newSourceIncomeTypeId) setNewSourceIncomeTypeId(incomeTypes[0].id.toString());
+  }, [activeAccounts, incomeSources, incomeTypes, accountId, toAccountId, newSourceIncomeTypeId]);
 
   // Close bottom sheet on outside click
   useEffect(() => {
@@ -79,7 +84,7 @@ export default function FAB() {
     setExchangeRate('');
     setDescription('');
     setNewSourceName('');
-    setNewSourceType('SALARY');
+    setNewSourceIncomeTypeId('');
     setTagId('');
     setError('');
     setSuccess(false);
@@ -91,6 +96,7 @@ export default function FAB() {
       }
     }
     if (incomeSources.length > 0) setIncomeSourceId(incomeSources[0].id.toString());
+    if (incomeTypes.length > 0) setNewSourceIncomeTypeId(incomeTypes[0].id.toString());
     setDate(new Date().toISOString().slice(0, 10));
     setPillar('NEED');
   };
@@ -236,9 +242,16 @@ export default function FAB() {
         if (activeForm === 'INGRESO' && (incomeSourceId === 'new' || newSourceName.trim())) {
           const nameToUse = newSourceName.trim();
           const existing = incomeSources.find(s => s.name.toLowerCase() === nameToUse.toLowerCase());
+          const selectedIncomeType = incomeTypes.find(type => type.id.toString() === newSourceIncomeTypeId) || incomeTypes[0] || null;
           resolvedSourceId = existing
             ? existing.id
-            : await db.income_sources.add({ name: nameToUse, type: newSourceType, isActive: true });
+            : await db.income_sources.add({
+                name: nameToUse,
+                type: selectedIncomeType?.legacyKey || 'OTHER',
+                incomeTypeId: selectedIncomeType?.id || null,
+                tagId: null,
+                isActive: true
+              });
         }
 
         await db.transactions.add({
@@ -294,7 +307,7 @@ export default function FAB() {
 
   return (
     <>
-      {/* ── FAB + Radial Menu ── */}
+      {/* -- FAB + Radial Menu -- */}
       <div className="fixed bottom-20 right-6 z-40" id="fab-container">
 
         {/* Radial items */}
@@ -347,7 +360,7 @@ export default function FAB() {
         </button>
       </div>
 
-      {/* ── Dim overlay when radial is open (not blur) ── */}
+      {/* -- Dim overlay when radial is open (not blur) -- */}
       {isOpen && (
         <div
           className="fixed inset-0 z-30"
@@ -356,7 +369,7 @@ export default function FAB() {
         />
       )}
 
-      {/* ── Bottom Sheet Form ── */}
+      {/* -- Bottom Sheet Form -- */}
       {activeForm && (
         <>
           <div
@@ -366,7 +379,7 @@ export default function FAB() {
           />
           <div
             ref={sheetRef}
-            className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto bg-[#F5F2ED] border-t border-[#1A1A1A] animate-slide-up"
+            className="fixed bottom-0 left-0 right-0 z-50 max-h-[88vh] max-w-md mx-auto overflow-y-auto bg-[#F5F2ED] border-t-2 border-l-2 border-r-2 border-[#1A1A1A] animate-slide-up"
           >
             <form onSubmit={handleSubmit} id="fab-transaction-form">
               {/* Handle bar */}
@@ -491,12 +504,8 @@ export default function FAB() {
                           onChange={e => { setIncomeSourceId(e.target.value); if (e.target.value === 'new') setNewSourceName(''); }}
                           className="muji-input">
                           {incomeSources.map(s => {
-                            const emoji = s.type === 'SALARY' ? '💼' :
-                                          s.type === 'FREELANCE' ? '💻' :
-                                          s.type === 'INVESTMENT' ? '📈' :
-                                          s.type === 'GIFT' ? '🎁' :
-                                          s.type === 'BUSINESS' ? '🏪' : '💰';
-                            return <option key={s.id} value={s.id}>{emoji} {s.name}</option>;
+                            const incomeType = getIncomeType(incomeTypes, s.incomeTypeId, s.type);
+                            return <option key={s.id} value={s.id}>{s.name}{incomeType?.name ? ` · ${incomeType.name}` : ''}</option>;
                           })}
                           <option value="new">+ Nueva fuente...</option>
                         </select>
@@ -510,19 +519,12 @@ export default function FAB() {
                               placeholder="Ej. Estudio CKM Visualización"
                               className="muji-input" required />
                           </div>
-                          <div>
-                            <label className="muji-header block mb-1">Tipo de Ingreso</label>
-                            <select id="tx-new-source-type" value={newSourceType}
-                              onChange={e => setNewSourceType(e.target.value)}
-                              className="muji-input" required>
-                              <option value="SALARY">Salario / Empleo</option>
-                              <option value="FREELANCE">💻 Freelance / Servicios</option>
-                              <option value="INVESTMENT">📈 Inversiones / Dividendos</option>
-                              <option value="GIFT">🎁 Regalos / Bonos</option>
-                              <option value="BUSINESS">🏪 Ventas / Negocio</option>
-                              <option value="OTHER">Otro</option>
-                            </select>
-                          </div>
+                          <IncomeTypeSelect
+                            id="tx-new-source-type"
+                            value={newSourceIncomeTypeId || incomeTypes[0]?.id?.toString() || ''}
+                            onChange={setNewSourceIncomeTypeId}
+                            incomeTypes={incomeTypes}
+                          />
                         </div>
                       )}
                     </div>
@@ -537,7 +539,7 @@ export default function FAB() {
                           ['WANT','Deseo','#3F7F9C','rgba(63,127,156,0.12)'],
                           ['SAVE','Ahorro','#C58A14','rgba(197,138,20,0.12)']].map(([val, label, col, bg]) => (
                           <button key={val} type="button" onClick={() => setPillar(val)}
-                            className="flex-1 py-1.5 text-[10px] font-[500] uppercase tracking-wider rounded-pill border transition-all"
+                            className="flex-1 py-2.5 text-[10px] font-mono font-[700] uppercase tracking-[0.12em] border transition-all"
                             style={{
                               borderColor: pillar === val ? col : 'rgba(26,26,26,0.10)',
                               background:  pillar === val ? bg  : 'transparent',
@@ -551,20 +553,14 @@ export default function FAB() {
                   )}
 
                   {activeForm === 'GASTO' && (
-                    <div>
-                      <label className="muji-header block mb-1">Categoria</label>
-                      <select
-                        id="tx-category"
-                        value={tagId}
-                        onChange={e => setTagId(e.target.value)}
-                        className="muji-input"
-                      >
-                        <option value="">Sin categoria</option>
-                        {tags.map(tag => (
-                          <option key={tag.id} value={tag.id}>{tag.name}</option>
-                        ))}
-                      </select>
-                    </div>
+                    <CategorySelect
+                      id="tx-category"
+                      value={tagId}
+                      onChange={setTagId}
+                      tags={tags}
+                      kind="EXPENSE"
+                      className="max-w-[320px]"
+                    />
                   )}
 
                   {/* Account + Date row */}

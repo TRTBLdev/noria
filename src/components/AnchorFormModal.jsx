@@ -1,11 +1,21 @@
-import React, { useState, useEffect } from 'react';
-import { X } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import CategorySelect from './CategorySelect.jsx';
+import {
+  DateInput,
+  FormActions,
+  FormField,
+  FormSheet,
+  NumberInput,
+  SegmentedChoice,
+  SelectInput,
+  TextInput
+} from './FormSystem.jsx';
 
 export default function AnchorFormModal({
   isOpen,
   onClose,
   onSubmit,
-  anchor = null, // null significa modo creación
+  anchor = null,
   activeAccounts = [],
   institutions = [],
   macetas = [],
@@ -19,39 +29,35 @@ export default function AnchorFormModal({
   const [accountId, setAccountId] = useState('');
   const [macetaId, setMacetaId] = useState('');
   const [tagId, setTagId] = useState('');
-  const [pillar, setPillar] = useState('NEED');
+  const [pillar, setPillar] = useState(defaultPillar);
   const [frequencyInterval, setFrequencyInterval] = useState(1);
   const [frequencyUnit, setFrequencyUnit] = useState('MONTHS');
   const [error, setError] = useState('');
 
-  // Sincronizar el formulario con el anchor provisto (si es edición)
   useEffect(() => {
+    if (!isOpen) return;
+
     if (anchor) {
       setName(anchor.name || '');
       setAmount(anchor.amount || '');
-      // Formatear fecha para input type="date" (YYYY-MM-DD)
-      if (anchor.nextDueDate) {
-        if (typeof anchor.nextDueDate === 'string') {
-          setDueDate(anchor.nextDueDate.slice(0, 10));
-        } else {
-          const d = anchor.nextDueDate instanceof Date ? anchor.nextDueDate : new Date(anchor.nextDueDate);
-          if (!isNaN(d.getTime())) {
-            setDueDate(d.toISOString().slice(0, 10));
-          } else {
-            setDueDate('');
-          }
-        }
-      } else {
-        setDueDate('');
-      }
       setAccountId(anchor.accountId ? anchor.accountId.toString() : '');
       setMacetaId(anchor.macetaId ? anchor.macetaId.toString() : '');
       setTagId(anchor.tagId ? anchor.tagId.toString() : '');
       setPillar(allowedPillars.includes(anchor.pillar) ? anchor.pillar : defaultPillar);
       setFrequencyInterval(anchor.frequencyInterval || 1);
       setFrequencyUnit(anchor.frequencyUnit || 'MONTHS');
+
+      if (anchor.nextDueDate) {
+        if (typeof anchor.nextDueDate === 'string') {
+          setDueDate(anchor.nextDueDate.slice(0, 10));
+        } else {
+          const dateValue = anchor.nextDueDate instanceof Date ? anchor.nextDueDate : new Date(anchor.nextDueDate);
+          setDueDate(!isNaN(dateValue.getTime()) ? dateValue.toISOString().slice(0, 10) : '');
+        }
+      } else {
+        setDueDate('');
+      }
     } else {
-      // Valores por defecto para creación
       setName('');
       setAmount('');
       setDueDate(new Date().toISOString().slice(0, 10));
@@ -62,10 +68,19 @@ export default function AnchorFormModal({
       setFrequencyInterval(1);
       setFrequencyUnit('MONTHS');
     }
+
     setError('');
-  }, [anchor, isOpen]);
+  }, [anchor, allowedPillars, defaultPillar, isOpen]);
 
   if (!isOpen) return null;
+
+  const isEdit = !!anchor;
+  const pillarOptions = [
+    { value: 'NEED', label: 'Necesidad', color: '#4F8F58' },
+    { value: 'WANT', label: 'Deseo', color: '#3F7F9C' },
+    { value: 'SAVE', label: 'Ahorro', color: '#C58A14' }
+  ].filter(option => allowedPillars.includes(option.value));
+  const disabledPillars = isEdit && anchor?.pillar === 'SAVE' ? ['NEED', 'WANT'] : [];
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -73,242 +88,141 @@ export default function AnchorFormModal({
 
     const parsedAmount = parseFloat(amount);
     if (isNaN(parsedAmount) || parsedAmount <= 0) {
-      setError('El monto debe ser un número mayor a cero.');
+      setError('El monto debe ser mayor a cero.');
       return;
     }
 
-    const intervalVal = parseInt(frequencyInterval);
+    const intervalVal = parseInt(frequencyInterval, 10);
     if (isNaN(intervalVal) || intervalVal <= 0) {
-      setError('El intervalo de frecuencia debe ser al menos 1.');
+      setError('El intervalo debe ser al menos 1.');
       return;
     }
 
     if (!allowedPillars.includes(pillar)) {
-      setError('Este tipo de programacion no esta disponible en esta seccion.');
+      setError('Este tipo de programacion no esta disponible aqui.');
       return;
     }
 
     if (pillar !== 'SAVE' && !accountId) {
-      setError('Debes seleccionar una cuenta asociada de débito para gastos programados.');
+      setError('Selecciona una cuenta de debito.');
       return;
     }
 
     if (pillar === 'SAVE' && !macetaId) {
-      setError('Debes vincular este ahorro programado a una de tus Metas.');
+      setError('Selecciona una meta de ahorro.');
       return;
     }
 
-    const data = {
+    onSubmit({
       name: name.trim(),
       amount: parsedAmount,
       nextDueDate: dueDate || null,
       pillar,
-      accountId: pillar !== 'SAVE' ? parseInt(accountId) : null,
-      macetaId: pillar === 'SAVE' ? parseInt(macetaId) : null,
-      tagId: pillar !== 'SAVE' && tagId ? parseInt(tagId) : null,
+      accountId: pillar !== 'SAVE' ? parseInt(accountId, 10) : null,
+      macetaId: pillar === 'SAVE' ? parseInt(macetaId, 10) : null,
+      tagId: pillar !== 'SAVE' && tagId ? parseInt(tagId, 10) : null,
       frequencyInterval: intervalVal,
       frequencyUnit,
-    };
-
-    onSubmit(data);
+    });
   };
 
-  const isEdit = !!anchor;
-  const pillarOptions = [
-    ['NEED', 'N', '#5C7A52'],
-    ['WANT', 'W', '#4A6475'],
-    ['SAVE', 'S', '#B8860B']
-  ].filter(([val]) => allowedPillars.includes(val));
-
   return (
-    <>
-      <div className="fixed inset-0 bg-[rgba(26,26,26,0.15)] z-40" onClick={onClose} />
-      <div className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto animate-slide-up border-t-2 border-l-2 border-r-2 border-[#1A1A1A]"
-        style={{ background: '#F5F2ED' }}>
-        <form onSubmit={handleSubmit} className="px-6 pt-6 pb-10 space-y-4" id="anchor-form">
+    <FormSheet title={isEdit ? 'Editar Programacion' : 'Nueva Programacion'} onClose={onClose}>
+      <form onSubmit={handleSubmit} className="space-y-4" id="anchor-form">
+        <FormField label="Nombre" htmlFor="anchor-name">
+          <TextInput
+            id="anchor-name"
+            value={name}
+            onChange={e => setName(e.target.value)}
+            placeholder="Ej. Alquiler, Aporte Fondo Emergencia, Netflix"
+            required
+            autoFocus={!isEdit}
+          />
+        </FormField>
 
-          <div className="flex justify-between items-center">
-            <h4 className="text-[16px] font-[400] text-noria-text">
-              {isEdit ? 'Editar Programación' : 'Nueva Programación'}
-            </h4>
-            <button type="button" onClick={onClose}
-              className="focus:outline-none p-1 text-noria-muted hover:text-noria-text transition-colors">
-              <X size={16} strokeWidth={1.5} />
-            </button>
-          </div>
-
-          {/* Nombre */}
-          <div>
-            <label className="muji-header block mb-1">Nombre</label>
-            <input
-              type="text"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="Ej. Alquiler, Aporte Fondo Emergencia, Netflix"
-              className="muji-input"
+        <div className="grid grid-cols-2 gap-4">
+          <FormField label="Monto (USD)" htmlFor="anchor-amount">
+            <NumberInput
+              id="anchor-amount"
+              step="0.01"
+              inputMode="decimal"
+              value={amount}
+              onChange={e => setAmount(e.target.value)}
+              placeholder="0.00"
               required
-              autoFocus={!isEdit}
             />
-          </div>
+          </FormField>
+          <FormField label="Fecha de inicio/estimada" htmlFor="anchor-date">
+            <DateInput id="anchor-date" value={dueDate} onChange={e => setDueDate(e.target.value)} />
+          </FormField>
+        </div>
 
-          {/* Monto y Fecha */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="muji-header block mb-1">Monto (USD)</label>
-              <input
-                type="number"
-                step="0.01"
-                inputMode="decimal"
-                value={amount}
-                onChange={e => setAmount(e.target.value)}
-                placeholder="0.00"
-                className="muji-input"
-                required
-              />
-            </div>
-            <div>
-              <label className="muji-header block mb-1">Fecha de inicio/Estimada</label>
-              <input
-                type="date"
-                value={dueDate}
-                onChange={e => setDueDate(e.target.value)}
-                className="muji-input"
-              />
-            </div>
-          </div>
+        <SegmentedChoice
+          label="Pilar"
+          value={pillar}
+          onChange={setPillar}
+          options={pillarOptions}
+          disabledValues={disabledPillars}
+        />
 
-          {/* Frecuencia Flexible */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="muji-header block mb-1">Repetir cada</label>
-              <input
-                type="number"
-                min="1"
-                step="1"
-                value={frequencyInterval}
-                onChange={e => setFrequencyInterval(e.target.value)}
-                className="muji-input"
-                required
-              />
-            </div>
-            <div>
-              <label className="muji-header block mb-1">Unidad</label>
-              <select
-                value={frequencyUnit}
-                onChange={e => setFrequencyUnit(e.target.value)}
-                className="muji-input"
-                required
-              >
-                <option value="DAYS">Días</option>
-                <option value="WEEKS">Semanas</option>
-                <option value="MONTHS">Meses</option>
-                <option value="YEARS">Años</option>
-              </select>
-            </div>
-          </div>
+        {pillar !== 'SAVE' && (
+          <CategorySelect
+            id="anchor-form-category"
+            value={tagId}
+            onChange={setTagId}
+            tags={tags}
+            kind="EXPENSE"
+            className="max-w-[320px]"
+          />
+        )}
 
-          {/* Pilar y Condicional */}
-          <div className="grid grid-cols-2 gap-4">
-            {/* Pilar */}
-            <div>
-              <label className="muji-header block mb-2">Pilar</label>
-              <div className="flex space-x-1">
-                {pillarOptions.map(([val, short, col]) => {
-                  const isSelected = pillar === val;
-                  // Si estamos editando y el anchor es de tipo SAVE, deshabilitamos cambiar a otros pilares
-                  // para evitar desastres y pérdida de consistencia con las macetas
-                  const disabled = isEdit && anchor?.pillar === 'SAVE' && val !== 'SAVE';
+        {pillar === 'SAVE' ? (
+          <FormField label="Vincular a meta" htmlFor="anchor-maceta">
+            <SelectInput id="anchor-maceta" value={macetaId} onChange={e => setMacetaId(e.target.value)} required>
+              <option value="" disabled>Selecciona Meta...</option>
+              {macetas.map(maceta => (
+                <option key={maceta.id} value={maceta.id}>{maceta.name}</option>
+              ))}
+            </SelectInput>
+          </FormField>
+        ) : (
+          <FormField label="Cuenta de debito" htmlFor="anchor-account">
+            <SelectInput id="anchor-account" value={accountId} onChange={e => setAccountId(e.target.value)} required>
+              <option value="" disabled>Selecciona Cuenta...</option>
+              {activeAccounts.map(account => {
+                const inst = institutions.find(item => item.id === account.institutionId);
+                const label = inst ? `${inst.name} - ${account.name} (${account.type})` : `${account.name} (${account.type})`;
+                return <option key={account.id} value={account.id}>{label}</option>;
+              })}
+            </SelectInput>
+          </FormField>
+        )}
 
-                  return (
-                    <button
-                      key={val}
-                      type="button"
-                      onClick={() => setPillar(val)}
-                      disabled={disabled}
-                      className="flex-1 py-1 text-[10px] font-[500] uppercase rounded border transition-all disabled:opacity-30"
-                      style={{
-                        borderColor: isSelected ? col : 'rgba(26,26,26,0.10)',
-                        color: isSelected ? col : 'rgba(26,26,26,0.35)',
-                        background: isSelected ? 'rgba(26,26,26,0.02)' : 'transparent',
-                      }}
-                    >
-                      {short}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+        <div className="grid grid-cols-2 gap-4">
+          <FormField label="Repetir cada" htmlFor="anchor-frequency-interval">
+            <NumberInput
+              id="anchor-frequency-interval"
+              min="1"
+              step="1"
+              value={frequencyInterval}
+              onChange={e => setFrequencyInterval(e.target.value)}
+              required
+            />
+          </FormField>
+          <FormField label="Unidad" htmlFor="anchor-frequency-unit">
+            <SelectInput id="anchor-frequency-unit" value={frequencyUnit} onChange={e => setFrequencyUnit(e.target.value)} required>
+              <option value="DAYS">Dias</option>
+              <option value="WEEKS">Semanas</option>
+              <option value="MONTHS">Meses</option>
+              <option value="YEARS">Anos</option>
+            </SelectInput>
+          </FormField>
+        </div>
 
-            {/* Cuenta Asociada o Meta Asociada según Pilar */}
-            <div>
-              {pillar === 'SAVE' ? (
-                <>
-                  <label className="muji-header block mb-1">Vincular a Meta</label>
-                  <select
-                    value={macetaId}
-                    onChange={e => setMacetaId(e.target.value)}
-                    className="muji-input animate-fade-in"
-                    required
-                  >
-                    <option value="" disabled>Selecciona Meta...</option>
-                    {macetas.map(m => (
-                      <option key={m.id} value={m.id}>
-                        🎯 {m.name}
-                      </option>
-                    ))}
-                  </select>
-                </>
-              ) : (
-                <>
-                  <label className="muji-header block mb-1">Cuenta de Débito</label>
-                  <select
-                    value={accountId}
-                    onChange={e => setAccountId(e.target.value)}
-                    className="muji-input animate-fade-in"
-                    required
-                  >
-                    <option value="" disabled>Selecciona Cuenta...</option>
-                    {activeAccounts.map(acc => {
-                      const inst = institutions.find(i => i.id === acc.institutionId);
-                      const label = inst ? `${inst.name} · ${acc.name} (${acc.type})` : `${acc.name} (${acc.type})`;
-                      return <option key={acc.id} value={acc.id}>{label}</option>;
-                    })}
-                  </select>
-                </>
-              )}
-            </div>
-          </div>
+        {error && <p className="text-[12px] font-[500] text-[#9F2F2D]">{error}</p>}
 
-          {pillar !== 'SAVE' && (
-            <div>
-              <label className="muji-header block mb-1">Categoria</label>
-              <select
-                value={tagId}
-                onChange={e => setTagId(e.target.value)}
-                className="muji-input"
-              >
-                <option value="">Sin categoria</option>
-                {tags.map(tag => (
-                  <option key={tag.id} value={tag.id}>{tag.name}</option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {error && (
-            <p className="text-[12px] font-[500] text-center" style={{ color: '#B8860B' }}>
-              {error}
-            </p>
-          )}
-
-          <button
-            type="submit"
-            className="brut-btn w-full py-3.5 mt-2"
-          >
-            {isEdit ? 'Guardar Cambios' : 'Confirmar Programación'}
-          </button>
-        </form>
-      </div>
-    </>
+        <FormActions primaryLabel={isEdit ? 'Guardar cambios' : 'Confirmar programacion'} />
+      </form>
+    </FormSheet>
   );
 }

@@ -2,6 +2,15 @@ import Dexie from 'dexie';
 
 export const db = new Dexie('NoriaDatabase');
 
+export const DEFAULT_INCOME_TYPES = [
+  { name: 'Salario / Empleo', iconKey: 'work', isDefault: true, legacyKey: 'SALARY' },
+  { name: 'Freelance / Servicios', iconKey: 'freelance', isDefault: true, legacyKey: 'FREELANCE' },
+  { name: 'Inversiones / Dividendos', iconKey: 'investment', isDefault: true, legacyKey: 'INVESTMENT' },
+  { name: 'Regalos / Bonos', iconKey: 'gift', isDefault: true, legacyKey: 'GIFT' },
+  { name: 'Ventas / Negocio', iconKey: 'business', isDefault: true, legacyKey: 'BUSINESS' },
+  { name: 'Otro', iconKey: 'money', isDefault: true, legacyKey: 'OTHER' }
+];
+
 db.version(1).stores({
   institutions: '++id, name, type, country',
   accounts: '++id, institutionId, name, type, currency, balance',
@@ -27,21 +36,63 @@ db.version(3).stores({
   anchors: '++id, name, type, amount, currency, accountId, nextDueDate, status, pillar, tagId',
 });
 
+db.version(4).stores({
+  tags: '++id, name, pillar, iconKey',
+  income_sources: '++id, name, type, isActive, tagId',
+});
+
+db.version(5).stores({
+  tags: '++id, name, pillar, iconKey, kind',
+}).upgrade(tx => tx.table('tags').toCollection().modify(tag => {
+  if (!tag.kind) tag.kind = 'EXPENSE';
+}));
+
+db.version(6).stores({
+  income_types: '++id, name, iconKey, isDefault',
+  income_sources: '++id, name, type, isActive, tagId, incomeTypeId',
+}).upgrade(async tx => {
+  const incomeTypes = tx.table('income_types');
+  const sources = tx.table('income_sources');
+  const transactions = tx.table('transactions');
+  const tags = tx.table('tags');
+
+  const typeIds = {};
+  for (const type of DEFAULT_INCOME_TYPES) {
+    typeIds[type.legacyKey] = await incomeTypes.add({ ...type });
+  }
+
+  await sources.toCollection().modify(source => {
+    source.incomeTypeId = typeIds[source.type] || typeIds.OTHER;
+    source.tagId = null;
+  });
+
+  await transactions.where('type').equals('IN').modify(txRecord => {
+    txRecord.tagId = null;
+  });
+
+  const incomeTags = await tags.where('kind').equals('INCOME').toArray();
+  for (const tag of incomeTags) await tags.delete(tag.id);
+});
+
 
 // Seed data function to populate catalogs on first open
 export async function seedDatabase() {
   const tagsCount = await db.tags.count();
   if (tagsCount === 0) {
     await db.tags.bulkAdd([
-      { name: 'Alquiler' },
-      { name: 'Supermercado' },
-      { name: 'Electricidad' },
-      { name: 'Agua/Condominio' },
-      { name: 'Internet/Fibra' },
-      { name: 'Netflix/Streaming' },
-      { name: 'Restaurantes' },
-      { name: 'Fondo Emergencia' },
-      { name: 'Ahorro Viajes' }
+      { name: 'Alquiler', iconKey: 'home', kind: 'EXPENSE' },
+      { name: 'Supermercado', iconKey: 'cart', kind: 'EXPENSE' },
+      { name: 'Electricidad', iconKey: 'utilities', kind: 'EXPENSE' },
+      { name: 'Agua/Condominio', iconKey: 'receipt', kind: 'EXPENSE' },
+      { name: 'Internet/Fibra', iconKey: 'internet', kind: 'EXPENSE' },
+      { name: 'Netflix/Streaming', iconKey: 'streaming', kind: 'EXPENSE' },
+      { name: 'Restaurantes', iconKey: 'food', kind: 'EXPENSE' },
+      { name: 'Educacion', iconKey: 'education', kind: 'EXPENSE' }
     ]);
+  }
+
+  const incomeTypesCount = await db.income_types.count();
+  if (incomeTypesCount === 0) {
+    await db.income_types.bulkAdd(DEFAULT_INCOME_TYPES.map(type => ({ ...type })));
   }
 }

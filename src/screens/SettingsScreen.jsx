@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
 import Header from '../components/Header.jsx';
 import NoriaSwitch from '../components/NoriaSwitch.jsx';
 import CategoryTag from '../components/CategoryTag.jsx';
+import CategoryIcon from '../components/CategoryIcon.jsx';
+import IconGridPicker from '../components/IconGridPicker.jsx';
 import { sha256 } from '../config/access.private.js';
 import {
   Download,
@@ -140,7 +142,8 @@ export default function SettingsScreen() {
     preferences: false,
     danger: false,
     institutions: false,
-    tags: false
+    expenseTags: false,
+    incomeTypes: false
   });
 
   const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
@@ -151,7 +154,9 @@ export default function SettingsScreen() {
   const hashedPinObj = useLiveQuery(() => db.app_config.get('hashedPin'));
 
   const institutions = useLiveQuery(() => db.institutions.toArray()) || [];
-  const tags = useLiveQuery(() => db.tags.toArray()) || [];
+  const tags = useLiveQuery(() => db.tags.orderBy('name').toArray()) || [];
+  const incomeTypes = useLiveQuery(() => db.income_types.orderBy('name').toArray()) || [];
+  const incomeSources = useLiveQuery(() => db.income_sources.toArray()) || [];
   const accounts = useLiveQuery(() => db.accounts.toArray()) || [];
 
   const baseCurrency = baseCurrencyObj?.value || 'USD';
@@ -167,8 +172,17 @@ export default function SettingsScreen() {
 
   const [editingTagId, setEditingTagId] = useState(null);
   const [editTagName, setEditTagName] = useState('');
+  const [editTagIconKey, setEditTagIconKey] = useState('');
   const [showAddTagForm, setShowAddTagForm] = useState(false);
+  const [newTagKind, setNewTagKind] = useState('EXPENSE');
   const [newTagName, setNewTagName] = useState('');
+  const [newTagIconKey, setNewTagIconKey] = useState('');
+  const [editingIncomeTypeId, setEditingIncomeTypeId] = useState(null);
+  const [editIncomeTypeName, setEditIncomeTypeName] = useState('');
+  const [editIncomeTypeIconKey, setEditIncomeTypeIconKey] = useState('');
+  const [showAddIncomeTypeForm, setShowAddIncomeTypeForm] = useState(false);
+  const [newIncomeTypeName, setNewIncomeTypeName] = useState('');
+  const [newIncomeTypeIconKey, setNewIncomeTypeIconKey] = useState('');
 
   const [isConfiguringPin, setIsConfiguringPin] = useState(false);
   const [isDeactivatingPin, setIsDeactivatingPin] = useState(false);
@@ -434,8 +448,9 @@ export default function SettingsScreen() {
     e.preventDefault();
     if (!newTagName.trim()) return;
     try {
-      await db.tags.add({ name: newTagName.trim() });
+      await db.tags.add({ name: newTagName.trim(), iconKey: newTagIconKey || null, kind: newTagKind });
       setNewTagName('');
+      setNewTagIconKey('');
       setShowAddTagForm(false);
       setMessage('Categoría añadida');
       setTimeout(() => setMessage(''), 2000);
@@ -447,7 +462,7 @@ export default function SettingsScreen() {
   const handleUpdateTag = async (id) => {
     if (!editTagName.trim()) return;
     try {
-      await db.tags.update(id, { name: editTagName.trim() });
+      await db.tags.update(id, { name: editTagName.trim(), iconKey: editTagIconKey || null });
       setEditingTagId(null);
       setMessage('Categoría actualizada');
       setTimeout(() => setMessage(''), 2000);
@@ -467,6 +482,56 @@ export default function SettingsScreen() {
     }
   };
 
+  const handleCreateIncomeType = async (e) => {
+    e.preventDefault();
+    if (!newIncomeTypeName.trim()) return;
+    try {
+      await db.income_types.add({
+        name: newIncomeTypeName.trim(),
+        iconKey: newIncomeTypeIconKey || 'money',
+        isDefault: false
+      });
+      setNewIncomeTypeName('');
+      setNewIncomeTypeIconKey('');
+      setShowAddIncomeTypeForm(false);
+      setMessage('Tipo de ingreso añadido');
+      setTimeout(() => setMessage(''), 2000);
+    } catch {
+      setError('Error al crear tipo de ingreso');
+    }
+  };
+
+  const handleUpdateIncomeType = async (id) => {
+    if (!editIncomeTypeName.trim()) return;
+    try {
+      await db.income_types.update(id, {
+        name: editIncomeTypeName.trim(),
+        iconKey: editIncomeTypeIconKey || 'money'
+      });
+      setEditingIncomeTypeId(null);
+      setMessage('Tipo de ingreso actualizado');
+      setTimeout(() => setMessage(''), 2000);
+    } catch {
+      setError('Error al actualizar tipo de ingreso');
+    }
+  };
+
+  const handleDeleteIncomeType = async (id, name) => {
+    const relatedCount = incomeSources.filter(source => source.incomeTypeId === id).length;
+    if (relatedCount > 0) {
+      alert(`No puedes eliminar "${name}" porque tiene ${relatedCount} fuente(s) asociada(s).`);
+      return;
+    }
+    if (!confirm(`¿Eliminar el tipo de ingreso "${name}"?`)) return;
+    try {
+      await db.income_types.delete(id);
+      setMessage('Tipo de ingreso eliminado');
+      setTimeout(() => setMessage(''), 2000);
+    } catch {
+      setError('Error al eliminar tipo de ingreso');
+    }
+  };
+
   const handleClearAll = async () => {
     if (!confirm('¿Estás COMPLETAMENTE seguro? Esta acción es irreversible.')) return;
     setLoading(true);
@@ -481,6 +546,182 @@ export default function SettingsScreen() {
 
   const activeInstitutions = institutions.length;
   const totalAccounts = accounts.length;
+  const expenseTags = tags.filter(tag => (tag.kind || 'EXPENSE') === 'EXPENSE');
+
+  const renderTagCatalog = (kind, title, catalogTags, addLabel) => {
+    const sectionKey = 'expenseTags';
+    const isAddingHere = showAddTagForm && newTagKind === kind;
+
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => toggleSection(sectionKey)}
+          className="flex w-full items-center justify-between gap-3 border-b border-[#1A1A1A] py-4 text-left focus:outline-none"
+        >
+          <div>
+            <p className="text-[15px] font-[600] text-noria-text">{title}</p>
+            <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-noria-muted">
+              {catalogTags.length} categorías
+            </p>
+          </div>
+          <span className="h-10 w-10 border border-[#1A1A1A] flex items-center justify-center">
+            {openSections[sectionKey] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </span>
+        </button>
+
+        {openSections[sectionKey] && (
+          <div className="space-y-3 border-b border-[#1A1A1A] py-4">
+            <button
+              type="button"
+              onClick={() => {
+                setShowAddTagForm(!isAddingHere);
+                setNewTagKind(kind);
+                setNewTagName('');
+                setNewTagIconKey('');
+              }}
+              className="flex items-center gap-1 font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-[#647C78] focus:outline-none"
+            >
+              <Plus size={12} />
+              {addLabel}
+            </button>
+
+            {isAddingHere && (
+              <form onSubmit={handleCreateTag} className="space-y-3 border border-[#1A1A1A] p-3">
+                <p className="font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-noria-muted">Nueva categoría</p>
+                <input type="text" value={newTagName} onChange={e => setNewTagName(e.target.value)} placeholder="Ej. Mascotas" className="muji-input text-[12px]" required />
+                <IconGridPicker value={newTagIconKey} onChange={setNewTagIconKey} />
+                <div className="grid grid-cols-2 gap-2">
+                  <OutlineButton onClick={() => { setShowAddTagForm(false); setNewTagIconKey(''); }}>Cancelar</OutlineButton>
+                  <OutlineButton type="submit">Crear</OutlineButton>
+                </div>
+              </form>
+            )}
+
+            {catalogTags.map(tag => {
+              const isEditing = editingTagId === tag.id;
+              return (
+                <div key={tag.id} className="border-b border-[#1A1A1A]/14 py-3">
+                  {isEditing ? (
+                    <div className="space-y-2">
+                      <input type="text" value={editTagName} onChange={e => setEditTagName(e.target.value)} className="muji-input text-[12px]" required />
+                      <IconGridPicker value={editTagIconKey} onChange={setEditTagIconKey} />
+                      <div className="grid grid-cols-2 gap-2">
+                        <OutlineButton onClick={() => setEditingTagId(null)}>Cancelar</OutlineButton>
+                        <OutlineButton onClick={() => handleUpdateTag(tag.id)}>Guardar</OutlineButton>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <CategoryIcon iconKey={tag.iconKey} size={15} />
+                        <span className="truncate text-[14px] font-[600] text-noria-text">{tag.name}</span>
+                        <CategoryTag name={tag.name} size="xs" />
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button type="button" onClick={() => { setEditingTagId(tag.id); setEditTagName(tag.name); setEditTagIconKey(tag.iconKey || ''); }} className="p-1.5 text-noria-muted hover:text-noria-text focus:outline-none" title="Editar categoría">
+                          <Pencil size={12} strokeWidth={1.5} />
+                        </button>
+                        <button type="button" onClick={() => handleDeleteTag(tag.id, tag.name)} className="p-1.5 text-noria-muted hover:text-[#9F2F2D] focus:outline-none" title="Eliminar categoría">
+                          <Trash2 size={12} strokeWidth={1.5} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </>
+    );
+  };
+
+  const renderIncomeTypeCatalog = () => (
+    <>
+      <button
+        type="button"
+        onClick={() => toggleSection('incomeTypes')}
+        className="flex w-full items-center justify-between gap-3 border-b border-[#1A1A1A] py-4 text-left focus:outline-none"
+      >
+        <div>
+          <p className="text-[15px] font-[600] text-noria-text">Tipos de ingreso</p>
+          <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-noria-muted">
+            {incomeTypes.length} tipos
+          </p>
+        </div>
+        <span className="h-10 w-10 border border-[#1A1A1A] flex items-center justify-center">
+          {openSections.incomeTypes ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </span>
+      </button>
+
+      {openSections.incomeTypes && (
+        <div className="space-y-3 border-b border-[#1A1A1A] py-4">
+          <button
+            type="button"
+            onClick={() => {
+              setShowAddIncomeTypeForm(prev => !prev);
+              setNewIncomeTypeName('');
+              setNewIncomeTypeIconKey('');
+            }}
+            className="flex items-center gap-1 font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-[#647C78] focus:outline-none"
+          >
+            <Plus size={12} />
+            Añadir tipo
+          </button>
+
+          {showAddIncomeTypeForm && (
+            <form onSubmit={handleCreateIncomeType} className="space-y-3 border border-[#1A1A1A] p-3">
+              <p className="font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-noria-muted">Nuevo tipo de ingreso</p>
+              <input type="text" value={newIncomeTypeName} onChange={e => setNewIncomeTypeName(e.target.value)} placeholder="Ej. Consultoría" className="muji-input text-[12px]" required />
+              <IconGridPicker value={newIncomeTypeIconKey} onChange={setNewIncomeTypeIconKey} />
+              <div className="grid grid-cols-2 gap-2">
+                <OutlineButton onClick={() => { setShowAddIncomeTypeForm(false); setNewIncomeTypeIconKey(''); }}>Cancelar</OutlineButton>
+                <OutlineButton type="submit">Crear</OutlineButton>
+              </div>
+            </form>
+          )}
+
+          {incomeTypes.map(incomeType => {
+            const isEditing = editingIncomeTypeId === incomeType.id;
+            const relatedCount = incomeSources.filter(source => source.incomeTypeId === incomeType.id).length;
+            return (
+              <div key={incomeType.id} className="border-b border-[#1A1A1A]/14 py-3">
+                {isEditing ? (
+                  <div className="space-y-2">
+                    <input type="text" value={editIncomeTypeName} onChange={e => setEditIncomeTypeName(e.target.value)} className="muji-input text-[12px]" required />
+                    <IconGridPicker value={editIncomeTypeIconKey} onChange={setEditIncomeTypeIconKey} />
+                    <div className="grid grid-cols-2 gap-2">
+                      <OutlineButton onClick={() => setEditingIncomeTypeId(null)}>Cancelar</OutlineButton>
+                      <OutlineButton onClick={() => handleUpdateIncomeType(incomeType.id)}>Guardar</OutlineButton>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <CategoryIcon iconKey={incomeType.iconKey} size={15} />
+                      <div className="min-w-0">
+                        <span className="block truncate text-[14px] font-[600] text-noria-text">{incomeType.name}</span>
+                        <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-noria-muted">{relatedCount} fuentes</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button type="button" onClick={() => { setEditingIncomeTypeId(incomeType.id); setEditIncomeTypeName(incomeType.name); setEditIncomeTypeIconKey(incomeType.iconKey || 'money'); }} className="p-1.5 text-noria-muted hover:text-noria-text focus:outline-none" title="Editar tipo">
+                        <Pencil size={12} strokeWidth={1.5} />
+                      </button>
+                      <button type="button" onClick={() => handleDeleteIncomeType(incomeType.id, incomeType.name)} disabled={relatedCount > 0} className="p-1.5 text-noria-muted hover:text-[#9F2F2D] disabled:opacity-30 focus:outline-none" title={relatedCount > 0 ? 'Tipo en uso' : 'Eliminar tipo'}>
+                        <Trash2 size={12} strokeWidth={1.5} />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
 
   return (
     <div className="min-h-screen pb-24 pt-16" style={{ background: '#F5F2ED' }}>
@@ -644,6 +885,9 @@ export default function SettingsScreen() {
             onToggle={() => toggleSection('catalogs')}
           >
             <div className="border-y border-[#1A1A1A]">
+              {renderTagCatalog('EXPENSE', 'Categorías de gasto', expenseTags, 'Añadir categoría')}
+              {renderIncomeTypeCatalog()}
+
               <button
                 type="button"
                 onClick={() => toggleSection('institutions')}
@@ -708,80 +952,8 @@ export default function SettingsScreen() {
                 </div>
               )}
 
-              <button
-                type="button"
-                onClick={() => toggleSection('tags')}
-                className="flex w-full items-center justify-between gap-3 py-4 text-left focus:outline-none"
-              >
-                <div>
-                  <p className="text-[15px] font-[600] text-noria-text">Categorías globales</p>
-                  <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-noria-muted">
-                    {tags.length} categorías
-                  </p>
-                </div>
-                <span className="h-10 w-10 border border-[#1A1A1A] flex items-center justify-center">
-                  {openSections.tags ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                </span>
-              </button>
-
-              {openSections.tags && (
-                <div className="space-y-3 border-t border-[#1A1A1A] py-4">
-                  <button
-                    type="button"
-                    onClick={() => setShowAddTagForm(!showAddTagForm)}
-                    className="flex items-center gap-1 font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-[#647C78] focus:outline-none"
-                  >
-                    <Plus size={12} />
-                    Añadir categoría
-                  </button>
-
-                  {showAddTagForm && (
-                    <form onSubmit={handleCreateTag} className="space-y-3 border border-[#1A1A1A] p-3">
-                      <p className="font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-noria-muted">Nueva categoría</p>
-                      <input type="text" value={newTagName} onChange={e => setNewTagName(e.target.value)} placeholder="Ej. Mascotas" className="muji-input text-[12px]" required />
-                      <div className="grid grid-cols-2 gap-2">
-                        <OutlineButton onClick={() => setShowAddTagForm(false)}>Cancelar</OutlineButton>
-                        <OutlineButton type="submit">Crear</OutlineButton>
-                      </div>
-                    </form>
-                  )}
-
-                  {tags.map(tag => {
-                    const isEditing = editingTagId === tag.id;
-                    return (
-                      <div key={tag.id} className="border-b border-[#1A1A1A]/14 py-3">
-                        {isEditing ? (
-                          <div className="space-y-2">
-                            <input type="text" value={editTagName} onChange={e => setEditTagName(e.target.value)} className="muji-input text-[12px]" required />
-                            <div className="grid grid-cols-2 gap-2">
-                              <OutlineButton onClick={() => setEditingTagId(null)}>Cancelar</OutlineButton>
-                              <OutlineButton onClick={() => handleUpdateTag(tag.id)}>Guardar</OutlineButton>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="flex items-center justify-between gap-3">
-                            <div className="flex min-w-0 items-center gap-2">
-                              <span className="truncate text-[14px] font-[600] text-noria-text">{tag.name}</span>
-                              <CategoryTag name={tag.name} size="xs" />
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <button type="button" onClick={() => { setEditingTagId(tag.id); setEditTagName(tag.name); }} className="p-1.5 text-noria-muted hover:text-noria-text focus:outline-none" title="Editar categoría">
-                                <Pencil size={12} strokeWidth={1.5} />
-                              </button>
-                              <button type="button" onClick={() => handleDeleteTag(tag.id, tag.name)} className="p-1.5 text-noria-muted hover:text-[#9F2F2D] focus:outline-none" title="Eliminar categoría">
-                                <Trash2 size={12} strokeWidth={1.5} />
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
             </div>
           </SectionAccordion>
-
           <SectionAccordion
             id="preferences-section"
             title="Preferencias"
