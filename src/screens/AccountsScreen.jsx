@@ -97,6 +97,21 @@ function AddAccountModal({ onClose, institutions, onCreated }) {
   const [accCurrency, setAccCurrency] = useState('USD');
   const [accType, setAccType] = useState('CHECKING');
 
+  const dbCurrencies = useLiveQuery(() => db.currencies.toArray()) || [];
+  const activeCurrencies = dbCurrencies.length > 0
+    ? dbCurrencies.filter(c => c.isActive)
+    : [
+        { code: 'USD', name: 'Dólar' },
+        { code: 'VES', name: 'Bolívar' },
+        { code: 'USDT', name: 'Tether' }
+      ];
+
+  useEffect(() => {
+    if (activeCurrencies.length > 0 && !activeCurrencies.some(c => c.code === accCurrency)) {
+      setAccCurrency(activeCurrencies[0].code);
+    }
+  }, [activeCurrencies, accCurrency]);
+
   // Select de institución: puede ser ID de una existente o "new"
   const [selectedInstOption, setSelectedInstOption] = useState('');
   const [newInstName, setNewInstName] = useState('');
@@ -244,9 +259,9 @@ function AddAccountModal({ onClose, institutions, onCreated }) {
             <div className="col-span-1">
               <label className="muji-header block mb-1">Divisa</label>
               <select value={accCurrency} onChange={e => setAccCurrency(e.target.value)} className="muji-input">
-                <option value="USD">USD</option>
-                <option value="USDT">USDT</option>
-                <option value="USDC">USDC</option>
+                {activeCurrencies.map(c => (
+                  <option key={c.code} value={c.code}>{c.code}</option>
+                ))}
               </select>
             </div>
 
@@ -282,6 +297,15 @@ function EditAccountForm({ account, institutions, onUpdated, onCancel }) {
   const [accBalance, setAccBalance] = useState(account.balance.toString());
   const [accCurrency, setAccCurrency] = useState(account.currency);
   const [accType, setAccType] = useState(account.type);
+
+  const dbCurrencies = useLiveQuery(() => db.currencies.toArray()) || [];
+  const activeCurrencies = dbCurrencies.length > 0
+    ? dbCurrencies.filter(c => c.isActive || c.code === account.currency)
+    : [
+        { code: 'USD', name: 'Dólar' },
+        { code: 'VES', name: 'Bolívar' },
+        { code: 'USDT', name: 'Tether' }
+      ];
 
   const [selectedInstOption, setSelectedInstOption] = useState(account.institutionId.toString());
   const [newInstName, setNewInstName] = useState('');
@@ -419,9 +443,9 @@ function EditAccountForm({ account, institutions, onUpdated, onCancel }) {
         <div>
           <label className="muji-header block mb-1">Divisa</label>
           <select value={accCurrency} onChange={e => setAccCurrency(e.target.value)} className="muji-input">
-            <option value="USD">USD</option>
-            <option value="USDT">USDT</option>
-            <option value="USDC">USDC</option>
+            {activeCurrencies.map(c => (
+              <option key={c.code} value={c.code}>{c.code}</option>
+            ))}
           </select>
         </div>
 

@@ -197,8 +197,43 @@ export default function FAB() {
         if (!sourceAccount || !targetAccount) { setError('Cuentas no encontradas'); return; }
 
         const transferId = 'TX-' + Date.now();
+        const isMultiCurrency = sourceAccount.currency !== targetAccount.currency;
 
-        await db.transaction('rw', [db.accounts, db.transactions], async () => {
+        let lotConsumptions = [];
+        let costUSD = null;
+
+        if (isMultiCurrency && sourceAccount.currency === 'VES') {
+          // Consultar lotes activos de VES
+          const activeVESLots = await db.lots
+            .where('currency').equals('VES')
+            .filter(l => l.remainingAmount > 0)
+            .toArray();
+
+          // Ordenar por fecha (FIFO)
+          activeVESLots.sort((a, b) => new Date(a.date) - new Date(b.date) || a.id - b.id);
+
+          const totalActiveVES = activeVESLots.reduce((sum, l) => sum + l.remainingAmount, 0);
+
+          if (totalActiveVES < parsedAmount) {
+            setError(`Saldo de lotes insuficiente en VES para realizar esta transferencia. Disponible: Bs. ${totalActiveVES.toLocaleString('es-VE', { minimumFractionDigits: 2 })}. Por favor registra una transferencia multimoneda de entrada primero.`);
+            return;
+          }
+
+          let remainingToConsume = parsedAmount;
+          for (const lot of activeVESLots) {
+            if (remainingToConsume <= 0) break;
+            const toConsume = Math.min(lot.remainingAmount, remainingToConsume);
+            lotConsumptions.push({
+              lotId: lot.id,
+              amountConsumed: toConsume,
+              rate: lot.effectiveRate
+            });
+            remainingToConsume -= toConsume;
+          }
+          costUSD = parsedReceived; // Recibimos USD, por ende, es el valor real
+        }
+
+        await db.transaction('rw', [db.accounts, db.transactions, db.lots], async () => {
           // 1. Registrar salida
           await db.transactions.add({
             date: new Date(date + 'T12:00:00'),
@@ -207,7 +242,13 @@ export default function FAB() {
             currency: sourceAccount.currency,
             accountId: sourceAccount.id,
             description: description.trim() || `Transferencia a ${targetAccount.name}`,
-            transferId
+            transferId,
+            amountUSD: sourceAccount.currency === 'USD' ? parsedAmount : (sourceAccount.currency === 'VES' ? costUSD : null),
+            lotConsumption: lotConsumptions.length > 0 ? JSON.stringify(lotConsumptions) : null,
+            targetAmount: parsedReceived,
+            targetCurrency: targetAccount.currency,
+            targetAccountId: targetAccount.id,
+            exchangeRate: isMultiCurrency ? parsedReceived / parsedAmount : 1
           });
 
           // 2. Registrar entrada
@@ -218,10 +259,44 @@ export default function FAB() {
             currency: targetAccount.currency,
             accountId: targetAccount.id,
             description: description.trim() || `Transferencia desde ${sourceAccount.name}`,
-            transferId
+            transferId,
+            amountUSD: targetAccount.currency === 'USD' ? parsedReceived : null,
+            targetAmount: parsedAmount,
+            targetCurrency: sourceAccount.currency,
+            targetAccountId: sourceAccount.id,
+            exchangeRate: isMultiCurrency ? parsedReceived / parsedAmount : 1
           });
 
-          // 3. Actualizar balances
+          // 3. Crear Lote si compramos VES (USD -> VES)
+          if (isMultiCurrency && targetAccount.currency === 'VES') {
+            const effectiveRate = parsedReceived / parsedAmount;
+            await db.lots.add({
+              transactionId: transferId,
+              accountId: targetAccount.id,
+              currency: 'VES',
+              amount: parsedReceived,
+              remainingAmount: parsedReceived,
+              effectiveRate,
+              status: 'ACTIVE',
+              date: new Date(date + 'T12:00:00')
+            });
+          }
+
+          // 4. Consumir Lotes de VES si vendimos VES (VES -> USD)
+          if (isMultiCurrency && sourceAccount.currency === 'VES' && lotConsumptions.length > 0) {
+            for (const consumption of lotConsumptions) {
+              const lot = await db.lots.get(consumption.lotId);
+              if (lot) {
+                const newRemaining = Math.max(0, lot.remainingAmount - consumption.amountConsumed);
+                await db.lots.update(consumption.lotId, {
+                  remainingAmount: newRemaining,
+                  status: newRemaining === 0 ? 'EXHAUSTED' : 'ACTIVE'
+                });
+              }
+            }
+          }
+
+          // 5. Actualizar balances
           await db.accounts.update(sourceAccount.id, { balance: sourceAccount.balance - parsedAmount });
           await db.accounts.update(targetAccount.id, { balance: targetAccount.balance + parsedReceived });
         });

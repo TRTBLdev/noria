@@ -1,5 +1,5 @@
-import React from 'react';
-import { Landmark, Wallet, CreditCard, Archive, TrendingUp } from 'lucide-react';
+import React, { useState } from 'react';
+import { Landmark, Wallet, CreditCard, Archive, TrendingUp, ChevronUp, ChevronDown } from 'lucide-react';
 
 const INSTRUMENT_TYPES = [
   { value: 'DEBIT_CARD', label: 'Tarjeta de Debito' },
@@ -19,6 +19,14 @@ export default function CuentasFuentesTab({
   showSources = true,
   selectedAccountId = null
 }) {
+  const [collapsedInsts, setCollapsedInsts] = useState({});
+
+  const toggleInstCollapse = (id) => {
+    setCollapsedInsts(prev => ({
+      ...prev,
+      [id]: !prev[id]
+    }));
+  };
   const fmt = (n) => {
     if (typeof n !== 'number') return '0.00';
     return n.toLocaleString('es-ES', { minimumFractionDigits: 2 });
@@ -49,67 +57,84 @@ export default function CuentasFuentesTab({
 
             {instGroups.map(({ inst, accs }) => {
               const totalUSD = accs.filter(a => a.currency === 'USD').reduce((sum, a) => sum + a.balance, 0);
+              const totalVES = accs.filter(a => a.currency === 'VES').reduce((sum, a) => sum + a.balance, 0);
               const totalUSDT = accs.filter(a => a.currency === 'USDT').reduce((sum, a) => sum + a.balance, 0);
               const totalUSDC = accs.filter(a => a.currency === 'USDC').reduce((sum, a) => sum + a.balance, 0);
-              const balanceStr = [
-                totalUSD > 0 ? `$${fmt(totalUSD, 0)}` : '',
-                totalUSDT > 0 ? `${fmt(totalUSDT, 0)} USDT` : '',
-                totalUSDC > 0 ? `${fmt(totalUSDC, 0)} USDC` : ''
-              ].filter(Boolean).join('  |  ') || '$0.00';
+              const totalEUR = accs.filter(a => a.currency === 'EUR').reduce((sum, a) => sum + a.balance, 0);
+              const balanceParts = [];
+              if (totalUSD > 0) balanceParts.push(`$${fmt(totalUSD)}`);
+              if (totalVES > 0) balanceParts.push(`${fmt(totalVES)} Bs`);
+              if (totalUSDT > 0) balanceParts.push(`${fmt(totalUSDT)} USDT`);
+              if (totalUSDC > 0) balanceParts.push(`${fmt(totalUSDC)} USDC`);
+              if (totalEUR > 0) balanceParts.push(`${fmt(totalEUR)} €`);
+              const balanceStr = balanceParts.join('  |  ') || '$0.00';
+
+              const isCollapsed = !!collapsedInsts[inst.id];
 
               return (
                 <div key={inst.id} className="animate-fade-in">
-                  <div className="flex justify-between items-baseline mb-3 pb-2 border-b border-[rgba(26,26,26,0.16)]">
+                  <button
+                    type="button"
+                    onClick={() => toggleInstCollapse(inst.id)}
+                    className="w-full flex justify-between items-baseline mb-3 pb-2 border-b border-[rgba(26,26,26,0.16)] text-left focus:outline-none hover:border-[#647C78] transition-colors"
+                  >
                     <div className="flex items-center space-x-2 min-w-0">
+                      {isCollapsed ? (
+                        <ChevronDown size={11} strokeWidth={2.5} className="shrink-0 text-noria-text" />
+                      ) : (
+                        <ChevronUp size={11} strokeWidth={2.5} className="shrink-0 text-noria-text" />
+                      )}
                       <Landmark size={12} strokeWidth={1.5} className="shrink-0" style={{ color: 'rgba(26,26,26,0.35)' }} />
                       <span className="label-section truncate">{inst.name}</span>
                       <span className="label-section shrink-0" style={{ color: 'rgba(26,26,26,0.2)' }}>· {inst.type}</span>
                     </div>
-                    <span className="text-[11px] font-[500] shrink-0" style={{ color: 'rgba(26,26,26,0.45)' }}>
+                    <span className="text-[11px] font-[500] shrink-0 font-mono" style={{ color: 'rgba(26,26,26,0.45)' }}>
                       {balanceStr}
                     </span>
-                  </div>
+                  </button>
 
-                  <div className="space-y-3">
-                    {accs.map(acc => {
-                      const accInstrs = instruments.filter(i => i.accountId === acc.id);
-                      const isSelected = selectedAccountId === acc.id;
-                      return (
-                        <button
-                          key={acc.id}
-                          onClick={() => onSelectAccount(acc.id)}
-                          className="w-full text-left focus:outline-none transition-colors"
-                        >
-                          <div
-                            className="flex items-center justify-between gap-3 border border-[#1A1A1A] px-4 py-4 transition-colors hover:bg-noria-text/[0.03]"
-                            style={{ borderLeftWidth: isSelected ? 6 : 1, borderLeftColor: isSelected ? '#647C78' : '#1A1A1A' }}
+                  {!isCollapsed && (
+                    <div className="space-y-3">
+                      {accs.map(acc => {
+                        const accInstrs = instruments.filter(i => i.accountId === acc.id);
+                        const isSelected = selectedAccountId === acc.id;
+                        return (
+                          <button
+                            key={acc.id}
+                            onClick={() => onSelectAccount(acc.id)}
+                            className="w-full text-left focus:outline-none transition-colors"
                           >
-                            <div className="flex items-center space-x-3 min-w-0">
-                              <div className="w-8 h-8 flex items-center justify-center shrink-0" style={{ color: 'rgba(26,26,26,0.46)' }}>
-                                <Wallet size={16} strokeWidth={1.5} />
-                              </div>
-                              <div className="min-w-0">
-                                <p className="text-[15px] font-[600] text-noria-text truncate">{acc.name}</p>
-                                <div className="flex items-center flex-wrap gap-x-2 gap-y-1 mt-1">
-                                  <span className="label-section">{acc.type}</span>
-                                  {accInstrs.map(instr => (
-                                    <span key={instr.id} className="flex items-center space-x-1 label-section">
-                                      <CreditCard size={9} strokeWidth={1.5} />
-                                      <span>{instr.alias || (INSTRUMENT_TYPES.find(t => t.value === instr.type)?.label || instr.type)}</span>
-                                    </span>
-                                  ))}
+                            <div
+                              className="flex items-center justify-between gap-3 border border-[#1A1A1A] px-4 py-4 transition-colors hover:bg-noria-text/[0.03]"
+                              style={{ borderLeftWidth: isSelected ? 6 : 1, borderLeftColor: isSelected ? '#647C78' : '#1A1A1A' }}
+                            >
+                              <div className="flex items-center space-x-3 min-w-0">
+                                <div className="w-8 h-8 flex items-center justify-center shrink-0" style={{ color: 'rgba(26,26,26,0.46)' }}>
+                                  <Wallet size={16} strokeWidth={1.5} />
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="text-[15px] font-[600] text-noria-text truncate">{acc.name}</p>
+                                  <div className="flex items-center flex-wrap gap-x-2 gap-y-1 mt-1">
+                                    <span className="label-section">{acc.type}</span>
+                                    {accInstrs.map(instr => (
+                                      <span key={instr.id} className="flex items-center space-x-1 label-section">
+                                        <CreditCard size={9} strokeWidth={1.5} />
+                                        <span>{instr.alias || (INSTRUMENT_TYPES.find(t => t.value === instr.type)?.label || instr.type)}</span>
+                                      </span>
+                                    ))}
+                                  </div>
                                 </div>
                               </div>
+                              <div className="text-right shrink-0">
+                                <p className="font-mono text-[18px] font-[700] text-noria-text">${fmt(acc.balance)}</p>
+                                <p className="label-section">{acc.currency}</p>
+                              </div>
                             </div>
-                            <div className="text-right shrink-0">
-                              <p className="font-mono text-[18px] font-[700] text-noria-text">${fmt(acc.balance)}</p>
-                              <p className="label-section">{acc.currency}</p>
-                            </div>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             })}
