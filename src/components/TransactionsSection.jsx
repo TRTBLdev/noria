@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Search, Calendar, Filter, Trash2, Pencil, X, Check, ArrowDownRight, ArrowUpRight, ArrowLeftRight } from 'lucide-react';
+import { Search, Trash2, Pencil, ArrowDownRight, ArrowUpRight, ArrowLeftRight } from 'lucide-react';
+import PillarTag from './PillarTag.jsx';
 
 export default function TransactionsSection({
   transactions,
@@ -8,48 +9,53 @@ export default function TransactionsSection({
   onUpdateTransaction
 }) {
   const [search, setSearch] = useState('');
-  const [dateRange, setDateRange] = useState('ALL'); // ALL, THIS_MONTH, LAST_MONTH, 3_MONTHS, CUSTOM
+  const [dateRange, setDateRange] = useState('ALL');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   const [filterAccount, setFilterAccount] = useState('ALL');
   const [filterPillar, setFilterPillar] = useState('ALL');
-  const [filterType, setFilterType] = useState('ALL'); // ALL, IN, OUT, TRANSFER
-  const [sortBy, setSortBy] = useState('DATE_DESC'); // DATE_DESC, DATE_ASC, AMOUNT_DESC, AMOUNT_ASC
+  const [filterType, setFilterType] = useState('ALL');
+  const [sortBy, setSortBy] = useState('DATE_DESC');
 
-  // Estados para edición
   const [editingTx, setEditingTx] = useState(null);
   const [editDesc, setEditDesc] = useState('');
   const [editAmount, setEditAmount] = useState('');
   const [editPillar, setEditPillar] = useState('');
   const [editDate, setEditDate] = useState('');
 
+  const rangeOptions = [
+    ['ALL', 'TODO'],
+    ['THIS_MONTH', 'MES'],
+    ['LAST_MONTH', 'MES PASADO'],
+    ['3_MONTHS', '3 M'],
+    ['CUSTOM', 'CUSTOM']
+  ];
+
   const fmt = (n) => {
     if (typeof n !== 'number') return '0.00';
     return n.toLocaleString('es-ES', { minimumFractionDigits: 2 });
   };
 
-  const getAccountName = (id) => accounts.find(a => a.id === id)?.name || 'Cuenta Desconocida';
+  const getAccountName = (id) => accounts.find(a => a.id === id)?.name || 'Cuenta desconocida';
 
-  // Lógica de filtrado
+  const formatDateLabel = (date) => new Date(date)
+    .toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })
+    .replace(/\./g, '')
+    .toUpperCase();
+
   const filteredTransactions = transactions.filter(t => {
-    // 1. Buscador texto
     const text = (t.description || '').toLowerCase();
     if (search && !text.includes(search.toLowerCase())) return false;
 
-    // 2. Filtro Cuenta
     if (filterAccount !== 'ALL' && t.accountId?.toString() !== filterAccount) return false;
-
-    // 3. Filtro Pilar
     if (filterPillar !== 'ALL' && t.pillar !== filterPillar) return false;
 
-    // 4. Filtro Tipo
     if (filterType !== 'ALL') {
       if (filterType === 'IN' && t.type !== 'IN') return false;
       if (filterType === 'OUT' && t.type !== 'OUT') return false;
       if (filterType === 'TRANSFER' && !t.type.startsWith('TRANSFER_')) return false;
     }
 
-    // 5. Filtro Fechas
     const tDate = new Date(t.date);
     const now = new Date();
     if (dateRange === 'THIS_MONTH') {
@@ -70,7 +76,6 @@ export default function TransactionsSection({
     return true;
   });
 
-  // Lógica de ordenamiento
   const sortedTransactions = [...filteredTransactions].sort((a, b) => {
     const dateA = new Date(a.date);
     const dateB = new Date(b.date);
@@ -81,12 +86,19 @@ export default function TransactionsSection({
     return 0;
   });
 
+  const groupedTransactions = sortedTransactions.reduce((groups, tx) => {
+    const label = formatDateLabel(tx.date);
+    if (!groups[label]) groups[label] = [];
+    groups[label].push(tx);
+    return groups;
+  }, {});
+
   const handleStartEdit = (tx) => {
     setEditingTx(tx);
     setEditDesc(tx.description || '');
     setEditAmount(tx.amount.toString());
     setEditPillar(tx.pillar || 'NEED');
-    
+
     const d = new Date(tx.date);
     setEditDate(d.toISOString().slice(0, 10));
   };
@@ -95,7 +107,7 @@ export default function TransactionsSection({
     e.preventDefault();
     const amt = parseFloat(editAmount);
     if (isNaN(amt) || amt <= 0) { alert('Monto inválido'); return; }
-    
+
     onUpdateTransaction(editingTx.id, {
       description: editDesc.trim(),
       amount: amt,
@@ -105,224 +117,229 @@ export default function TransactionsSection({
     setEditingTx(null);
   };
 
+  const renderRow = (t) => {
+    const isIncome = t.type === 'IN' || t.type === 'TRANSFER_IN';
+    const isTransfer = t.type.startsWith('TRANSFER_');
+    const accountName = getAccountName(t.accountId);
+    const amountSign = isIncome ? '+' : '-';
+    const amountColor = isTransfer ? '#1A1A1A' : isIncome ? '#4F8F58' : '#1A1A1A';
+
+    return (
+      <div key={t.id} className="py-3 flex items-center gap-3">
+        <div className="pt-0.5 flex-shrink-0">
+          {isTransfer ? (
+            <ArrowLeftRight size={14} className="text-noria-muted" strokeWidth={1.6} />
+          ) : isIncome ? (
+            <ArrowUpRight size={14} style={{ color: '#4F8F58' }} strokeWidth={1.6} />
+          ) : (
+            <ArrowDownRight size={14} style={{ color: '#1A1A1A' }} strokeWidth={1.6} />
+          )}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[14px] font-[500] text-noria-text truncate">
+              {t.description || (isIncome ? 'Ingreso' : 'Gasto')}
+            </span>
+            <PillarTag pillar={t.pillar} size="xs" />
+          </div>
+          <p className="mt-0.5 text-[10px] text-noria-muted uppercase tracking-[0.1em] font-mono truncate">
+            {accountName}
+          </p>
+        </div>
+
+        <div className="text-right flex-shrink-0">
+          <p
+            className="text-[13px] font-mono font-[700] whitespace-nowrap"
+            style={{ color: amountColor }}
+          >
+            {amountSign}${fmt(t.amount)}
+          </p>
+          <p className="text-[9px] text-noria-muted font-mono uppercase">{t.currency}</p>
+        </div>
+
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {!isTransfer && (
+            <button
+              type="button"
+              onClick={() => handleStartEdit(t)}
+              className="p-1 text-noria-muted hover:text-noria-text transition-colors"
+              title="Editar"
+            >
+              <Pencil size={12} strokeWidth={1.5} />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => onDeleteTransaction(t)}
+            className="p-1 text-noria-muted hover:text-[#9F2F2D] transition-colors"
+            title="Eliminar"
+          >
+            <Trash2 size={12} strokeWidth={1.5} />
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   return (
-    <div className="space-y-4 pb-8">
-      {/* ── Buscador y Controles de Filtro ── */}
-      <div className="space-y-3 bg-[rgba(26,26,26,0.02)] p-4 rounded-lg border border-[rgba(26,26,26,0.05)]">
-        {/* Fila 1: Buscar */}
+    <div className="space-y-5 pb-8">
+      <div className="space-y-4">
         <div className="relative">
-          <Search size={14} className="absolute left-3 top-3.5 text-noria-muted" />
+          <Search size={14} className="absolute right-0 top-1/2 -translate-y-1/2 text-noria-muted" />
           <input
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Buscar por descripción..."
-            className="muji-input pl-9 pr-4 py-2.5 text-[13px]"
+            className="w-full bg-transparent border-0 border-b border-[#1A1A1A] pl-0 pr-6 py-2.5 text-[13px] font-mono text-noria-text placeholder:text-noria-muted/60 focus:outline-none focus:border-[#647C78]"
           />
         </div>
 
-        {/* Fila 2: Filtros Rápidos */}
-        <div className="grid grid-cols-2 gap-2 text-[12px]">
-          <div>
-            <label className="muji-header block mb-1">Rango de Fecha</label>
-            <select
-              value={dateRange}
-              onChange={e => setDateRange(e.target.value)}
-              className="muji-input text-[12px] py-1.5 px-2"
-            >
-              <option value="ALL">Todas las transacciones</option>
-              <option value="THIS_MONTH">Este Mes</option>
-              <option value="LAST_MONTH">Mes Pasado</option>
-              <option value="3_MONTHS">Últimos 3 Meses</option>
-              <option value="CUSTOM">Intervalo Personalizado</option>
-            </select>
+        <div className="space-y-1">
+          <label className="muji-header block">Rango de fecha</label>
+          <div className="grid grid-cols-5 gap-2">
+            {rangeOptions.map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setDateRange(value)}
+                className="py-1.5 text-[9px] font-mono font-[700] tracking-[0.12em] text-center border-b-2 bg-transparent transition-colors focus:outline-none"
+                style={{
+                  color: dateRange === value ? '#1A1A1A' : 'rgba(26,26,26,0.48)',
+                  borderColor: dateRange === value ? '#647C78' : 'transparent'
+                }}
+              >
+                {label}
+              </button>
+            ))}
           </div>
+        </div>
+
+        {dateRange === 'CUSTOM' && (
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="muji-header block mb-1">Desde</label>
+              <input
+                type="date"
+                value={customStart}
+                onChange={e => setCustomStart(e.target.value)}
+                className="w-full bg-transparent border-0 border-b border-[#1A1A1A]/40 py-1.5 text-[11px] font-mono text-noria-text focus:outline-none focus:border-[#647C78]"
+              />
+            </div>
+            <div>
+              <label className="muji-header block mb-1">Hasta</label>
+              <input
+                type="date"
+                value={customEnd}
+                onChange={e => setCustomEnd(e.target.value)}
+                className="w-full bg-transparent border-0 border-b border-[#1A1A1A]/40 py-1.5 text-[11px] font-mono text-noria-text focus:outline-none focus:border-[#647C78]"
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-x-4 gap-y-4 text-[11px]">
           <div>
             <label className="muji-header block mb-1">Cuenta</label>
             <select
               value={filterAccount}
               onChange={e => setFilterAccount(e.target.value)}
-              className="muji-input text-[12px] py-1.5 px-2"
+              className="w-full bg-transparent border-0 border-b border-[#1A1A1A]/40 py-1.5 text-[11px] font-mono text-noria-text focus:outline-none focus:border-[#647C78]"
             >
-              <option value="ALL">Todas las Cuentas</option>
+              <option value="ALL">Todas</option>
               {accounts.map(acc => (
                 <option key={acc.id} value={acc.id}>{acc.name}</option>
               ))}
             </select>
           </div>
-        </div>
 
-        {/* Fila 3: Rango personalizado de fechas */}
-        {dateRange === 'CUSTOM' && (
-          <div className="grid grid-cols-2 gap-2 animate-fade-in text-[11px]">
-            <div>
-              <label className="muji-header block mb-0.5">Desde</label>
-              <input
-                type="date"
-                value={customStart}
-                onChange={e => setCustomStart(e.target.value)}
-                className="muji-input py-1 px-2 text-[11px]"
-              />
-            </div>
-            <div>
-              <label className="muji-header block mb-0.5">Hasta</label>
-              <input
-                type="date"
-                value={customEnd}
-                onChange={e => setCustomEnd(e.target.value)}
-                className="muji-input py-1 px-2 text-[11px]"
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Fila 4: Filtros de Tipo, Pilar y Ordenamiento */}
-        <div className="grid grid-cols-3 gap-2 text-[11px]">
           <div>
             <label className="muji-header block mb-1">Tipo</label>
             <select
               value={filterType}
               onChange={e => setFilterType(e.target.value)}
-              className="muji-input text-[11px] py-1.5 px-2"
+              className="w-full bg-transparent border-0 border-b border-[#1A1A1A]/40 py-1.5 text-[11px] font-mono text-noria-text focus:outline-none focus:border-[#647C78]"
             >
               <option value="ALL">Todos</option>
               <option value="IN">Ingresos</option>
               <option value="OUT">Gastos</option>
-              <option value="TRANSFER">Transf.</option>
+              <option value="TRANSFER">Transferencias</option>
             </select>
           </div>
+
           <div>
             <label className="muji-header block mb-1">Pilar</label>
             <select
               value={filterPillar}
               onChange={e => setFilterPillar(e.target.value)}
-              className="muji-input text-[11px] py-1.5 px-2"
+              className="w-full bg-transparent border-0 border-b border-[#1A1A1A]/40 py-1.5 text-[11px] font-mono text-noria-text focus:outline-none focus:border-[#647C78]"
             >
               <option value="ALL">Cualquiera</option>
-              <option value="NEED">Necesidad (N)</option>
-              <option value="WANT">Deseo (W)</option>
-              <option value="SAVE">Ahorro (S)</option>
+              <option value="NEED">Necesidad</option>
+              <option value="WANT">Deseo</option>
+              <option value="SAVE">Ahorro</option>
             </select>
           </div>
+
           <div>
             <label className="muji-header block mb-1">Ordenar por</label>
             <select
               value={sortBy}
               onChange={e => setSortBy(e.target.value)}
-              className="muji-input text-[11px] py-1.5 px-2"
+              className="w-full bg-transparent border-0 border-b border-[#1A1A1A]/40 py-1.5 text-[11px] font-mono text-noria-text focus:outline-none focus:border-[#647C78]"
             >
-              <option value="DATE_DESC">Fecha: Recientes</option>
-              <option value="DATE_ASC">Fecha: Antiguos</option>
-              <option value="AMOUNT_DESC">Monto: Mayor</option>
-              <option value="AMOUNT_ASC">Monto: Menor</option>
+              <option value="DATE_DESC">Fecha: recientes</option>
+              <option value="DATE_ASC">Fecha: antiguos</option>
+              <option value="AMOUNT_DESC">Monto: mayor</option>
+              <option value="AMOUNT_ASC">Monto: menor</option>
             </select>
           </div>
         </div>
       </div>
 
-      {/* ── Lista de Transacciones ── */}
-      <div className="space-y-2">
+      <div className="space-y-3">
         <div className="flex justify-between items-center text-[10px] uppercase tracking-wider text-noria-muted font-[500] px-1">
           <span>Transacciones encontradas ({sortedTransactions.length})</span>
         </div>
 
         {sortedTransactions.length === 0 ? (
-          <div className="text-center py-8 text-[12px] text-noria-muted bg-[rgba(26,26,26,0.01)] border rounded">
+          <div className="text-center py-8 text-[12px] text-noria-muted border border-[#1A1A1A]/20">
             No se encontraron transacciones con los filtros activos.
           </div>
         ) : (
-          <div className="divide-y divide-noria-text/5 bg-transparent rounded-lg">
-            {sortedTransactions.map(t => {
-              const isIncome = t.type === 'IN' || t.type === 'TRANSFER_IN';
-              const isTransfer = t.type.startsWith('TRANSFER_');
-              const accountName = getAccountName(t.accountId);
-              
-              return (
-                <div key={t.id} className="py-3 flex justify-between items-center hover:bg-[rgba(26,26,26,0.02)] px-2 rounded-lg transition-colors">
-                  <div className="flex-1 min-w-0 pr-3">
-                    <div className="flex items-center space-x-2">
-                      {isTransfer ? (
-                        <ArrowLeftRight size={13} className="text-noria-muted flex-shrink-0" />
-                      ) : isIncome ? (
-                        <ArrowUpRight size={13} style={{ color: '#5C7A52' }} className="flex-shrink-0" />
-                      ) : (
-                        <ArrowDownRight size={13} style={{ color: '#1A1A1A' }} className="flex-shrink-0" />
-                      )}
-                      <span className="text-[14px] font-[400] text-noria-text truncate">
-                        {t.description || (isIncome ? 'Ingreso' : 'Gasto')}
-                      </span>
-                    </div>
-                    
-                    <p className="text-[10px] text-noria-muted uppercase tracking-wider font-mono mt-0.5">
-                      {new Date(t.date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' })}
-                      {` · ${accountName}`}
-                      {t.pillar && (
-                        <span 
-                          className="ml-1.5 px-1 py-0.2 rounded text-[8px] font-[600]"
-                          style={{
-                            background: t.pillar === 'NEED' ? 'rgba(92,122,82,0.1)' : t.pillar === 'WANT' ? 'rgba(74,100,117,0.1)' : 'rgba(184,134,11,0.1)',
-                            color: t.pillar === 'NEED' ? '#5C7A52' : t.pillar === 'WANT' ? '#4A6475' : '#B8860B'
-                          }}
-                        >
-                          {t.pillar}
-                        </span>
-                      )}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center space-x-3">
-                    <div className="text-right">
-                      <p 
-                        className="text-[14px] font-[500] font-mono"
-                        style={{ color: isIncome ? '#5C7A52' : '#1A1A1A' }}
-                      >
-                        {isIncome ? '+' : '-'}${fmt(t.amount)}
-                      </p>
-                      <p className="text-[9px] text-noria-muted">{t.currency}</p>
-                    </div>
-
-                    <div className="flex space-x-1">
-                      {/* Permitir editar si no es transferencia (las transferencias son complejas de editar) */}
-                      {!isTransfer && (
-                        <button
-                          onClick={() => handleStartEdit(t)}
-                          className="p-1 hover:bg-noria-text/5 rounded transition-colors text-noria-muted hover:text-noria-text"
-                          title="Editar"
-                        >
-                          <Pencil size={12} strokeWidth={1.5} />
-                        </button>
-                      )}
-                      <button
-                        onClick={() => onDeleteTransaction(t)}
-                        className="p-1 hover:bg-[#9F2F2D]/10 rounded transition-colors text-noria-muted hover:text-[#9F2F2D]"
-                        title="Eliminar"
-                      >
-                        <Trash2 size={12} strokeWidth={1.5} />
-                      </button>
-                    </div>
-                  </div>
+          <div className="space-y-4">
+            {Object.entries(groupedTransactions).map(([dateLabel, items]) => (
+              <div key={dateLabel} className="space-y-1">
+                <div className="px-1 pb-0 text-[10px] font-mono font-[700] tracking-[0.12em] text-noria-text">
+                  {dateLabel}
                 </div>
-              );
-            })}
+                <div className="divide-y divide-[#1A1A1A]/12">
+                  {items.map(renderRow)}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
 
-      {/* ── MODAL EDITAR TRANSACCIÓN ── */}
       {editingTx && (
         <>
           <div className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40" onClick={() => setEditingTx(null)} />
-          <div className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto animate-slide-up"
-            style={{ background: '#F5F2ED', borderRadius: '20px 20px 0 0', boxShadow: '0 -8px 40px rgba(0,0,0,0.08)' }}>
-            <form onSubmit={handleSaveEdit} className="px-6 pt-4 pb-10 space-y-4">
-              <div className="flex justify-center mb-2">
-                <div className="w-8 h-[3px] rounded-full" style={{ background: 'rgba(26,26,26,0.12)' }} />
-              </div>
-
-              <div className="flex justify-between items-center">
-                <h4 className="text-[16px] font-[400] text-noria-text">Editar Transacción</h4>
-                <button type="button" onClick={() => setEditingTx(null)}
-                  className="focus:outline-none p-1" style={{ color: 'rgba(26,26,26,0.4)' }}>✕</button>
+          <div
+            className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto animate-slide-up"
+            style={{ background: '#F5F2ED', borderTop: '2px solid #1A1A1A' }}
+          >
+            <form onSubmit={handleSaveEdit} className="px-6 pt-5 pb-10 space-y-4">
+              <div className="flex justify-between items-center border-b border-[#1A1A1A] pb-3">
+                <h4 className="text-[17px] font-[600] text-noria-text leading-tight">Editar transacción</h4>
+                <button
+                  type="button"
+                  onClick={() => setEditingTx(null)}
+                  className="focus:outline-none p-1 text-noria-muted hover:text-noria-text"
+                >
+                  x
+                </button>
               </div>
 
               <div>
@@ -366,13 +383,18 @@ export default function TransactionsSection({
                 <div>
                   <label className="muji-header block mb-2">Pilar</label>
                   <div className="flex space-x-1">
-                    {[['NEED','Necesidad (N)','#5C7A52'],['WANT','Deseo (W)','#4A6475'],['SAVE','Ahorro (S)','#B8860B']].map(([val, label, col]) => (
-                      <button key={val} type="button" onClick={() => setEditPillar(val)}
-                        className="flex-1 py-2 text-[10px] font-[500] uppercase rounded border transition-all"
+                    {[['NEED', 'Necesidad', '#4F8F58'], ['WANT', 'Deseo', '#3F7F9C'], ['SAVE', 'Ahorro', '#C58A14']].map(([val, label, col]) => (
+                      <button
+                        key={val}
+                        type="button"
+                        onClick={() => setEditPillar(val)}
+                        className="flex-1 py-2 text-[10px] font-mono font-[700] uppercase border transition-colors"
                         style={{
-                          borderColor: editPillar === val ? col : 'rgba(26,26,26,0.10)',
-                          color: editPillar === val ? col : 'rgba(26,26,26,0.35)',
-                        }}>
+                          borderColor: editPillar === val ? col : 'rgba(26,26,26,0.16)',
+                          color: editPillar === val ? col : 'rgba(26,26,26,0.48)',
+                          background: 'transparent'
+                        }}
+                      >
                         {label}
                       </button>
                     ))}
@@ -382,10 +404,10 @@ export default function TransactionsSection({
 
               <button
                 type="submit"
-                className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider border mt-2 transition-colors"
+                className="w-full py-3.5 text-[12px] font-mono font-[700] uppercase tracking-[0.12em] border mt-2 transition-colors"
                 style={{ background: 'transparent', color: '#1A1A1A', borderColor: '#1A1A1A' }}
               >
-                Guardar Cambios
+                Guardar cambios
               </button>
             </form>
           </div>

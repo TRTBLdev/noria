@@ -74,7 +74,6 @@ export default function TransactionsScreen() {
       <div className="w-full max-w-md mx-auto px-6">
         <Header title="Transacciones" />
         <section className="py-5">
-          <h2 className="text-[17px] font-[600] text-noria-text leading-tight mb-4">Movimientos</h2>
           <TransactionsSection
             transactions={transactions}
             accounts={accounts}

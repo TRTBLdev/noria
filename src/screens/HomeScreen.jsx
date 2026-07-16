@@ -5,6 +5,7 @@ import Header from '../components/Header.jsx';
 import BottomNav from '../components/BottomNav.jsx';
 import HomeostasisBar from '../components/HomeostasisBar.jsx';
 import FAB from '../components/FAB.jsx';
+import PillarTag from '../components/PillarTag.jsx';
 import { Plus, Check, ChevronDown, ChevronUp, Home, Zap, Monitor } from 'lucide-react';
 
 // Semantic icon map for anchor types
@@ -611,12 +612,6 @@ export default function HomeScreen() {
 
   const fmt = (n) => n.toLocaleString('es-ES', { minimumFractionDigits: 2 });
 
-  const pillarColor = (p) =>
-    p === 'NEED' ? '#4F8F58' : p === 'WANT' ? '#3F7F9C' : '#C58A14';
-  const pillarBg = (p) =>
-    p === 'NEED' ? 'rgba(79,143,88,0.12)' : p === 'WANT' ? 'rgba(63,127,156,0.12)' : 'rgba(197,138,20,0.12)';
-  const pillarLabel = (p) =>
-    p === 'NEED' ? 'NECESIDAD' : p === 'WANT' ? 'DESEO' : 'AHORRO';
   const isAnchorOverdue = (anchor) => {
     if (!anchor.nextDueDate) return false;
     const dateObj = anchor.nextDueDate instanceof Date
@@ -625,9 +620,6 @@ export default function HomeScreen() {
     const startOfCurrentMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     return dateObj < startOfCurrentMonth;
   };
-  const anchorBadgeLabel = (anchor) => isAnchorOverdue(anchor) ? 'ATRASADO' : pillarLabel(anchor.pillar);
-  const anchorBadgeColor = (anchor) => isAnchorOverdue(anchor) ? '#9F2F2D' : pillarColor(anchor.pillar);
-  const anchorBadgeBg = (anchor) => isAnchorOverdue(anchor) ? 'rgba(159,47,45,0.08)' : pillarBg(anchor.pillar);
   const heroAmount = `$${fmt(disponibleDelMes)}`;
   const heroFontSize = heroAmount.length > 11 ? '50px' : heroAmount.length > 9 ? '58px' : '66px';
 
@@ -812,12 +804,13 @@ export default function HomeScreen() {
                             })()}
                           </span>
                         )}
-                        <span
-                          className="noria-pill"
-                          style={{ background: anchorBadgeBg(anchor), color: anchorBadgeColor(anchor) }}
-                        >
-                          {anchorBadgeLabel(anchor)}
-                        </span>
+                        {isAnchorOverdue(anchor) ? (
+                          <span className="noria-pill" style={{ background: 'transparent', color: '#9F2F2D', borderColor: '#9F2F2D' }}>
+                            ATRASADO
+                          </span>
+                        ) : (
+                          <PillarTag pillar={anchor.pillar} size="xs" />
+                        )}
                       </div>
                     </div>
                   </div>

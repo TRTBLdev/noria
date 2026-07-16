@@ -5,6 +5,7 @@ import Header from '../components/Header.jsx';
 import BottomNav from '../components/BottomNav.jsx';
 import FAB from '../components/FAB.jsx';
 import AnchorFormModal from '../components/AnchorFormModal.jsx';
+import PillarTag from '../components/PillarTag.jsx';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Pencil, Archive, ArchiveRestore, Trash2, Check, ChevronDown, ChevronUp, MoreHorizontal } from 'lucide-react';
 
@@ -508,9 +509,6 @@ export default function BudgetScreen() {
   };
 
   const renderAnchorRow = (src) => {
-    const pilarColor = src.pillar === 'NEED' ? '#5C7A52' : src.pillar === 'WANT' ? '#4A6475' : '#B8860B';
-    const pilarBg = src.pillar === 'NEED' ? 'rgba(92,122,82,0.10)' : src.pillar === 'WANT' ? 'rgba(74,100,117,0.10)' : 'rgba(184,134,11,0.10)';
-    const pilarLabel = src.pillar === 'NEED' ? 'NECESIDAD' : src.pillar === 'WANT' ? 'DESEO' : 'AHORRO';
     const nextDate = src.nextDueDate
       ? (typeof src.nextDueDate === 'string'
         ? src.nextDueDate.slice(5, 10).replace('-', '/')
@@ -524,10 +522,7 @@ export default function BudgetScreen() {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 min-w-0">
               <span className="text-[15px] font-[600] text-noria-text truncate">{src.name}</span>
-              <span className="text-[9px] font-mono font-[700] px-1.5 py-0.5 uppercase tracking-[0.08em] border border-[#1A1A1A]"
-                style={{ background: pilarBg, color: pilarColor }}>
-                {pilarLabel}
-              </span>
+              <PillarTag pillar={src.pillar} />
             </div>
             <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.09em] text-noria-muted leading-relaxed">
               <span>${fmt(src.amount)}</span>
