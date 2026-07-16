@@ -8,6 +8,7 @@ import TransactionsSection from '../components/TransactionsSection.jsx';
 export default function TransactionsScreen() {
   const accounts = useLiveQuery(() => db.accounts.toArray()) || [];
   const transactions = useLiveQuery(() => db.transactions.toArray()) || [];
+  const tags = useLiveQuery(() => db.tags.toArray()) || [];
 
   const handleDeleteTransaction = async (tx) => {
     if (!confirm('Seguro que deseas eliminar esta transaccion permanentemente? Se revertira su impacto en los balances.')) return;
@@ -77,6 +78,7 @@ export default function TransactionsScreen() {
           <TransactionsSection
             transactions={transactions}
             accounts={accounts}
+            tags={tags}
             onDeleteTransaction={handleDeleteTransaction}
             onUpdateTransaction={handleUpdateTransaction}
           />

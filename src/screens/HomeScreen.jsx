@@ -6,6 +6,7 @@ import BottomNav from '../components/BottomNav.jsx';
 import HomeostasisBar from '../components/HomeostasisBar.jsx';
 import FAB from '../components/FAB.jsx';
 import PillarTag from '../components/PillarTag.jsx';
+import CategoryTag from '../components/CategoryTag.jsx';
 import { Plus, Check, ChevronDown, ChevronUp, Home, Zap, Monitor } from 'lucide-react';
 
 // Semantic icon map for anchor types
@@ -44,6 +45,7 @@ export default function HomeScreen() {
   const [anchorName, setAnchorName] = useState('');
   const [anchorAmount, setAnchorAmount] = useState('');
   const [anchorPillar, setAnchorPillar] = useState('NEED');
+  const [anchorTagId, setAnchorTagId] = useState('');
   const [anchorAccountId, setAnchorAccountId] = useState('');
   const [anchorDueDate, setAnchorDueDate] = useState('');
   const [anchorError, setAnchorError] = useState('');
@@ -72,6 +74,7 @@ export default function HomeScreen() {
   const incomeSources = useLiveQuery(() => db.income_sources.toArray()) || [];
   const macetas = useLiveQuery(() => db.macetas.toArray()) || [];
   const macetaAllocations = useLiveQuery(() => db.maceta_allocations.toArray()) || [];
+  const tags = useLiveQuery(() => db.tags.toArray()) || [];
 
   const startOfMonth = new Date(); startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0);
   const thisMonthIncomes = transactions.filter(t => new Date(t.date) >= startOfMonth && t.type === 'IN');
@@ -275,6 +278,7 @@ export default function HomeScreen() {
                   nextDueDate: projDate,
                   status: 'PENDING',
                   pillar: temp.pillar,
+                  tagId: temp.tagId || null,
                   isTemplate: false,
                   parentAnchorId: temp.id
                 });
@@ -337,6 +341,7 @@ export default function HomeScreen() {
   const paidAnchors = displayedAnchors.filter(a => a.status === 'PAID').slice(0, 3);
 
   const getSourceName = (id) => incomeSources.find(s => s.id === id)?.name || null;
+  const getTagName = (id) => tags.find(t => t.id === id)?.name || null;
 
   const handlePayAnchor = async (anchor) => {
     if (anchor.pillar === 'SAVE' || anchor.type === 'SAVE') {
@@ -373,7 +378,7 @@ export default function HomeScreen() {
           amount: payingGeneralAnchor.amount,
           currency: payingGeneralAnchor.currency || 'USD',
           accountId: resolvedAccountId,
-          tagId: null,
+          tagId: payingGeneralAnchor.tagId || null,
           pillar: payingGeneralAnchor.pillar,
           incomeSourceId: null,
           anchorId: payingGeneralAnchor.id,
@@ -602,12 +607,13 @@ export default function HomeScreen() {
     await db.anchors.add({
       name: anchorName.trim(), type: 'FIXED', amount: amt, currency: selectedAcc.currency,
       accountId: parseInt(anchorAccountId),
+      tagId: anchorTagId ? parseInt(anchorTagId) : null,
       nextDueDate: anchorDueDate ? new Date(anchorDueDate + 'T12:00:00') : null,
       status: 'PENDING', pillar: anchorPillar,
       isTemplate: true, isArchived: false
     });
     setShowAddAnchorModal(false);
-    setAnchorName(''); setAnchorAmount(''); setAnchorDueDate(''); setAnchorAccountId('');
+    setAnchorName(''); setAnchorAmount(''); setAnchorDueDate(''); setAnchorAccountId(''); setAnchorTagId('');
   };
 
   const fmt = (n) => n.toLocaleString('es-ES', { minimumFractionDigits: 2 });
@@ -811,6 +817,7 @@ export default function HomeScreen() {
                         ) : (
                           <PillarTag pillar={anchor.pillar} size="xs" />
                         )}
+                        <CategoryTag name={getTagName(anchor.tagId)} size="xs" />
                       </div>
                     </div>
                   </div>
@@ -974,6 +981,21 @@ export default function HomeScreen() {
                     ))}
                   </div>
                 </div>
+              </div>
+
+              <div>
+                <label className="muji-header block mb-1">Categoria</label>
+                <select
+                  id="anchor-category"
+                  value={anchorTagId}
+                  onChange={e => setAnchorTagId(e.target.value)}
+                  className="muji-input"
+                >
+                  <option value="">Sin categoria</option>
+                  {tags.map(tag => (
+                    <option key={tag.id} value={tag.id}>{tag.name}</option>
+                  ))}
+                </select>
               </div>
 
               {anchorError && <p className="text-[12px] font-[500]" style={{ color: '#C58A14' }}>{anchorError}</p>}

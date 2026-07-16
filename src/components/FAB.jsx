@@ -36,6 +36,7 @@ export default function FAB() {
   const [amountReceived, setAmountReceived] = useState('');
   const [exchangeRate, setExchangeRate]     = useState('');
   const [pillar, setPillar]           = useState('NEED');
+  const [tagId, setTagId]             = useState('');
   const [description, setDescription] = useState('');
   const [incomeSourceId, setIncomeSourceId] = useState('');
   const [newSourceName, setNewSourceName]   = useState('');
@@ -79,6 +80,7 @@ export default function FAB() {
     setDescription('');
     setNewSourceName('');
     setNewSourceType('SALARY');
+    setTagId('');
     setError('');
     setSuccess(false);
     if (activeAccounts.length > 0) {
@@ -245,7 +247,7 @@ export default function FAB() {
           amount: parsedAmount,
           currency: selectedAccount.currency,
           accountId: parseInt(accountId),
-          tagId: null,
+          tagId: activeForm === 'GASTO' && tagId ? parseInt(tagId) : null,
           pillar:   activeForm === 'GASTO' ? pillar : null,
           incomeSourceId: activeForm === 'INGRESO' ? resolvedSourceId : null,
           description: description.trim(),
@@ -545,6 +547,23 @@ export default function FAB() {
                           </button>
                         ))}
                       </div>
+                    </div>
+                  )}
+
+                  {activeForm === 'GASTO' && (
+                    <div>
+                      <label className="muji-header block mb-1">Categoria</label>
+                      <select
+                        id="tx-category"
+                        value={tagId}
+                        onChange={e => setTagId(e.target.value)}
+                        className="muji-input"
+                      >
+                        <option value="">Sin categoria</option>
+                        {tags.map(tag => (
+                          <option key={tag.id} value={tag.id}>{tag.name}</option>
+                        ))}
+                      </select>
                     </div>
                   )}
 

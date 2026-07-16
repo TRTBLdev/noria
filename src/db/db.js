@@ -23,21 +23,25 @@ db.version(2).stores({
   accounts: '++id, institutionId, name, type, currency, balance, isArchived',
 });
 
+db.version(3).stores({
+  anchors: '++id, name, type, amount, currency, accountId, nextDueDate, status, pillar, tagId',
+});
+
 
 // Seed data function to populate catalogs on first open
 export async function seedDatabase() {
   const tagsCount = await db.tags.count();
   if (tagsCount === 0) {
     await db.tags.bulkAdd([
-      { name: 'Alquiler', pillar: 'NEED' },
-      { name: 'Supermercado', pillar: 'NEED' },
-      { name: 'Electricidad', pillar: 'NEED' },
-      { name: 'Agua/Condominio', pillar: 'NEED' },
-      { name: 'Internet/Fibra', pillar: 'NEED' },
-      { name: 'Netflix/Streaming', pillar: 'WANT' },
-      { name: 'Restaurantes', pillar: 'WANT' },
-      { name: 'Fondo Emergencia', pillar: 'SAVE' },
-      { name: 'Ahorro Viajes', pillar: 'SAVE' }
+      { name: 'Alquiler' },
+      { name: 'Supermercado' },
+      { name: 'Electricidad' },
+      { name: 'Agua/Condominio' },
+      { name: 'Internet/Fibra' },
+      { name: 'Netflix/Streaming' },
+      { name: 'Restaurantes' },
+      { name: 'Fondo Emergencia' },
+      { name: 'Ahorro Viajes' }
     ]);
   }
 }

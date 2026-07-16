@@ -6,6 +6,7 @@ import BottomNav from '../components/BottomNav.jsx';
 import FAB from '../components/FAB.jsx';
 import AnchorFormModal from '../components/AnchorFormModal.jsx';
 import PillarTag from '../components/PillarTag.jsx';
+import CategoryTag from '../components/CategoryTag.jsx';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Pencil, Archive, ArchiveRestore, Trash2, Check, ChevronDown, ChevronUp, MoreHorizontal } from 'lucide-react';
 
@@ -52,6 +53,7 @@ export default function BudgetScreen() {
   const macetas = useLiveQuery(() => db.macetas.toArray()) || [];
   const macetaAllocations = useLiveQuery(() => db.maceta_allocations.toArray()) || [];
   const transactions = useLiveQuery(() => db.transactions.toArray()) || [];
+  const tags = useLiveQuery(() => db.tags.toArray()) || [];
 
   // Migración retrospectiva en caliente de anclas heredadas
   React.useEffect(() => {
@@ -121,6 +123,7 @@ export default function BudgetScreen() {
   };
   
   const getAccountName = (id) => accounts.find(a => a.id === id)?.name || 'Ninguna';
+  const getTagName = (id) => tags.find(t => t.id === id)?.name || null;
 
   const handleCreateAnchor = async (data) => {
     try {
@@ -143,6 +146,7 @@ export default function BudgetScreen() {
         nextDueDate: data.nextDueDate || new Date().toISOString().slice(0, 10),
         status: 'PENDING',
         pillar: data.pillar,
+        tagId: data.tagId || null,
         isTemplate: true,
         isArchived: false
       });
@@ -189,7 +193,7 @@ export default function BudgetScreen() {
           amount: payingGeneralAnchor.amount,
           currency: payingGeneralAnchor.currency || account.currency || 'USD',
           accountId: resolvedAccountId,
-          tagId: null,
+          tagId: payingGeneralAnchor.tagId || null,
           pillar: payingGeneralAnchor.pillar,
           incomeSourceId: null,
           anchorId: payingGeneralAnchor.id,
@@ -405,6 +409,7 @@ export default function BudgetScreen() {
         pillar: data.pillar,
         accountId: data.accountId || null,
         macetaId: data.macetaId || null,
+        tagId: data.tagId || null,
         nextDueDate: data.nextDueDate || null
       });
 
@@ -428,7 +433,8 @@ export default function BudgetScreen() {
             currency,
             pillar: data.pillar,
             accountId: data.accountId || null,
-            macetaId: data.macetaId || null
+            macetaId: data.macetaId || null,
+            tagId: data.tagId || null
           });
         }
       }
@@ -523,6 +529,7 @@ export default function BudgetScreen() {
             <div className="flex items-center gap-2 min-w-0">
               <span className="text-[15px] font-[600] text-noria-text truncate">{src.name}</span>
               <PillarTag pillar={src.pillar} />
+              <CategoryTag name={getTagName(src.tagId)} size="xs" />
             </div>
             <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.09em] text-noria-muted leading-relaxed">
               <span>${fmt(src.amount)}</span>
@@ -1123,6 +1130,7 @@ export default function BudgetScreen() {
         activeAccounts={activeAccounts}
         institutions={institutions}
         macetas={macetas}
+        tags={tags}
         allowedPillars={addAllowedPillars}
       />
 
@@ -1135,6 +1143,7 @@ export default function BudgetScreen() {
         activeAccounts={activeAccounts}
         institutions={institutions}
         macetas={macetas}
+        tags={tags}
         allowedPillars={editingAnchor?.pillar === 'SAVE' ? ['SAVE'] : ['NEED', 'WANT']}
       />
 

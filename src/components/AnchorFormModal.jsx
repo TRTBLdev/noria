@@ -9,6 +9,7 @@ export default function AnchorFormModal({
   activeAccounts = [],
   institutions = [],
   macetas = [],
+  tags = [],
   allowedPillars = ['NEED', 'WANT', 'SAVE'],
 }) {
   const defaultPillar = allowedPillars[0] || 'NEED';
@@ -17,6 +18,7 @@ export default function AnchorFormModal({
   const [dueDate, setDueDate] = useState('');
   const [accountId, setAccountId] = useState('');
   const [macetaId, setMacetaId] = useState('');
+  const [tagId, setTagId] = useState('');
   const [pillar, setPillar] = useState('NEED');
   const [frequencyInterval, setFrequencyInterval] = useState(1);
   const [frequencyUnit, setFrequencyUnit] = useState('MONTHS');
@@ -44,6 +46,7 @@ export default function AnchorFormModal({
       }
       setAccountId(anchor.accountId ? anchor.accountId.toString() : '');
       setMacetaId(anchor.macetaId ? anchor.macetaId.toString() : '');
+      setTagId(anchor.tagId ? anchor.tagId.toString() : '');
       setPillar(allowedPillars.includes(anchor.pillar) ? anchor.pillar : defaultPillar);
       setFrequencyInterval(anchor.frequencyInterval || 1);
       setFrequencyUnit(anchor.frequencyUnit || 'MONTHS');
@@ -54,6 +57,7 @@ export default function AnchorFormModal({
       setDueDate(new Date().toISOString().slice(0, 10));
       setAccountId('');
       setMacetaId('');
+      setTagId('');
       setPillar(defaultPillar);
       setFrequencyInterval(1);
       setFrequencyUnit('MONTHS');
@@ -101,6 +105,7 @@ export default function AnchorFormModal({
       pillar,
       accountId: pillar !== 'SAVE' ? parseInt(accountId) : null,
       macetaId: pillar === 'SAVE' ? parseInt(macetaId) : null,
+      tagId: pillar !== 'SAVE' && tagId ? parseInt(tagId) : null,
       frequencyInterval: intervalVal,
       frequencyUnit,
     };
@@ -273,6 +278,22 @@ export default function AnchorFormModal({
               )}
             </div>
           </div>
+
+          {pillar !== 'SAVE' && (
+            <div>
+              <label className="muji-header block mb-1">Categoria</label>
+              <select
+                value={tagId}
+                onChange={e => setTagId(e.target.value)}
+                className="muji-input"
+              >
+                <option value="">Sin categoria</option>
+                {tags.map(tag => (
+                  <option key={tag.id} value={tag.id}>{tag.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {error && (
             <p className="text-[12px] font-[500] text-center" style={{ color: '#B8860B' }}>

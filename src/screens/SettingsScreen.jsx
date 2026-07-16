@@ -2,75 +2,187 @@ import React, { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
 import Header from '../components/Header.jsx';
+import NoriaSwitch from '../components/NoriaSwitch.jsx';
+import CategoryTag from '../components/CategoryTag.jsx';
 import { sha256 } from '../config/access.private.js';
-import { Download, Upload, EyeOff, Fingerprint, Palette, DollarSign, Trash2, BarChart2, Lock, Pencil, Plus } from 'lucide-react';
+import {
+  Download,
+  Upload,
+  Trash2,
+  Pencil,
+  Plus,
+  ChevronDown,
+  ChevronUp
+} from 'lucide-react';
 
+const PILLARS = {
+  NEED: { label: 'NECESIDADES', color: '#4F8F58' },
+  WANT: { label: 'DESEOS', color: '#3F7F9C' },
+  SAVE: { label: 'AHORRO', color: '#C58A14' }
+};
 
-const Toggle = ({ id, value, onToggle }) => (
-  <button id={id} onClick={onToggle}
-    className="w-10 h-5 rounded-full p-0.5 transition-colors focus:outline-none"
-    style={{ background: value ? '#5C7A52' : 'rgba(26,26,26,0.12)' }}>
-    <div className="w-4 h-4 rounded-full bg-white shadow-sm transition-transform duration-200"
-      style={{ transform: value ? 'translateX(20px)' : 'translateX(0)' }} />
-  </button>
-);
+const clampPct = (value) => Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
+
+function SectionAccordion({ title, open, onToggle, action, children, id }) {
+  return (
+    <section id={id} className="py-3">
+      <div className="flex items-center justify-between gap-3 border-b border-[#1A1A1A] pb-3">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex min-w-0 items-center gap-2 text-left focus:outline-none"
+        >
+          {open ? <ChevronUp size={14} strokeWidth={2} /> : <ChevronDown size={14} strokeWidth={2} />}
+          <h2 className="text-[17px] font-[600] leading-tight text-noria-text">{title}</h2>
+        </button>
+        {action}
+      </div>
+      {open && <div className="pt-4">{children}</div>}
+    </section>
+  );
+}
+
+function OutlineButton({ id, children, onClick, disabled, danger = false, as: Component = 'button', type = 'button', className = '', ...props }) {
+  return (
+    <Component
+      id={id}
+      type={Component === 'button' ? type : undefined}
+      onClick={onClick}
+      disabled={disabled}
+      className={[
+        'inline-flex items-center justify-center gap-2 border px-3 py-2 font-mono text-[10px] font-[700] uppercase tracking-[0.12em] transition-colors focus:outline-none disabled:opacity-30',
+        className
+      ].join(' ')}
+      style={{
+        borderColor: danger ? '#9F2F2D' : '#1A1A1A',
+        color: danger ? '#9F2F2D' : '#1A1A1A',
+        background: 'transparent'
+      }}
+      {...props}
+    >
+      {children}
+    </Component>
+  );
+}
+
+function SettingRow({ label, meta, right, children }) {
+  return (
+    <div className="border-b border-[#1A1A1A]/12 py-4">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-[15px] font-[600] text-noria-text">{label}</p>
+          {meta && <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-noria-muted">{meta}</p>}
+        </div>
+        {right}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function PillarControl({ pillar, value, onChange }) {
+  const meta = PILLARS[pillar];
+  const numericValue = clampPct(parseInt(value, 10));
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <p className="font-mono text-[10px] font-[700] uppercase tracking-[0.16em]" style={{ color: meta.color }}>
+          {meta.label}
+        </p>
+        <div className="flex items-center gap-1">
+          <input
+            id={`pillar-pct-${pillar.toLowerCase()}`}
+            type="number"
+            min="0"
+            max="100"
+            step="1"
+            value={numericValue}
+            onChange={e => onChange(pillar, e.target.value)}
+            className="w-12 border-0 border-b border-[#1A1A1A]/40 bg-transparent text-right font-mono text-[13px] font-[700] text-noria-text outline-none focus:border-[#647C78]"
+          />
+          <span className="font-mono text-[11px] text-noria-muted">%</span>
+        </div>
+      </div>
+      <div className="relative h-6">
+        <div className="absolute left-0 right-0 top-1/2 h-[6px] -translate-y-1/2 border border-[#1A1A1A] bg-transparent" />
+        <div
+          className="absolute left-px top-1/2 h-[4px] -translate-y-1/2"
+          style={{ width: `${numericValue}%`, background: meta.color }}
+        />
+        <span
+          className="absolute top-1/2 h-5 w-[4px] -translate-x-1/2 -translate-y-1/2 bg-[#1A1A1A]"
+          style={{ left: `${numericValue}%` }}
+        />
+        <input
+          type="range"
+          min="0"
+          max="100"
+          value={numericValue}
+          onChange={e => onChange(pillar, e.target.value)}
+          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+        />
+      </div>
+    </div>
+  );
+}
 
 export default function SettingsScreen() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
-  const [error, setError]     = useState('');
+  const [error, setError] = useState('');
 
-  const baseCurrencyObj  = useLiveQuery(() => db.app_config.get('baseCurrency'));
+  const [openSections, setOpenSections] = useState({
+    portability: true,
+    privacy: true,
+    homeostasis: true,
+    catalogs: true,
+    preferences: false,
+    danger: false,
+    institutions: false,
+    tags: false
+  });
+
+  const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
   const monthlyIncomeObj = useLiveQuery(() => db.app_config.get('monthlyIncome'));
-  const maskBalancesObj  = useLiveQuery(() => db.app_config.get('maskBalances'));
-  const biometricLockObj = useLiveQuery(() => db.app_config.get('biometricLock'));
-  const themeObj         = useLiveQuery(() => db.app_config.get('theme'));
-  const pillarPctObj     = useLiveQuery(() => db.app_config.get('pillarPct'));
-  const hashedPinObj     = useLiveQuery(() => db.app_config.get('hashedPin'));
+  const maskBalancesObj = useLiveQuery(() => db.app_config.get('maskBalances'));
+  const themeObj = useLiveQuery(() => db.app_config.get('theme'));
+  const pillarPctObj = useLiveQuery(() => db.app_config.get('pillarPct'));
+  const hashedPinObj = useLiveQuery(() => db.app_config.get('hashedPin'));
 
-  // Dexie Queries para Catálogos
   const institutions = useLiveQuery(() => db.institutions.toArray()) || [];
   const tags = useLiveQuery(() => db.tags.toArray()) || [];
   const accounts = useLiveQuery(() => db.accounts.toArray()) || [];
 
-  const baseCurrency   = baseCurrencyObj?.value  || 'USD';
-  const monthlyIncome  = monthlyIncomeObj?.value  || 0;
-  const maskBalances   = maskBalancesObj?.value   || false;
-  const biometricLock  = biometricLockObj?.value  || false;
-  const theme          = themeObj?.value          || 'System';
-  const pillarPct      = pillarPctObj?.value      || { NEED: 50, WANT: 30, SAVE: 20 };
-  const hasPin         = !!hashedPinObj?.value;
+  const baseCurrency = baseCurrencyObj?.value || 'USD';
+  const monthlyIncome = monthlyIncomeObj?.value || 0;
+  const maskBalances = maskBalancesObj?.value || false;
+  const theme = themeObj?.value || 'System';
+  const pillarPct = pillarPctObj?.value || { NEED: 50, WANT: 30, SAVE: 20 };
+  const hasPin = !!hashedPinObj?.value;
 
-  // Estados locales para la edición de Instituciones
   const [editingInstId, setEditingInstId] = useState(null);
   const [editInstName, setEditInstName] = useState('');
   const [editInstType, setEditInstType] = useState('BANK');
 
-  // Estados locales para Categorías (Tags)
   const [editingTagId, setEditingTagId] = useState(null);
   const [editTagName, setEditTagName] = useState('');
-  const [editTagPillar, setEditTagPillar] = useState('NEED');
   const [showAddTagForm, setShowAddTagForm] = useState(false);
   const [newTagName, setNewTagName] = useState('');
-  const [newTagPillar, setNewTagPillar] = useState('NEED');
 
-  // PIN settings states
-  const [isConfiguringPin, setIsConfiguringPin]   = useState(false);
+  const [isConfiguringPin, setIsConfiguringPin] = useState(false);
   const [isDeactivatingPin, setIsDeactivatingPin] = useState(false);
-  const [isChangingPin, setIsChangingPin]         = useState(false);
-  const [pinInput, setPinInput]                   = useState('');
-  const [confirmPinInput, setConfirmPinInput]     = useState('');
-  const [currentPinVerify, setCurrentPinVerify]   = useState('');
-  const [pinError, setPinError]                   = useState('');
+  const [isChangingPin, setIsChangingPin] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [confirmPinInput, setConfirmPinInput] = useState('');
+  const [currentPinVerify, setCurrentPinVerify] = useState('');
+  const [pinError, setPinError] = useState('');
 
-
-  // Local pillar percentages for editing
-  const [needPct,  setNeedPct]  = useState(pillarPct.NEED);
-  const [wantPct,  setWantPct]  = useState(pillarPct.WANT);
-  const [savePct,  setSavePct]  = useState(pillarPct.SAVE);
+  const [needPct, setNeedPct] = useState(pillarPct.NEED);
+  const [wantPct, setWantPct] = useState(pillarPct.WANT);
+  const [savePct, setSavePct] = useState(pillarPct.SAVE);
   const [pillarError, setPillarError] = useState('');
 
-  // Sync from DB when loaded
   useEffect(() => {
     if (pillarPctObj?.value) {
       setNeedPct(pillarPctObj.value.NEED);
@@ -86,8 +198,53 @@ export default function SettingsScreen() {
     else root.classList.toggle('dark', window.matchMedia('(prefers-color-scheme: dark)').matches);
   }, [theme]);
 
+  const toggleSection = (key) => setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
   const putConfig = async (key, value) => db.app_config.put({ key, value });
   const toggleConfig = async (key, val) => db.app_config.put({ key, value: !val });
+
+  const getPillarValues = () => ({
+    NEED: clampPct(parseInt(needPct, 10)),
+    WANT: clampPct(parseInt(wantPct, 10)),
+    SAVE: clampPct(parseInt(savePct, 10))
+  });
+
+  const setPillarValues = (values) => {
+    setNeedPct(values.NEED);
+    setWantPct(values.WANT);
+    setSavePct(values.SAVE);
+  };
+
+  const handleLinkedPillarChange = (key, rawValue) => {
+    const nextValue = clampPct(parseInt(rawValue || '0', 10));
+    const values = getPillarValues();
+    const delta = nextValue - values[key];
+    values[key] = nextValue;
+
+    let remaining = -delta;
+    const order = {
+      NEED: ['SAVE', 'WANT'],
+      WANT: ['SAVE', 'NEED'],
+      SAVE: ['WANT', 'NEED']
+    }[key];
+
+    for (const otherKey of order) {
+      if (remaining === 0) break;
+      if (remaining < 0) {
+        const reduction = Math.min(values[otherKey], Math.abs(remaining));
+        values[otherKey] -= reduction;
+        remaining += reduction;
+      } else {
+        const increase = Math.min(100 - values[otherKey], remaining);
+        values[otherKey] += increase;
+        remaining -= increase;
+      }
+    }
+
+    const total = values.NEED + values.WANT + values.SAVE;
+    if (total !== 100) values[order[order.length - 1]] += 100 - total;
+    setPillarValues(values);
+    setPillarError('');
+  };
 
   const handleTogglePin = async () => {
     setPinError('');
@@ -179,19 +336,22 @@ export default function SettingsScreen() {
   };
 
   const savePillarPct = async () => {
-    const total = parseInt(needPct) + parseInt(wantPct) + parseInt(savePct);
+    const values = getPillarValues();
+    const total = values.NEED + values.WANT + values.SAVE;
     if (total !== 100) {
       setPillarError(`Los porcentajes deben sumar 100%. Ahora suman ${total}%.`);
       return;
     }
     setPillarError('');
-    await putConfig('pillarPct', { NEED: parseInt(needPct), WANT: parseInt(wantPct), SAVE: parseInt(savePct) });
+    await putConfig('pillarPct', values);
     setMessage('Porcentajes guardados');
     setTimeout(() => setMessage(''), 2000);
   };
 
   const handleExport = async () => {
-    setMessage(''); setError(''); setLoading(true);
+    setMessage('');
+    setError('');
+    setLoading(true);
     try {
       const exportData = {};
       for (const table of db.tables) exportData[table.name] = await table.toArray();
@@ -203,14 +363,20 @@ export default function SettingsScreen() {
       a.click();
       URL.revokeObjectURL(url);
       setMessage('Datos exportados');
-    } catch { setError('Error al exportar'); }
-    finally { setLoading(false); }
+    } catch {
+      setError('Error al exportar');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleImport = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    if (!confirm('Esta operación reemplazará TODOS los datos actuales. ¿Continuar?')) { e.target.value = ''; return; }
+    if (!confirm('Esta operación reemplazará TODOS los datos actuales. ¿Continuar?')) {
+      e.target.value = '';
+      return;
+    }
     setLoading(true);
     const reader = new FileReader();
     reader.onload = async (event) => {
@@ -218,12 +384,18 @@ export default function SettingsScreen() {
         const data = JSON.parse(event.target.result);
         await db.transaction('rw', db.tables, async () => {
           for (const table of db.tables) {
-            if (data[table.name]) { await table.clear(); await table.bulkAdd(data[table.name]); }
+            if (data[table.name]) {
+              await table.clear();
+              await table.bulkAdd(data[table.name]);
+            }
           }
         });
         setMessage('Importado. Recargando...');
         setTimeout(() => window.location.reload(), 1500);
-      } catch { setError('Archivo inválido'); setLoading(false); }
+      } catch {
+        setError('Archivo inválido');
+        setLoading(false);
+      }
     };
     reader.readAsText(file);
   };
@@ -232,11 +404,8 @@ export default function SettingsScreen() {
     if (!editInstName.trim()) return;
     try {
       await db.institutions.update(id, { name: editInstName.trim(), type: editInstType });
-      // Propagar el cambio de nombre a las cuentas que usan este banco
       const relatedAccs = accounts.filter(a => a.institutionId === id);
-      for (const acc of relatedAccs) {
-        await db.accounts.update(acc.id, { name: editInstName.trim() });
-      }
+      for (const acc of relatedAccs) await db.accounts.update(acc.id, { name: editInstName.trim() });
       setEditingInstId(null);
       setMessage('Banco actualizado');
       setTimeout(() => setMessage(''), 2000);
@@ -265,7 +434,7 @@ export default function SettingsScreen() {
     e.preventDefault();
     if (!newTagName.trim()) return;
     try {
-      await db.tags.add({ name: newTagName.trim(), pillar: newTagPillar });
+      await db.tags.add({ name: newTagName.trim() });
       setNewTagName('');
       setShowAddTagForm(false);
       setMessage('Categoría añadida');
@@ -278,7 +447,7 @@ export default function SettingsScreen() {
   const handleUpdateTag = async (id) => {
     if (!editTagName.trim()) return;
     try {
-      await db.tags.update(id, { name: editTagName.trim(), pillar: editTagPillar });
+      await db.tags.update(id, { name: editTagName.trim() });
       setEditingTagId(null);
       setMessage('Categoría actualizada');
       setTimeout(() => setMessage(''), 2000);
@@ -301,236 +470,128 @@ export default function SettingsScreen() {
   const handleClearAll = async () => {
     if (!confirm('¿Estás COMPLETAMENTE seguro? Esta acción es irreversible.')) return;
     setLoading(true);
-    try { await db.delete(); window.location.href = '/'; }
-    catch { setError('Error al eliminar base de datos'); setLoading(false); }
+    try {
+      await db.delete();
+      window.location.href = '/';
+    } catch {
+      setError('Error al eliminar base de datos');
+      setLoading(false);
+    }
   };
 
-  // Section row component
-  const Row = ({ icon, label, right }) => (
-    <div className="noria-row">
-      <div className="flex items-center space-x-3">
-        <span style={{ color: 'rgba(26,26,26,0.4)' }}>{icon}</span>
-        <p className="text-[15px] font-[400] text-noria-text">{label}</p>
-      </div>
-      {right}
-    </div>
-  );
+  const activeInstitutions = institutions.length;
+  const totalAccounts = accounts.length;
 
   return (
     <div className="min-h-screen pb-24 pt-16" style={{ background: '#F5F2ED' }}>
       <Header title="Configuración" showBack={true} />
 
-      <main className="px-6 max-w-md mx-auto">
-
-        {/* ── Data Portability ── */}
-        <section className="py-6" id="portability-section">
-          <p className="label-section mb-4">Portabilidad de Datos</p>
-          <p className="text-[13px] font-[400] mb-4" style={{ color: 'rgba(26,26,26,0.5)' }}>
-            Mueve tu libro de cuentas libremente. Exporta como JSON legible.
-          </p>
-
-          <div className="flex space-x-4 mb-3">
-            <button id="export-data-btn" onClick={handleExport} disabled={loading}
-              className="flex items-center space-x-2 text-[13px] font-[400] focus:outline-none disabled:opacity-30 transition-opacity"
-              style={{ color: '#1A1A1A' }}>
-              <Download size={14} strokeWidth={1.5} />
-              <span>Exportar JSON</span>
-            </button>
-
-            <label id="import-data-label"
-              className="flex items-center space-x-2 text-[13px] font-[400] cursor-pointer"
-              style={{ color: '#1A1A1A' }}>
-              <Upload size={14} strokeWidth={1.5} />
-              <span>Importar datos</span>
-              <input id="import-file-input" type="file" accept=".json" onChange={handleImport} disabled={loading} className="hidden" />
-            </label>
+      <main className="mx-auto max-w-md px-6">
+        {(message || error) && (
+          <div className="py-3 font-mono text-[11px] font-[700] uppercase tracking-[0.1em]">
+            {message && <p style={{ color: '#4F8F58' }} id="settings-success-msg">{message}</p>}
+            {error && <p style={{ color: '#9F2F2D' }} id="settings-error-msg">{error}</p>}
           </div>
+        )}
 
-          {message && <p className="text-[12px] font-[500]" style={{ color: '#5C7A52' }} id="settings-success-msg">{message}</p>}
-          {error   && <p className="text-[12px] font-[500]" style={{ color: '#B8860B' }} id="settings-error-msg">{error}</p>}
-        </section>
+        <div className="space-y-3">
+          <SectionAccordion
+            id="portability-section"
+            title="Portabilidad"
+            open={openSections.portability}
+            onToggle={() => toggleSection('portability')}
+          >
+            <p className="mb-4 text-[13px] leading-relaxed text-noria-muted">
+              Mueve tu libro de cuentas libremente. Exporta o restaura un respaldo JSON completo.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <OutlineButton id="export-data-btn" onClick={handleExport} disabled={loading}>
+                <Download size={13} strokeWidth={1.7} />
+                Exportar
+              </OutlineButton>
+              <OutlineButton as="label" id="import-data-label">
+                <Upload size={13} strokeWidth={1.7} />
+                Importar
+                <input id="import-file-input" type="file" accept=".json" onChange={handleImport} disabled={loading} className="hidden" />
+              </OutlineButton>
+            </div>
+          </SectionAccordion>
 
-        <div className="noria-divider" />
+          <SectionAccordion
+            id="privacy-section"
+            title="Privacidad"
+            open={openSections.privacy}
+            onToggle={() => toggleSection('privacy')}
+          >
+            <SettingRow
+              label="Ocultar saldos"
+              meta="Protege cifras en pantalla"
+              right={<NoriaSwitch id="toggle-mask-balances" checked={maskBalances} onChange={() => toggleConfig('maskBalances', maskBalances)} />}
+            />
+            <SettingRow
+              label="PIN de seguridad"
+              meta={hasPin ? 'Activo' : 'Inactivo'}
+              right={<NoriaSwitch id="toggle-security-pin" checked={hasPin} onChange={handleTogglePin} />}
+            />
 
-        {/* ── Privacy Shield ── */}
-        <section className="py-6" id="privacy-section">
-          <p className="label-section mb-4">Escudo de Privacidad</p>
-
-          <Row
-            icon={<EyeOff size={15} strokeWidth={1.5} />}
-            label="Ocultar Saldos"
-            right={<Toggle id="toggle-mask-balances" value={maskBalances} onToggle={() => toggleConfig('maskBalances', maskBalances)} />}
-          />
-
-          <Row
-            icon={<Lock size={15} strokeWidth={1.5} />}
-            label="PIN de Seguridad"
-            right={<Toggle id="toggle-security-pin" value={hasPin} onToggle={handleTogglePin} />}
-          />
-
-          {/* Formulario de Activación de PIN */}
-          {isConfiguringPin && (
-            <form onSubmit={handleEnablePin} className="mt-3 p-4 border border-[rgba(0,0,0,0.06)] rounded bg-[rgba(26,26,26,0.02)] space-y-3 animate-fade-in" id="enable-pin-form">
-              <p className="text-[11px] font-[500] text-noria-text/60 uppercase tracking-wider">Habilitar PIN de seguridad</p>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="muji-header block mb-1">Nuevo PIN</label>
-                  <input
-                    type="password"
-                    pattern="[0-9]*"
-                    inputMode="numeric"
-                    maxLength={6}
-                    value={pinInput}
-                    onChange={e => setPinInput(e.target.value.replace(/\D/g, ''))}
-                    placeholder="••••"
-                    className="muji-input text-center text-sm"
-                    required
-                  />
+            {isConfiguringPin && (
+              <form onSubmit={handleEnablePin} className="mt-4 space-y-3 border border-[#1A1A1A] p-4" id="enable-pin-form">
+                <p className="font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-noria-muted">Habilitar PIN de seguridad</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="muji-header mb-1 block">Nuevo PIN</label>
+                    <input type="password" pattern="[0-9]*" inputMode="numeric" maxLength={6} value={pinInput} onChange={e => setPinInput(e.target.value.replace(/\D/g, ''))} placeholder="0000" className="muji-input text-center text-sm" required />
+                  </div>
+                  <div>
+                    <label className="muji-header mb-1 block">Confirmar PIN</label>
+                    <input type="password" pattern="[0-9]*" inputMode="numeric" maxLength={6} value={confirmPinInput} onChange={e => setConfirmPinInput(e.target.value.replace(/\D/g, ''))} placeholder="0000" className="muji-input text-center text-sm" required />
+                  </div>
                 </div>
-                <div>
-                  <label className="muji-header block mb-1">Confirmar PIN</label>
-                  <input
-                    type="password"
-                    pattern="[0-9]*"
-                    inputMode="numeric"
-                    maxLength={6}
-                    value={confirmPinInput}
-                    onChange={e => setConfirmPinInput(e.target.value.replace(/\D/g, ''))}
-                    placeholder="••••"
-                    className="muji-input text-center text-sm"
-                    required
-                  />
+                {pinError && <p className="text-[11px] font-[500]" style={{ color: '#9F2F2D' }}>{pinError}</p>}
+                <div className="grid grid-cols-2 gap-2">
+                  <OutlineButton onClick={() => { setIsConfiguringPin(false); setPinError(''); }}>Cancelar</OutlineButton>
+                  <OutlineButton type="submit">Activar</OutlineButton>
                 </div>
-              </div>
-              {pinError && <p className="text-[11px] font-[500]" style={{ color: '#B8860B' }}>{pinError}</p>}
-              <div className="flex space-x-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => { setIsConfiguringPin(false); setPinError(''); }}
-                  className="flex-1 py-1.5 text-[11px] border border-[rgba(26,26,26,0.15)] rounded bg-transparent uppercase tracking-wider font-[500]"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-1.5 text-[11px] rounded uppercase tracking-wider font-[500]"
-                  style={{ background: '#1A1A1A', color: '#F5F2ED' }}
-                >
-                  Activar
-                </button>
-              </div>
-            </form>
-          )}
+              </form>
+            )}
 
-          {/* Formulario de Desactivación de PIN */}
-          {isDeactivatingPin && (
-            <form onSubmit={handleDisablePin} className="mt-3 p-4 border border-[rgba(0,0,0,0.06)] rounded bg-[rgba(26,26,26,0.02)] space-y-3 animate-fade-in" id="disable-pin-form">
-              <p className="text-[11px] font-[500] text-noria-text/60 uppercase tracking-wider">Confirmar Desactivación</p>
-              <div>
-                <label className="muji-header block mb-1">Introduce tu PIN actual</label>
-                <input
-                  type="password"
-                  pattern="[0-9]*"
-                  inputMode="numeric"
-                  maxLength={6}
-                  value={currentPinVerify}
-                  onChange={e => setCurrentPinVerify(e.target.value.replace(/\D/g, ''))}
-                  placeholder="••••"
-                  className="muji-input text-center text-sm"
-                  required
-                />
-              </div>
-              {pinError && <p className="text-[11px] font-[500]" style={{ color: '#B8860B' }}>{pinError}</p>}
-              <div className="flex space-x-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => { setIsDeactivatingPin(false); setPinError(''); }}
-                  className="flex-1 py-1.5 text-[11px] border border-[rgba(26,26,26,0.15)] rounded bg-transparent uppercase tracking-wider font-[500]"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-1.5 text-[11px] rounded uppercase tracking-wider font-[500]"
-                  style={{ background: '#9F2F2D', color: '#F5F2ED' }}
-                >
-                  Desactivar
-                </button>
-              </div>
-            </form>
-          )}
-
-          {/* Formulario de Cambio de PIN */}
-          {isChangingPin && (
-            <form onSubmit={handleChangePin} className="mt-3 p-4 border border-[rgba(0,0,0,0.06)] rounded bg-[rgba(26,26,26,0.02)] space-y-3 animate-fade-in" id="change-pin-form">
-              <p className="text-[11px] font-[500] text-noria-text/60 uppercase tracking-wider">Cambiar PIN de seguridad</p>
-              <div>
-                <label className="muji-header block mb-1">PIN Actual</label>
-                <input
-                  type="password"
-                  pattern="[0-9]*"
-                  inputMode="numeric"
-                  maxLength={6}
-                  value={currentPinVerify}
-                  onChange={e => setCurrentPinVerify(e.target.value.replace(/\D/g, ''))}
-                  placeholder="••••"
-                  className="muji-input text-center text-sm mb-2"
-                  required
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="muji-header block mb-1">Nuevo PIN</label>
-                  <input
-                    type="password"
-                    pattern="[0-9]*"
-                    inputMode="numeric"
-                    maxLength={6}
-                    value={pinInput}
-                    onChange={e => setPinInput(e.target.value.replace(/\D/g, ''))}
-                    placeholder="••••"
-                    className="muji-input text-center text-sm"
-                    required
-                  />
+            {isDeactivatingPin && (
+              <form onSubmit={handleDisablePin} className="mt-4 space-y-3 border border-[#1A1A1A] p-4" id="disable-pin-form">
+                <p className="font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-noria-muted">Confirmar desactivación</p>
+                <label className="muji-header mb-1 block">PIN actual</label>
+                <input type="password" pattern="[0-9]*" inputMode="numeric" maxLength={6} value={currentPinVerify} onChange={e => setCurrentPinVerify(e.target.value.replace(/\D/g, ''))} placeholder="0000" className="muji-input text-center text-sm" required />
+                {pinError && <p className="text-[11px] font-[500]" style={{ color: '#9F2F2D' }}>{pinError}</p>}
+                <div className="grid grid-cols-2 gap-2">
+                  <OutlineButton onClick={() => { setIsDeactivatingPin(false); setPinError(''); }}>Cancelar</OutlineButton>
+                  <OutlineButton danger type="submit">Desactivar</OutlineButton>
                 </div>
-                <div>
-                  <label className="muji-header block mb-1">Confirmar Nuevo PIN</label>
-                  <input
-                    type="password"
-                    pattern="[0-9]*"
-                    inputMode="numeric"
-                    maxLength={6}
-                    value={confirmPinInput}
-                    onChange={e => setConfirmPinInput(e.target.value.replace(/\D/g, ''))}
-                    placeholder="••••"
-                    className="muji-input text-center text-sm"
-                    required
-                  />
-                </div>
-              </div>
-              {pinError && <p className="text-[11px] font-[500]" style={{ color: '#B8860B' }}>{pinError}</p>}
-              <div className="flex space-x-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => { setIsChangingPin(false); setPinError(''); }}
-                  className="flex-1 py-1.5 text-[11px] border border-[rgba(26,26,26,0.15)] rounded bg-transparent uppercase tracking-wider font-[500]"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-1.5 text-[11px] rounded uppercase tracking-wider font-[500]"
-                  style={{ background: '#1A1A1A', color: '#F5F2ED' }}
-                >
-                  Guardar
-                </button>
-              </div>
-            </form>
-          )}
+              </form>
+            )}
 
-          {/* Botón de Cambiar PIN si el PIN ya está activo y no se está editando nada */}
-          {hasPin && !isConfiguringPin && !isDeactivatingPin && !isChangingPin && (
-            <div className="mt-2 text-right">
+            {isChangingPin && (
+              <form onSubmit={handleChangePin} className="mt-4 space-y-3 border border-[#1A1A1A] p-4" id="change-pin-form">
+                <p className="font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-noria-muted">Cambiar PIN de seguridad</p>
+                <label className="muji-header mb-1 block">PIN actual</label>
+                <input type="password" pattern="[0-9]*" inputMode="numeric" maxLength={6} value={currentPinVerify} onChange={e => setCurrentPinVerify(e.target.value.replace(/\D/g, ''))} placeholder="0000" className="muji-input text-center text-sm" required />
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="muji-header mb-1 block">Nuevo PIN</label>
+                    <input type="password" pattern="[0-9]*" inputMode="numeric" maxLength={6} value={pinInput} onChange={e => setPinInput(e.target.value.replace(/\D/g, ''))} placeholder="0000" className="muji-input text-center text-sm" required />
+                  </div>
+                  <div>
+                    <label className="muji-header mb-1 block">Confirmar</label>
+                    <input type="password" pattern="[0-9]*" inputMode="numeric" maxLength={6} value={confirmPinInput} onChange={e => setConfirmPinInput(e.target.value.replace(/\D/g, ''))} placeholder="0000" className="muji-input text-center text-sm" required />
+                  </div>
+                </div>
+                {pinError && <p className="text-[11px] font-[500]" style={{ color: '#9F2F2D' }}>{pinError}</p>}
+                <div className="grid grid-cols-2 gap-2">
+                  <OutlineButton onClick={() => { setIsChangingPin(false); setPinError(''); }}>Cancelar</OutlineButton>
+                  <OutlineButton type="submit">Guardar</OutlineButton>
+                </div>
+              </form>
+            )}
+
+            {hasPin && !isConfiguringPin && !isDeactivatingPin && !isChangingPin && (
               <button
                 type="button"
                 id="start-change-pin-btn"
@@ -543,355 +604,231 @@ export default function SettingsScreen() {
                   setCurrentPinVerify('');
                   setPinError('');
                 }}
-                className="text-[11px] font-[500] uppercase tracking-wider text-[#5C7A52] underline underline-offset-2 focus:outline-none"
+                className="mt-3 font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-[#647C78] focus:outline-none"
               >
                 Cambiar PIN de seguridad
               </button>
+            )}
+          </SectionAccordion>
+
+          <SectionAccordion
+            id="homeostasis-config-section"
+            title="Homeostasis"
+            open={openSections.homeostasis}
+            onToggle={() => toggleSection('homeostasis')}
+          >
+            <p className="mb-5 text-[13px] leading-relaxed text-noria-muted">
+              Ajusta la distribución. Los otros pilares se compensan automáticamente para mantener 100%.
+            </p>
+            <div className="space-y-5">
+              <PillarControl pillar="NEED" value={needPct} onChange={handleLinkedPillarChange} />
+              <PillarControl pillar="WANT" value={wantPct} onChange={handleLinkedPillarChange} />
+              <PillarControl pillar="SAVE" value={savePct} onChange={handleLinkedPillarChange} />
             </div>
-          )}
-        </section>
-
-        <div className="noria-divider" />
-
-        {/* ── Homeostasis — configurar pilares ── */}
-        <section className="py-6" id="homeostasis-config-section">
-          <p className="label-section mb-1">Pilares de Homeostasis</p>
-          <p className="text-[13px] mb-4" style={{ color: 'rgba(26,26,26,0.5)' }}>
-            Ajusta los porcentajes de Necesidades, Deseos y Ahorro. Deben sumar 100%.
-          </p>
-
-          <div className="space-y-4">
-            {[
-              { key: 'NEED', label: 'Necesidades', val: needPct, set: setNeedPct, color: '#5C7A52' },
-              { key: 'WANT', label: 'Deseos',      val: wantPct, set: setWantPct, color: '#4A6475' },
-              { key: 'SAVE', label: 'Ahorro',      val: savePct, set: setSavePct, color: '#B8860B' },
-            ].map(({ key, label, val, set, color }) => (
-              <div key={key} className="flex items-center justify-between">
-                <div className="flex items-center space-x-3">
-                  <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: color }} />
-                  <p className="text-[14px] font-[400] text-noria-text">{label}</p>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <input
-                    id={`pillar-pct-${key.toLowerCase()}`}
-                    type="number" min="0" max="100" step="1"
-                    value={val} onChange={e => set(e.target.value)}
-                    className="w-14 text-right bg-transparent outline-none text-[15px] font-[400] text-noria-text border-b border-[rgba(26,26,26,0.10)] pb-0.5 focus:border-[#5C7A52] transition-colors"
-                  />
-                  <span className="text-[13px]" style={{ color: 'rgba(26,26,26,0.4)' }}>%</span>
-                </div>
-              </div>
-            ))}
-
-            {/* Sum indicator */}
-            <div className="flex items-center justify-between pt-1">
-              <span className="label-section">Total</span>
-              <span
-                className="text-[14px] font-[500]"
-                style={{ color: parseInt(needPct) + parseInt(wantPct) + parseInt(savePct) === 100 ? '#5C7A52' : '#B8860B' }}
-              >
-                {(parseInt(needPct) || 0) + (parseInt(wantPct) || 0) + (parseInt(savePct) || 0)}%
+            <div className="mt-5 flex items-center justify-between border-t border-[#1A1A1A] pt-3">
+              <span className="label-section">Total bloqueado</span>
+              <span className="font-mono text-[14px] font-[700] text-noria-text">
+                {getPillarValues().NEED + getPillarValues().WANT + getPillarValues().SAVE}%
               </span>
             </div>
+            {pillarError && <p className="mt-3 text-[11px] font-[500]" style={{ color: '#9F2F2D' }}>{pillarError}</p>}
+            <OutlineButton id="save-pillar-pct-btn" onClick={savePillarPct} className="mt-4 w-full">
+              Guardar porcentajes
+            </OutlineButton>
+          </SectionAccordion>
 
-            {pillarError && <p className="text-[11px] font-[500]" style={{ color: '#B8860B' }}>{pillarError}</p>}
-
-            <button id="save-pillar-pct-btn" onClick={savePillarPct}
-              className="w-full py-2.5 text-[12px] font-[500] uppercase tracking-wider rounded-[6px] transition-all active:scale-[0.98] mt-1"
-              style={{ background: '#1A1A1A', color: '#F5F2ED' }}>
-              Guardar Porcentajes
-            </button>
-          </div>
-        </section>
-
-        <div className="noria-divider" />
-
-        {/* ── Preferences ── */}
-        <section className="py-6" id="preferences-section">
-          <p className="label-section mb-4">Preferencias</p>
-
-          <Row
-            icon={<DollarSign size={15} strokeWidth={1.5} />}
-            label="Ingreso Mensual Base"
-            right={
-              <input type="number" value={monthlyIncome}
-                onChange={e => putConfig('monthlyIncome', parseFloat(e.target.value) || 0)}
-                className="w-24 text-right bg-transparent outline-none text-[15px] font-[400] text-noria-text border-b border-[rgba(26,26,26,0.10)] pb-0.5 focus:border-[#5C7A52] transition-colors"
-                id="settings-income-input" />
-            }
-          />
-          <Row
-            icon={<DollarSign size={15} strokeWidth={1.5} />}
-            label="Moneda Base"
-            right={
-              <select value={baseCurrency} onChange={e => putConfig('baseCurrency', e.target.value)}
-                className="bg-transparent text-[15px] font-[400] text-noria-text outline-none border-b border-[rgba(26,26,26,0.10)] pb-0.5"
-                id="settings-currency-select">
-                <option value="USD">USD</option>
-                <option value="USDT">USDT</option>
-                <option value="USDC">USDC</option>
-              </select>
-            }
-          />
-          <Row
-            icon={<Palette size={15} strokeWidth={1.5} />}
-            label="Apariencia"
-            right={
-              <select value={theme} onChange={e => putConfig('theme', e.target.value)}
-                className="bg-transparent text-[15px] font-[400] text-noria-text outline-none border-b border-[rgba(26,26,26,0.10)] pb-0.5"
-                id="settings-theme-select">
-                <option value="System">Sistema</option>
-                <option value="Light">Claro</option>
-                <option value="Dark">Oscuro</option>
-              </select>
-            }
-          />
-        </section>
-
-        <div className="noria-divider" />
-
-        {/* ── Catalogs Administration ── */}
-        <section className="py-6" id="catalogs-section">
-          <p className="label-section mb-4">Administración de Catálogos</p>
-
-          {/* ── Catálogo de Bancos ── */}
-          <div className="space-y-3 mb-6">
-            <h5 className="text-[12px] font-[500] uppercase tracking-wider text-noria-text/60">Bancos / Instituciones</h5>
-            <div className="space-y-2">
-              {institutions.map(inst => {
-                const isEditing = editingInstId === inst.id;
-                const relatedCount = accounts.filter(a => a.institutionId === inst.id).length;
-
-                return (
-                  <div key={inst.id} className="flex justify-between items-center p-3 border border-[rgba(0,0,0,0.06)] rounded bg-[rgba(26,26,26,0.01)] text-[13px]">
-                    {isEditing ? (
-                      <div className="flex-1 space-y-2 pr-2">
-                        <input
-                          type="text"
-                          value={editInstName}
-                          onChange={e => setEditInstName(e.target.value)}
-                          className="muji-input text-[12px] py-1 px-2"
-                          required
-                        />
-                        <select
-                          value={editInstType}
-                          onChange={e => setEditInstType(e.target.value)}
-                          className="muji-input text-[12px] py-1 px-2"
-                        >
-                          <option value="BANK">Banco</option>
-                          <option value="NEOBANK">Banco Digital</option>
-                          <option value="EXCHANGE">Exchange</option>
-                          <option value="HOT_WALLET">Hot Wallet</option>
-                          <option value="COLD_WALLET">Cold Wallet</option>
-                          <option value="CASH">Efectivo</option>
-                        </select>
-                        <div className="flex space-x-2">
-                          <button
-                            type="button"
-                            onClick={() => setEditingInstId(null)}
-                            className="px-2 py-1 text-[10px] border border-[rgba(26,26,26,0.15)] rounded font-[500]"
-                          >
-                            Cancelar
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleUpdateInst(inst.id)}
-                            className="px-2 py-1 text-[10px] rounded text-white bg-noria-text font-[500]"
-                          >
-                            Guardar
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <div>
-                          <p className="font-[450] text-noria-text">{inst.name}</p>
-                          <p className="text-[10px] text-noria-muted uppercase tracking-wider mt-0.5">
-                            {inst.type} · {relatedCount} {relatedCount === 1 ? 'cuenta' : 'cuentas'}
-                          </p>
-                        </div>
-                        <div className="flex items-center space-x-1">
-                          <button
-                            onClick={() => {
-                              setEditingInstId(inst.id);
-                              setEditInstName(inst.name);
-                              setEditInstType(inst.type);
-                            }}
-                            className="p-1.5 focus:outline-none hover:bg-noria-text/5 rounded transition-colors text-noria-muted hover:text-noria-text"
-                            title="Editar Banco"
-                          >
-                            <Pencil size={12} strokeWidth={1.5} />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteInst(inst.id, inst.name)}
-                            disabled={relatedCount > 0}
-                            className="p-1.5 focus:outline-none hover:bg-noria-text/5 rounded transition-colors text-noria-muted hover:text-[#9F2F2D] disabled:opacity-30"
-                            title={relatedCount > 0 ? "No se puede eliminar (tiene cuentas activas)" : "Eliminar Banco"}
-                          >
-                            <Trash2 size={12} strokeWidth={1.5} />
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* ── Catálogo de Categorías (Tags) ── */}
-          <div className="space-y-3">
-            <div className="flex justify-between items-center">
-              <h5 className="text-[12px] font-[500] uppercase tracking-wider text-noria-text/60">Etiquetas / Categorías</h5>
+          <SectionAccordion
+            id="catalogs-section"
+            title="Catálogos"
+            open={openSections.catalogs}
+            onToggle={() => toggleSection('catalogs')}
+          >
+            <div className="border-y border-[#1A1A1A]">
               <button
-                onClick={() => setShowAddTagForm(!showAddTagForm)}
-                className="text-[10px] font-[500] uppercase tracking-wider text-[#5C7A52] flex items-center space-x-0.5 focus:outline-none"
+                type="button"
+                onClick={() => toggleSection('institutions')}
+                className="flex w-full items-center justify-between gap-3 border-b border-[#1A1A1A] py-4 text-left focus:outline-none"
               >
-                <Plus size={10} />
-                <span>Añadir</span>
-              </button>
-            </div>
-
-            {/* Formulario Añadir Categoría */}
-            {showAddTagForm && (
-              <form onSubmit={handleCreateTag} className="p-3 border border-[rgba(0,0,0,0.06)] rounded bg-[rgba(26,26,26,0.02)] space-y-3 animate-fade-in">
-                <p className="text-[11px] font-[500] text-noria-text/60 uppercase tracking-wider">Nueva Categoría</p>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="muji-header block mb-1">Nombre</label>
-                    <input
-                      type="text"
-                      value={newTagName}
-                      onChange={e => setNewTagName(e.target.value)}
-                      placeholder="Ej. Mascotas"
-                      className="muji-input text-[12px] py-1 px-2"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="muji-header block mb-1">Pilar</label>
-                    <select
-                      value={newTagPillar}
-                      onChange={e => setNewTagPillar(e.target.value)}
-                      className="muji-input text-[12px] py-1 px-2"
-                    >
-                      <option value="NEED">Necesidad (NEED)</option>
-                      <option value="WANT">Deseo (WANT)</option>
-                      <option value="SAVE">Ahorro (SAVE)</option>
-                    </select>
-                  </div>
+                <div>
+                  <p className="text-[15px] font-[600] text-noria-text">Instituciones</p>
+                  <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-noria-muted">
+                    {activeInstitutions} entidades / {totalAccounts} cuentas
+                  </p>
                 </div>
-                <div className="flex space-x-2">
+                <span className="h-10 w-10 border border-[#1A1A1A] flex items-center justify-center">
+                  {openSections.institutions ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                </span>
+              </button>
+
+              {openSections.institutions && (
+                <div className="space-y-3 border-b border-[#1A1A1A] py-4">
+                  {institutions.map(inst => {
+                    const isEditing = editingInstId === inst.id;
+                    const relatedCount = accounts.filter(a => a.institutionId === inst.id).length;
+
+                    return (
+                      <div key={inst.id} className="border border-[#1A1A1A]/20 p-3">
+                        {isEditing ? (
+                          <div className="space-y-2">
+                            <input type="text" value={editInstName} onChange={e => setEditInstName(e.target.value)} className="muji-input text-[12px]" required />
+                            <select value={editInstType} onChange={e => setEditInstType(e.target.value)} className="muji-input text-[12px]">
+                              <option value="BANK">Banco</option>
+                              <option value="NEOBANK">Banco digital</option>
+                              <option value="EXCHANGE">Exchange</option>
+                              <option value="HOT_WALLET">Hot Wallet</option>
+                              <option value="COLD_WALLET">Cold Wallet</option>
+                              <option value="CASH">Efectivo</option>
+                            </select>
+                            <div className="grid grid-cols-2 gap-2">
+                              <OutlineButton onClick={() => setEditingInstId(null)}>Cancelar</OutlineButton>
+                              <OutlineButton onClick={() => handleUpdateInst(inst.id)}>Guardar</OutlineButton>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="text-[14px] font-[600] text-noria-text">{inst.name}</p>
+                              <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-noria-muted">
+                                {inst.type} / {relatedCount} {relatedCount === 1 ? 'cuenta' : 'cuentas'}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <button type="button" onClick={() => { setEditingInstId(inst.id); setEditInstName(inst.name); setEditInstType(inst.type); }} className="p-1.5 text-noria-muted hover:text-noria-text focus:outline-none" title="Editar banco">
+                                <Pencil size={12} strokeWidth={1.5} />
+                              </button>
+                              <button type="button" onClick={() => handleDeleteInst(inst.id, inst.name)} disabled={relatedCount > 0} className="p-1.5 text-noria-muted hover:text-[#9F2F2D] disabled:opacity-30 focus:outline-none" title={relatedCount > 0 ? 'No se puede eliminar' : 'Eliminar banco'}>
+                                <Trash2 size={12} strokeWidth={1.5} />
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => toggleSection('tags')}
+                className="flex w-full items-center justify-between gap-3 py-4 text-left focus:outline-none"
+              >
+                <div>
+                  <p className="text-[15px] font-[600] text-noria-text">Categorías globales</p>
+                  <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-noria-muted">
+                    {tags.length} categorías
+                  </p>
+                </div>
+                <span className="h-10 w-10 border border-[#1A1A1A] flex items-center justify-center">
+                  {openSections.tags ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                </span>
+              </button>
+
+              {openSections.tags && (
+                <div className="space-y-3 border-t border-[#1A1A1A] py-4">
                   <button
                     type="button"
-                    onClick={() => setShowAddTagForm(false)}
-                    className="flex-1 py-1 text-[10px] border border-[rgba(26,26,26,0.15)] rounded font-[500]"
+                    onClick={() => setShowAddTagForm(!showAddTagForm)}
+                    className="flex items-center gap-1 font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-[#647C78] focus:outline-none"
                   >
-                    Cancelar
+                    <Plus size={12} />
+                    Añadir categoría
                   </button>
-                  <button
-                    type="submit"
-                    className="flex-1 py-1 text-[10px] rounded text-white bg-noria-text font-[500]"
-                  >
-                    Crear
-                  </button>
-                </div>
-              </form>
-            )}
 
-            <div className="space-y-2">
-              {tags.map(tag => {
-                const isEditing = editingTagId === tag.id;
-                const pilarColor = tag.pillar === 'NEED' ? '#5C7A52' : tag.pillar === 'WANT' ? '#4A6475' : '#B8860B';
-                const pilarBg = tag.pillar === 'NEED' ? 'rgba(92,122,82,0.10)' : tag.pillar === 'WANT' ? 'rgba(74,100,117,0.10)' : 'rgba(184,134,11,0.10)';
-
-                return (
-                  <div key={tag.id} className="flex justify-between items-center p-3 border border-[rgba(0,0,0,0.06)] rounded bg-[rgba(26,26,26,0.01)] text-[13px]">
-                    {isEditing ? (
-                      <div className="flex-1 space-y-2 pr-2">
-                        <input
-                          type="text"
-                          value={editTagName}
-                          onChange={e => setEditTagName(e.target.value)}
-                          className="muji-input text-[12px] py-1 px-2"
-                          required
-                        />
-                        <select
-                          value={editTagPillar}
-                          onChange={e => setEditTagPillar(e.target.value)}
-                          className="muji-input text-[12px] py-1 px-2"
-                        >
-                          <option value="NEED">Necesidad (NEED)</option>
-                          <option value="WANT">Deseo (WANT)</option>
-                          <option value="SAVE">Ahorro (SAVE)</option>
-                        </select>
-                        <div className="flex space-x-2">
-                          <button
-                            type="button"
-                            onClick={() => setEditingTagId(null)}
-                            className="px-2 py-1 text-[10px] border border-[rgba(26,26,26,0.15)] rounded font-[500]"
-                          >
-                            Cancelar
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleUpdateTag(tag.id)}
-                            className="px-2 py-1 text-[10px] rounded text-white bg-noria-text font-[500]"
-                          >
-                            Guardar
-                          </button>
-                        </div>
+                  {showAddTagForm && (
+                    <form onSubmit={handleCreateTag} className="space-y-3 border border-[#1A1A1A] p-3">
+                      <p className="font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-noria-muted">Nueva categoría</p>
+                      <input type="text" value={newTagName} onChange={e => setNewTagName(e.target.value)} placeholder="Ej. Mascotas" className="muji-input text-[12px]" required />
+                      <div className="grid grid-cols-2 gap-2">
+                        <OutlineButton onClick={() => setShowAddTagForm(false)}>Cancelar</OutlineButton>
+                        <OutlineButton type="submit">Crear</OutlineButton>
                       </div>
-                    ) : (
-                      <>
-                        <div className="flex items-center space-x-2">
-                          <span className="font-[450] text-noria-text">{tag.name}</span>
-                          <span className="text-[9px] font-[600] px-1.5 py-0.5 rounded uppercase tracking-wider" 
-                            style={{ background: pilarBg, color: pilarColor }}>
-                            {tag.pillar}
-                          </span>
-                        </div>
-                        <div className="flex items-center space-x-1">
-                          <button
-                            onClick={() => {
-                              setEditingTagId(tag.id);
-                              setEditTagName(tag.name);
-                              setEditTagPillar(tag.pillar);
-                            }}
-                            className="p-1.5 focus:outline-none hover:bg-noria-text/5 rounded transition-colors text-noria-muted hover:text-noria-text"
-                            title="Editar Categoría"
-                          >
-                            <Pencil size={12} strokeWidth={1.5} />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteTag(tag.id, tag.name)}
-                            className="p-1.5 focus:outline-none hover:bg-noria-text/5 rounded transition-colors text-noria-muted hover:text-[#9F2F2D]"
-                            title="Eliminar Categoría"
-                          >
-                            <Trash2 size={12} strokeWidth={1.5} />
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                );
-              })}
+                    </form>
+                  )}
+
+                  {tags.map(tag => {
+                    const isEditing = editingTagId === tag.id;
+                    return (
+                      <div key={tag.id} className="border-b border-[#1A1A1A]/14 py-3">
+                        {isEditing ? (
+                          <div className="space-y-2">
+                            <input type="text" value={editTagName} onChange={e => setEditTagName(e.target.value)} className="muji-input text-[12px]" required />
+                            <div className="grid grid-cols-2 gap-2">
+                              <OutlineButton onClick={() => setEditingTagId(null)}>Cancelar</OutlineButton>
+                              <OutlineButton onClick={() => handleUpdateTag(tag.id)}>Guardar</OutlineButton>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <span className="truncate text-[14px] font-[600] text-noria-text">{tag.name}</span>
+                              <CategoryTag name={tag.name} size="xs" />
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <button type="button" onClick={() => { setEditingTagId(tag.id); setEditTagName(tag.name); }} className="p-1.5 text-noria-muted hover:text-noria-text focus:outline-none" title="Editar categoría">
+                                <Pencil size={12} strokeWidth={1.5} />
+                              </button>
+                              <button type="button" onClick={() => handleDeleteTag(tag.id, tag.name)} className="p-1.5 text-noria-muted hover:text-[#9F2F2D] focus:outline-none" title="Eliminar categoría">
+                                <Trash2 size={12} strokeWidth={1.5} />
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          </div>
-        </section>
+          </SectionAccordion>
 
-        <div className="noria-divider" />
+          <SectionAccordion
+            id="preferences-section"
+            title="Preferencias"
+            open={openSections.preferences}
+            onToggle={() => toggleSection('preferences')}
+          >
+            <SettingRow
+              label="Ingreso mensual base"
+              right={<input id="settings-income-input" type="number" value={monthlyIncome} onChange={e => putConfig('monthlyIncome', parseFloat(e.target.value) || 0)} className="w-28 border-0 border-b border-[#1A1A1A]/40 bg-transparent text-right font-mono text-[13px] text-noria-text outline-none focus:border-[#647C78]" />}
+            />
+            <SettingRow
+              label="Moneda base"
+              right={
+                <select id="settings-currency-select" value={baseCurrency} onChange={e => putConfig('baseCurrency', e.target.value)} className="border-0 border-b border-[#1A1A1A]/40 bg-transparent font-mono text-[13px] text-noria-text outline-none focus:border-[#647C78]">
+                  <option value="USD">USD</option>
+                  <option value="USDT">USDT</option>
+                  <option value="USDC">USDC</option>
+                </select>
+              }
+            />
+            <SettingRow
+              label="Apariencia"
+              right={
+                <select id="settings-theme-select" value={theme} onChange={e => putConfig('theme', e.target.value)} className="border-0 border-b border-[#1A1A1A]/40 bg-transparent font-mono text-[13px] text-noria-text outline-none focus:border-[#647C78]">
+                  <option value="System">Sistema</option>
+                  <option value="Light">Claro</option>
+                  <option value="Dark">Oscuro</option>
+                </select>
+              }
+            />
+          </SectionAccordion>
 
-        {/* ── Danger Zone ── */}
-        <section className="py-8 flex justify-center" id="danger-zone-section">
-          <button id="clear-all-data-btn" onClick={handleClearAll} disabled={loading}
-            className="flex items-center space-x-2 text-[12px] font-[500] uppercase tracking-wider focus:outline-none disabled:opacity-30 border-b pb-0.5 transition-all"
-            style={{ color: '#9F2F2D', borderColor: 'rgba(159,47,45,0.25)' }}>
-            <Trash2 size={12} strokeWidth={1.5} />
-            <span>Eliminar todos mis datos</span>
-          </button>
-        </section>
-
+          <SectionAccordion
+            id="danger-zone-section"
+            title="Zona crítica"
+            open={openSections.danger}
+            onToggle={() => toggleSection('danger')}
+          >
+            <p className="mb-4 text-[13px] leading-relaxed text-noria-muted">
+              Esta acción borra la base local completa y no puede deshacerse.
+            </p>
+            <OutlineButton id="clear-all-data-btn" onClick={handleClearAll} disabled={loading} danger className="w-full">
+              <Trash2 size={13} strokeWidth={1.7} />
+              Eliminar todos mis datos
+            </OutlineButton>
+          </SectionAccordion>
+        </div>
       </main>
     </div>
   );
