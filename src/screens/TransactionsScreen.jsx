@@ -76,7 +76,7 @@ export default function TransactionsScreen() {
   return (
     <div className="min-h-screen pb-32 pt-16" style={{ background: '#F5F2ED' }}>
       <div className="w-full max-w-md mx-auto px-6">
-        <Header title="Transacciones" />
+        <Header title="Transacciones" showBack={true} backRoute="/budget" />
         <section className="py-5">
           <TransactionsSection
             transactions={transactions}

@@ -18,7 +18,7 @@ const getAccountLabel = (acc, inst) => {
     CREDIT: 'Crédito',
     CASH: 'Efectivo'
   }[acc.type] || acc.type;
-  
+
   let baseName = '';
   if (inst) {
     if (inst.name.toLowerCase() === acc.name.toLowerCase()) {
@@ -29,7 +29,7 @@ const getAccountLabel = (acc, inst) => {
   } else {
     baseName = acc.name;
   }
-  
+
   if (acc.type !== 'CASH') {
     return `${baseName} (${typeLabel})`;
   }
@@ -37,35 +37,35 @@ const getAccountLabel = (acc, inst) => {
 };
 
 export default function FAB() {
-  const [isOpen, setIsOpen]       = useState(false);
+  const [isOpen, setIsOpen] = useState(false);
   const [activeForm, setActiveForm] = useState(null); // 'GASTO' | 'INGRESO' | 'TRANSFERENCIA'
   const sheetRef = useRef(null);
 
-  const accounts      = useLiveQuery(() => db.accounts.toArray())      || [];
-  const institutions  = useLiveQuery(() => db.institutions.toArray())  || [];
+  const accounts = useLiveQuery(() => db.accounts.toArray()) || [];
+  const institutions = useLiveQuery(() => db.institutions.toArray()) || [];
   const activeAccounts = accounts.filter(a => !a.isArchived);
-  const tags          = useLiveQuery(() => db.tags.toArray())           || [];
+  const tags = useLiveQuery(() => db.tags.toArray()) || [];
   const incomeSources = useLiveQuery(() => db.income_sources.toArray()) || [];
-  const incomeTypes   = useLiveQuery(() => db.income_types.orderBy('name').toArray()) || [];
+  const incomeTypes = useLiveQuery(() => db.income_types.orderBy('name').toArray()) || [];
   const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
-  const baseCurrency  = baseCurrencyObj?.value || 'USD';
-  const thirdParties  = useLiveQuery(() => db.third_parties.toArray()) || [];
+  const baseCurrency = baseCurrencyObj?.value || 'USD';
+  const thirdParties = useLiveQuery(() => db.third_parties.toArray()) || [];
 
-  const instruments   = useLiveQuery(() => db.instruments.toArray())  || [];
+  const instruments = useLiveQuery(() => db.instruments.toArray()) || [];
 
-  const [date, setDate]               = useState(new Date().toISOString().slice(0, 10));
-  const [accountId, setAccountId]     = useState('');
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [accountId, setAccountId] = useState('');
   const [toAccountId, setToAccountId] = useState('');
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('');
-  const [amount, setAmount]           = useState('');
+  const [amount, setAmount] = useState('');
   const [amountReceived, setAmountReceived] = useState('');
-  const [exchangeRate, setExchangeRate]     = useState('');
-  const [tagId, setTagId]             = useState('');
+  const [exchangeRate, setExchangeRate] = useState('');
+  const [tagId, setTagId] = useState('');
   const [description, setDescription] = useState('');
   const [incomeSourceId, setIncomeSourceId] = useState('');
-  const [newSourceName, setNewSourceName]   = useState('');
+  const [newSourceName, setNewSourceName] = useState('');
   const [newSourceIncomeTypeId, setNewSourceIncomeTypeId] = useState('');
-  const [error, setError]   = useState('');
+  const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
 
   const [thirdPartyInput, setThirdPartyInput] = useState('');
@@ -81,10 +81,10 @@ export default function FAB() {
   const activeCurrencies = dbCurrencies.length > 0
     ? dbCurrencies.filter(c => c.isActive)
     : [
-        { code: 'USD', name: 'Dólar' },
-        { code: 'VES', name: 'Bolívar' },
-        { code: 'USDT', name: 'Tether' }
-      ];
+      { code: 'USD', name: 'Dólar' },
+      { code: 'VES', name: 'Bolívar' },
+      { code: 'USDT', name: 'Tether' }
+    ];
 
   const [calcCurrencyA, setCalcCurrencyA] = useState('USD');
   const [calcCurrencyB, setCalcCurrencyB] = useState('VES');
@@ -128,7 +128,7 @@ export default function FAB() {
     const tempCurr = calcCurrencyA;
     setCalcCurrencyA(calcCurrencyB);
     setCalcCurrencyB(tempCurr);
-    
+
     const tempAmt = amountA;
     setAmountA(amountB);
     setAmountB(tempAmt);
@@ -338,7 +338,7 @@ export default function FAB() {
       if (activeForm === 'TRANSFERENCIA') {
         if (!toAccountId) { setError('Selecciona la cuenta de destino'); return; }
         if (accountId === toAccountId) { setError('Las cuentas de origen y destino deben ser distintas'); return; }
-        
+
         const parsedReceived = parseFloat(amountReceived);
         if (isNaN(parsedReceived) || parsedReceived <= 0) { setError('Monto recibido inválido'); return; }
 
@@ -475,12 +475,12 @@ export default function FAB() {
           resolvedSourceId = existing
             ? existing.id
             : await db.income_sources.add({
-                name: nameToUse,
-                type: selectedIncomeType?.legacyKey || 'OTHER',
-                incomeTypeId: selectedIncomeType?.id || null,
-                tagId: null,
-                isActive: true
-              });
+              name: nameToUse,
+              type: selectedIncomeType?.legacyKey || 'OTHER',
+              incomeTypeId: selectedIncomeType?.id || null,
+              tagId: null,
+              isActive: true
+            });
         }
 
         let lotConsumptions = [];
@@ -571,11 +571,11 @@ export default function FAB() {
           if (activeForm === 'GASTO' && isSplit) {
             const splitGroupId = 'SPLIT-' + Date.now();
             const totalGastoConFee = parsedAmount + feeAmountVal;
-            
+
             for (const split of splits) {
               const parsedSplitAmount = parseFloat(split.amount);
               const splitProportion = parsedSplitAmount / parsedAmount;
-              
+
               const splitFee = feeAmountVal * splitProportion;
               const splitTotalAmount = parsedSplitAmount + splitFee;
               const splitTotalProportion = splitTotalAmount / totalGastoConFee;
@@ -796,7 +796,7 @@ export default function FAB() {
                         const sourceAcc = accounts.find(a => a.id.toString() === accountId);
                         const targetAcc = accounts.find(a => a.id.toString() === toAccountId);
                         const isMultiCurrency = sourceAcc && targetAcc && sourceAcc.currency !== targetAcc.currency;
-                        
+
                         const amtNum = parseFloat(amount) || 0;
                         const recNum = parseFloat(amountReceived) || 0;
                         const feeAmt = Math.max(0, amtNum - recNum);
@@ -876,11 +876,11 @@ export default function FAB() {
                           const instId = selectedPaymentMethod.startsWith('inst-') ? parseInt(selectedPaymentMethod.replace('inst-', '')) : null;
                           const inst = instId ? instruments.find(i => i.id === instId) : null;
                           if (!inst || (!inst.feePercentage && !inst.feeFixed)) return null;
-                          
+
                           const baseAmt = parseFloat(amount) || 0;
                           const estimatedFee = (baseAmt * (inst.feePercentage || 0) / 100) + (inst.feeFixed || 0);
                           if (estimatedFee <= 0) return null;
-                          
+
                           return (
                             <div className="p-2.5 border border-[rgba(0,0,0,0.06)] rounded bg-[rgba(26,26,26,0.01)] text-[12px] font-mono text-noria-text/60 space-y-1 animate-fade-in">
                               <div className="flex justify-between">
@@ -909,7 +909,7 @@ export default function FAB() {
                           />
                         </div>
                       )}
-                      
+
                       {activeForm === 'GASTO' && (
                         <div className="flex items-center space-x-2 pt-1 animate-fade-in">
                           <input
@@ -1045,7 +1045,7 @@ export default function FAB() {
                               </button>
                             )}
                           </div>
-                          
+
                           <div className="grid grid-cols-1 gap-3">
                             <div>
                               <label className="text-[10px] font-mono uppercase text-noria-muted block mb-0.5">Monto</label>
@@ -1157,7 +1157,7 @@ export default function FAB() {
                                 const inst = institutions.find(i => i.id === acc.institutionId);
                                 const accLabel = getAccountLabel(acc, inst);
                                 const accInstruments = instruments.filter(i => i.accountId === acc.id);
-                                
+
                                 if (accInstruments.length === 0) {
                                   return (
                                     <option key={`acc-${acc.id}`} value={`acc-${acc.id}`}>
@@ -1165,7 +1165,7 @@ export default function FAB() {
                                     </option>
                                   );
                                 }
-                                
+
                                 return (
                                   <optgroup key={acc.id} label={`${accLabel} (${acc.currency})`}>
                                     {accInstruments.map(i => {
@@ -1193,7 +1193,7 @@ export default function FAB() {
                             <label className="muji-header block mb-1">Cuenta</label>
                             <select id="tx-account" value={accountId} onChange={e => setAccountId(e.target.value)}
                               className="muji-input" required>
-                             {activeAccounts.map(acc => {
+                              {activeAccounts.map(acc => {
                                 const inst = institutions.find(i => i.id === acc.institutionId);
                                 const label = getAccountLabel(acc, inst);
                                 return <option key={acc.id} value={acc.id}>{label} ({acc.currency})</option>;
@@ -1227,11 +1227,11 @@ export default function FAB() {
       {/* -- BOTTOM SHEET: CALCULADORA DE CONVERSIÓN MULTIMONEDA -- */}
       {isCalcOpen && (
         <>
-          <div 
-            className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40 animate-fade-in" 
-            onClick={() => setIsCalcOpen(false)} 
+          <div
+            className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40 animate-fade-in"
+            onClick={() => setIsCalcOpen(false)}
           />
-          <div 
+          <div
             className="fixed bottom-0 left-0 right-0 z-50 max-h-[85vh] max-w-md mx-auto overflow-y-auto bg-[#F5F2ED] border-t-2 border-l-2 border-r-2 border-[#1A1A1A] animate-slide-up px-6 pb-10 pt-4"
             style={{ boxShadow: '0 -8px 40px rgba(0,0,0,0.08)', borderRadius: '0px' }}
           >
@@ -1243,8 +1243,8 @@ export default function FAB() {
             {/* Header */}
             <div className="flex justify-between items-center mb-5">
               <h4 className="text-[16px] font-[500] uppercase tracking-wider text-noria-text">Calculadora Divisas</h4>
-              <button 
-                onClick={() => setIsCalcOpen(false)} 
+              <button
+                onClick={() => setIsCalcOpen(false)}
                 className="focus:outline-none p-1 text-noria-muted hover:text-noria-text"
               >
                 <X size={16} />
@@ -1255,8 +1255,8 @@ export default function FAB() {
             <div className="grid grid-cols-5 gap-2 items-center mb-4">
               <div className="col-span-2">
                 <label className="muji-header block mb-1">De (A)</label>
-                <select 
-                  value={calcCurrencyA} 
+                <select
+                  value={calcCurrencyA}
                   onChange={e => setCalcCurrencyA(e.target.value)}
                   className="muji-input font-mono text-[13px]"
                 >
@@ -1267,7 +1267,7 @@ export default function FAB() {
               </div>
 
               <div className="col-span-1 flex justify-center pt-4">
-                <button 
+                <button
                   type="button"
                   onClick={handleSwap}
                   className="w-8 h-8 border border-[#1A1A1A] flex items-center justify-center hover:bg-noria-text/[0.03] transition-colors focus:outline-none"
@@ -1279,8 +1279,8 @@ export default function FAB() {
 
               <div className="col-span-2">
                 <label className="muji-header block mb-1">A (B)</label>
-                <select 
-                  value={calcCurrencyB} 
+                <select
+                  value={calcCurrencyB}
                   onChange={e => setCalcCurrencyB(e.target.value)}
                   className="muji-input font-mono text-[13px]"
                 >
@@ -1294,11 +1294,11 @@ export default function FAB() {
             {/* Tasa de Cambio */}
             <div className="py-2.5 border-b border-[rgba(26,26,26,0.12)] mb-4">
               <label className="muji-header block mb-1">Tasa de Cambio ({calcCurrencyB}/{calcCurrencyA})</label>
-              <input 
-                type="number" 
-                step="0.0001" 
+              <input
+                type="number"
+                step="0.0001"
                 inputMode="decimal"
-                value={rate} 
+                value={rate}
                 onChange={e => handleRateChangeLocal(e.target.value)}
                 placeholder="Ej. 40.00"
                 className="w-full text-[18px] font-mono text-noria-text bg-transparent outline-none placeholder:text-[rgba(26,26,26,0.15)]"
@@ -1309,11 +1309,11 @@ export default function FAB() {
             <div className="grid grid-cols-2 gap-4 mb-6">
               <div className="py-2.5 border-b border-[rgba(26,26,26,0.12)]">
                 <label className="muji-header block mb-1">Monto en {calcCurrencyA}</label>
-                <input 
-                  type="number" 
-                  step="0.01" 
+                <input
+                  type="number"
+                  step="0.01"
                   inputMode="decimal"
-                  value={amountA} 
+                  value={amountA}
                   onChange={e => handleAmountAChange(e.target.value)}
                   placeholder="0.00"
                   className="w-full text-[20px] font-mono text-noria-text bg-transparent outline-none placeholder:text-[rgba(26,26,26,0.15)]"
@@ -1322,11 +1322,11 @@ export default function FAB() {
 
               <div className="py-2.5 border-b border-[rgba(26,26,26,0.12)]">
                 <label className="muji-header block mb-1">Monto en {calcCurrencyB}</label>
-                <input 
-                  type="number" 
-                  step="0.01" 
+                <input
+                  type="number"
+                  step="0.01"
                   inputMode="decimal"
-                  value={amountB} 
+                  value={amountB}
                   onChange={e => handleAmountBChange(e.target.value)}
                   placeholder="0.00"
                   className="w-full text-[20px] font-mono text-noria-text bg-transparent outline-none placeholder:text-[rgba(26,26,26,0.15)]"

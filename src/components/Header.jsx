@@ -2,7 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Settings, ArrowLeft } from 'lucide-react';
 
-export default function Header({ title = 'Noria', showBack = false, action = null }) {
+export default function Header({ title = 'Noria', showBack = false, backRoute = null, action = null }) {
   const navigate = useNavigate();
 
   return (
@@ -11,7 +11,7 @@ export default function Header({ title = 'Noria', showBack = false, action = nul
         {showBack && (
           <button
             id="header-back-btn"
-            onClick={() => navigate(-1)}
+            onClick={() => backRoute ? navigate(backRoute) : navigate(-1)}
             className="p-1 -ml-1 transition-colors focus:outline-none" style={{ color: 'rgba(26,26,26,0.62)' }}
             aria-label="Volver"
           >
@@ -28,7 +28,7 @@ export default function Header({ title = 'Noria', showBack = false, action = nul
         {action ? (
           action
         ) : (
-          !showBack && title !== 'Configuración' && (
+          title !== 'Configuración' && (
             <button
               id="header-settings-btn"
               onClick={() => navigate('/settings')}

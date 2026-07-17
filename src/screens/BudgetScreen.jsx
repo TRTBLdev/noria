@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
 import Header from '../components/Header.jsx';
@@ -58,6 +58,8 @@ export default function BudgetScreen() {
   const tags = useLiveQuery(() => db.tags.toArray()) || [];
   const dbCurrencies = useLiveQuery(() => db.currencies.toArray()) || [];
   const lots = useLiveQuery(() => db.lots.toArray()) || [];
+  const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
+  const baseCurrency = baseCurrencyObj?.value || 'USD';
 
   const getAccountBalanceInUSD = (acc) => {
     if (acc.currency === 'USD' || acc.currency === 'USDT' || acc.currency === 'USDC') {
@@ -661,6 +663,8 @@ export default function BudgetScreen() {
 
   const projectedInstances = getProjectedInstances();
 
+
+
   const fixedExpenseTemplates = (anchor) => anchor.pillar === 'NEED' || anchor.pillar === 'WANT';
   const filteredActive = templatesActive.filter(fixedExpenseTemplates);
   const filteredPaused = templatesPaused.filter(fixedExpenseTemplates);
@@ -668,44 +672,32 @@ export default function BudgetScreen() {
   const savingsActive = templatesActive.filter(savingsTemplates);
   const savingsPaused = templatesPaused.filter(savingsTemplates);
 
-  // Atajos rápidos de rango dinámico
+  const dateToInputValue = (date) => date.toISOString().slice(0, 10);
+
   const setMonthShortcut = () => {
-    const d = new Date();
-    const start = new Date(d.getFullYear(), d.getMonth(), 1, 12, 0, 0);
-    const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 12, 0, 0);
-    setProjectionStart(start.toISOString().slice(0, 10));
-    setProjectionEnd(end.toISOString().slice(0, 10));
+    const [start, end] = getShortcutRange('month');
+    setProjectionStart(start);
+    setProjectionEnd(end);
   };
 
   const setRangeShortcut = (days) => {
-    const start = new Date();
-    start.setHours(12,0,0,0);
-    const end = new Date();
-    end.setDate(start.getDate() + days);
-    end.setHours(12,0,0,0);
-
-    setProjectionStart(start.toISOString().slice(0, 10));
-    setProjectionEnd(end.toISOString().slice(0, 10));
+    const [start, end] = getShortcutRange(days.toString());
+    setProjectionStart(start);
+    setProjectionEnd(end);
   };
 
   const setQuarterShortcut = () => {
-    const start = new Date();
-    start.setHours(12,0,0,0);
-    // Fin de trimestre (90 días o fin del mes actual + 2)
-    const end = new Date(start.getFullYear(), start.getMonth() + 3, 0, 12, 0, 0);
-    setProjectionStart(start.toISOString().slice(0, 10));
-    setProjectionEnd(end.toISOString().slice(0, 10));
+    const [start, end] = getShortcutRange('quarter');
+    setProjectionStart(start);
+    setProjectionEnd(end);
   };
 
   const setYearShortcut = () => {
-    const start = new Date();
-    start.setHours(12,0,0,0);
-    const end = new Date(start.getFullYear(), 11, 31, 12, 0, 0);
-    setProjectionStart(start.toISOString().slice(0, 10));
-    setProjectionEnd(end.toISOString().slice(0, 10));
+    const [start, end] = getShortcutRange('year');
+    setProjectionStart(start);
+    setProjectionEnd(end);
   };
 
-  const dateToInputValue = (date) => date.toISOString().slice(0, 10);
   const getShortcutRange = (key) => {
     const now = new Date();
     now.setHours(12, 0, 0, 0);
@@ -745,6 +737,7 @@ export default function BudgetScreen() {
   };
 
   const activeShortcut = getActiveShortcut();
+
   const shortcutButtonClass = (key) => [
     'py-1.5 text-[9px] font-mono font-[700] uppercase tracking-[0.12em] leading-none border-b-2 bg-transparent focus:outline-none',
     activeShortcut === key ? 'text-noria-text border-[#647C78]' : 'text-noria-muted border-transparent'
@@ -767,11 +760,110 @@ export default function BudgetScreen() {
   }, {});
 
   // Calculos para resumen superior
-  const porcentajeComprometido = totalIngresosMes > 0 ? Math.round((totalComprometido / totalIngresosMes) * 100) : 0;
-  const paidTotal = paidGastos + paidAhorros;
-  const porcentajePagado = totalComprometido > 0 ? Math.round((paidTotal / totalComprometido) * 100) : 0;
+  const totalVariableBudget = tags
+    .filter(t => t.kind === 'EXPENSE' && t.monthlyBudget > 0)
+    .reduce((sum, t) => sum + t.monthlyBudget, 0);
 
-  const paidSegments = Math.round((porcentajePagado / 100) * 14);
+  const totalPresupuestoGeneral = totalComprometido + totalVariableBudget;
+
+  const thisMonthTransactions = transactions.filter(t => {
+    const d = new Date(t.date);
+    return d >= startOfMonth && d <= endOfMonth;
+  });
+
+  const totalExpensesThisMonth = thisMonthTransactions
+    .filter(t => t.type === 'OUT')
+    .reduce((sum, t) => sum + (t.amountUSD ?? t.amount), 0);
+
+  const totalEjecutadoReal = totalExpensesThisMonth + paidAhorros;
+
+  const porcentajeEjecutado = totalPresupuestoGeneral > 0
+    ? Math.round((totalEjecutadoReal / totalPresupuestoGeneral) * 100)
+    : 0;
+
+  const ejecutadoSegments = Math.round((porcentajeEjecutado / 100) * 14);
+
+  const getTransactionPillar = (tx) => {
+    if (tx.pillar) return tx.pillar;
+    if (tx.tagId) {
+      const tag = tags.find(tg => tg.id === tx.tagId);
+      if (tag) return tag.pillar;
+    }
+    return null;
+  };
+
+  const spentNeeds = thisMonthTransactions
+    .filter(t => t.type === 'OUT' && getTransactionPillar(t) === 'NEED')
+    .reduce((sum, t) => sum + (t.amountUSD ?? t.amount), 0);
+
+  const spentWants = thisMonthTransactions
+    .filter(t => t.type === 'OUT' && getTransactionPillar(t) === 'WANT')
+    .reduce((sum, t) => sum + (t.amountUSD ?? t.amount), 0);
+
+  const spentSavings = paidAhorros;
+
+  const budgetNeeds = templatesActive
+    .filter(a => a.pillar === 'NEED')
+    .reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0) +
+    tags.filter(t => t.kind === 'EXPENSE' && t.pillar === 'NEED' && t.monthlyBudget > 0)
+    .reduce((sum, t) => sum + t.monthlyBudget, 0);
+
+  const budgetWants = templatesActive
+    .filter(a => a.pillar === 'WANT')
+    .reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0) +
+    tags.filter(t => t.kind === 'EXPENSE' && t.pillar === 'WANT' && t.monthlyBudget > 0)
+    .reduce((sum, t) => sum + t.monthlyBudget, 0);
+
+  const budgetSavings = templatesActive
+    .filter(a => a.pillar === 'SAVE')
+    .reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
+
+  const pctNeeds = budgetNeeds > 0 ? Math.round((spentNeeds / budgetNeeds) * 100) : 0;
+  const pctWants = budgetWants > 0 ? Math.round((spentWants / budgetWants) * 100) : 0;
+  const pctSavings = budgetSavings > 0 ? Math.round((spentSavings / budgetSavings) * 100) : 0;
+
+  const totalPillarsBudget = budgetNeeds + budgetWants + budgetSavings;
+
+  const pctNeedsGoal = totalPillarsBudget > 0 ? (budgetNeeds / totalPillarsBudget) : 0;
+  const pctWantsGoal = totalPillarsBudget > 0 ? (budgetWants / totalPillarsBudget) : 0;
+
+  const countNeedsGoal = Math.round(pctNeedsGoal * 100);
+  const countWantsGoal = Math.round(pctWantsGoal * 100);
+  const countSavingsGoal = Math.max(0, 100 - countNeedsGoal - countWantsGoal);
+
+  const spentNeedsPct = budgetNeeds > 0 ? Math.min(1.0, spentNeeds / budgetNeeds) : 0;
+  const spentWantsPct = budgetWants > 0 ? Math.min(1.0, spentWants / budgetWants) : 0;
+  const spentSavingsPct = budgetSavings > 0 ? Math.min(1.0, spentSavings / budgetSavings) : 0;
+
+  const spentNeedsLimit = Math.round(countNeedsGoal * spentNeedsPct);
+  const spentWantsLimit = Math.round(countWantsGoal * spentWantsPct);
+  const spentSavingsLimit = Math.round(countSavingsGoal * spentSavingsPct);
+
+  const gridElements = useMemo(() => {
+    const list = [];
+    for (let i = 0; i < countNeedsGoal; i++) {
+      list.push({
+        color: '#4F8F58',
+        bg: 'rgba(79,143,88,0.18)',
+        isActive: i < spentNeedsLimit
+      });
+    }
+    for (let i = 0; i < countWantsGoal; i++) {
+      list.push({
+        color: '#3F7F9C',
+        bg: 'rgba(63,127,156,0.18)',
+        isActive: i < spentWantsLimit
+      });
+    }
+    for (let i = 0; i < countSavingsGoal; i++) {
+      list.push({
+        color: '#C58A14',
+        bg: 'rgba(197,138,20,0.18)',
+        isActive: i < spentSavingsLimit
+      });
+    }
+    return list;
+  }, [countNeedsGoal, countWantsGoal, countSavingsGoal, spentNeedsLimit, spentWantsLimit, spentSavingsLimit]);
 
   const SummaryCard = ({ label, value, meta, rows, children }) => (
     <div className="border-2 border-[#1A1A1A] p-4 bg-transparent text-noria-text">
@@ -801,42 +893,90 @@ export default function BudgetScreen() {
       <div className="w-full max-w-md mx-auto px-6">
         <Header title="Línea de Flotación" />
 
-        <section className="py-4 space-y-4" id="homeostasis-summary-section">
-          <SummaryCard
-            label="Disponible Libre Real"
-            value={`$${fmt(disponibleLibreReal)}`}
-          >
-            <p className="mt-2 font-mono text-[10px] uppercase tracking-[0.12em] text-noria-muted">
-              De ${fmt(totalIngresosMes)} ingresos este mes
-            </p>
-          </SummaryCard>
-
-          <SummaryCard
-            label="Comprometido"
-            value={`$${fmt(totalComprometido)}`}
-            meta={`(${porcentajeComprometido}%)`}
-            rows={[
-              ['Gastos', `$${fmt(planifiedGastos)}`],
-              ['Ahorros', `$${fmt(planifiedAhorros)}`]
-            ]}
-          />
-
-          <SummaryCard
-            label="Pagado Este Mes"
-            value={`$${fmt(paidTotal)}`}
-            meta={`de $${fmt(totalComprometido)} (${porcentajePagado}%)`}
-          >
-            <div className="mt-4 grid gap-1" style={{ gridTemplateColumns: 'repeat(14, minmax(0, 1fr))' }} aria-label={`Pagado ${porcentajePagado}%`}>
-              {Array.from({ length: 14 }).map((_, idx) => (
-                <span
-                  key={idx}
-                  className="h-4 border border-[rgba(26,26,26,0.12)]"
-                  style={{ background: idx < paidSegments ? '#647C78' : 'rgba(26,26,26,0.08)' }}
-                />
-              ))}
+        <section className="py-4" id="homeostasis-summary-section">
+          <div className="border-2 border-[#1A1A1A] p-4 bg-transparent text-noria-text font-mono text-[11px] leading-relaxed uppercase tracking-wider space-y-3">
+            {/* Header Row */}
+            <div className="grid grid-cols-2 gap-4 pb-3 border-b-2 border-[#1A1A1A]">
+              <div>
+                <span className="text-[9px] font-mono font-bold tracking-[0.14em] text-noria-muted block">INGRESOS</span>
+                <p className="text-[17px] font-sans font-bold leading-tight mt-0.5">{fmt(totalIngresosMes)} {baseCurrency}</p>
+              </div>
+              <div className="border-l border-[#1A1A1A]/20 pl-4">
+                <span className="text-[9px] font-mono font-bold tracking-[0.14em] text-noria-muted block">PRESUPUESTO TOTAL</span>
+                <p className="text-[17px] font-sans font-bold leading-tight mt-0.5">{fmt(totalPresupuestoGeneral)} {baseCurrency}</p>
+              </div>
             </div>
-          </SummaryCard>
+
+            {/* Matrix & Side Stats */}
+            <div className="grid grid-cols-12 gap-4 pt-1">
+              {/* Left Column: 10x10 Matrix */}
+              <div className="col-span-6 flex items-center justify-center">
+                <div className="grid grid-cols-10 gap-0.5 w-full aspect-square p-0.5 bg-transparent">
+                  {gridElements.map((el, idx) => (
+                    <span
+                      key={idx}
+                      className={`w-full aspect-square transition-all duration-300 ${
+                        el.isActive
+                          ? 'border'
+                          : 'border border-[#1A1A1A]/15 bg-transparent'
+                      }`}
+                      style={el.isActive ? { background: el.color, borderColor: el.color } : {}}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* Right Column: Detailed Pillar Stats */}
+              <div className="col-span-6 flex flex-col justify-between py-0.5 space-y-2">
+                <div>
+                  <span className="text-[9px] font-mono font-bold tracking-[0.12em] text-noria-muted block leading-none">NECESIDADES</span>
+                  <p className="text-[13px] font-sans font-bold leading-tight mt-0.5">{fmt(spentNeeds)} {baseCurrency}</p>
+                  <p className="text-[8px] font-mono text-noria-muted leading-none mt-0.5">({pctNeeds}% de {fmt(budgetNeeds)})</p>
+                </div>
+                <div>
+                  <span className="text-[9px] font-mono font-bold tracking-[0.12em] text-noria-muted block leading-none">DESEOS</span>
+                  <p className="text-[13px] font-sans font-bold leading-tight mt-0.5">{fmt(spentWants)} {baseCurrency}</p>
+                  <p className="text-[8px] font-mono text-noria-muted leading-none mt-0.5">({pctWants}% de {fmt(budgetWants)})</p>
+                </div>
+                <div>
+                  <span className="text-[9px] font-mono font-bold tracking-[0.12em] text-noria-muted block leading-none">AHORRO</span>
+                  <p className="text-[13px] font-sans font-bold leading-tight mt-0.5">{fmt(spentSavings)} {baseCurrency}</p>
+                  <p className="text-[8px] font-mono text-noria-muted leading-none mt-0.5">({pctSavings}% de {fmt(budgetSavings)})</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Bottom Row */}
+            <div className="border-t-2 border-[#1A1A1A] pt-3 grid grid-cols-12 gap-4 items-center">
+              <div className="col-span-7">
+                <span className="text-[9px] font-mono font-bold tracking-[0.12em] text-noria-muted block leading-none">GASTADO</span>
+                <p className="text-[12px] font-sans font-bold leading-tight mt-0.5">{fmt(totalEjecutadoReal)} {baseCurrency} ({porcentajeEjecutado}%)</p>
+                <div className="grid grid-cols-10 gap-0.5 w-full h-2.5 mt-1.5 bg-transparent">
+                  {Array.from({ length: 10 }).map((_, idx) => {
+                    const isActive = idx < Math.round((porcentajeEjecutado / 100) * 10);
+                    return (
+                      <span
+                        key={idx}
+                        className={`h-full transition-all duration-300 ${
+                          isActive
+                            ? 'border border-[#647C78]'
+                            : 'border border-[#1A1A1A]/15 bg-transparent'
+                        }`}
+                        style={isActive ? { background: '#647C78' } : {}}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="col-span-5 border-l border-[#1A1A1A]/20 pl-4 text-right">
+                <span className="text-[9px] font-mono font-bold tracking-[0.12em] text-noria-muted block leading-none">DISPONIBLE</span>
+                <p className="text-[15px] font-sans font-bold leading-tight mt-0.5 text-[#4F8F58]">{fmt(disponibleLibreReal)}</p>
+                <p className="text-[9px] font-mono font-bold text-noria-text leading-none mt-0.5">{baseCurrency}</p>
+              </div>
+            </div>
+          </div>
         </section>
+
         {/* Calendario de pagos */}
         <section className="py-0" id="projections-section">
           <div className="flex items-center justify-between py-3.5 border-b border-[#1A1A1A]">
@@ -961,7 +1101,7 @@ export default function BudgetScreen() {
               className="flex items-center space-x-2 text-left focus:outline-none"
             >
               {isFixedExpensesOpen ? <ChevronUp size={14} strokeWidth={2} /> : <ChevronDown size={14} strokeWidth={2} />}
-              <h4 className="text-[17px] font-[600] text-noria-text leading-tight">Gastos fijos</h4>
+              <h4 className="text-[17px] font-[600] text-noria-text leading-tight">Gastos programados</h4>
             </button>
 
             <button
@@ -979,7 +1119,7 @@ export default function BudgetScreen() {
             <div className="pt-4 pb-4 animate-fade-in">
               {filteredActive.length === 0 ? (
                 <div className="flex flex-col items-center py-8 space-y-2 border border-[rgba(26,26,26,0.18)]">
-                  <p className="text-[12px]" style={{ color: 'rgba(26,26,26,0.35)' }}>Sin gastos fijos programados</p>
+                  <p className="text-[12px]" style={{ color: 'rgba(26,26,26,0.35)' }}>Sin gastos programados</p>
                 </div>
               ) : (
                 <div className="bg-transparent">
@@ -1063,20 +1203,31 @@ export default function BudgetScreen() {
           )}
         </section>
 
-        <button
-          type="button"
-          onClick={() => navigate('/transactions')}
-          className="mt-3 mb-4 text-[10px] font-mono font-[700] uppercase tracking-wider text-noria-muted hover:text-noria-text focus:outline-none"
-        >
-          Ver transacciones
-        </button>
+        <div className="font-mono text-[10px] font-[700] uppercase tracking-[0.12em] mt-6 mb-4 bg-transparent space-y-2">
+          <button
+            type="button"
+            onClick={() => navigate('/budget/full')}
+            className="w-full py-2 flex justify-between items-center hover:bg-black/5 transition-colors focus:outline-none text-left"
+          >
+            <span>>>> Ver Presupuesto Detallado</span>
+            <span className="text-noria-muted">[DETALLE]</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/transactions')}
+            className="w-full py-2 flex justify-between items-center hover:bg-black/5 transition-colors focus:outline-none text-left"
+          >
+            <span>>>> Ver Historial Transacciones</span>
+            <span className="text-noria-muted">[HISTORIAL]</span>
+          </button>
+        </div>
       </div>
 
       {payingGeneralAnchor && (
         <>
           <div className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40" onClick={() => setPayingGeneralAnchor(null)} />
           <div className="fixed bottom-0 left-0 right-0 z-50 max-w-md mx-auto animate-slide-up"
-            style={{ background: '#F5F2ED', borderRadius: '20px 20px 0 0', boxShadow: '0 -8px 40px rgba(0,0,0,0.08)' }}>
+            style={{ background: '#F5F2ED', borderRadius: '0px', borderTop: '2px solid #1A1A1A', borderLeft: '2px solid #1A1A1A', borderRight: '2px solid #1A1A1A', boxShadow: '0 -8px 40px rgba(0,0,0,0.08)' }}>
             <form onSubmit={handleConfirmGeneralPay} className="px-6 pt-4 pb-10 space-y-4">
               <div className="flex justify-center mb-2">
                 <div className="w-8 h-[3px] rounded-full" style={{ background: 'rgba(26,26,26,0.12)' }} />

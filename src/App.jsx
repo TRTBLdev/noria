@@ -5,6 +5,7 @@ import OnboardingScreen from './screens/OnboardingScreen.jsx';
 import HomeScreen from './screens/HomeScreen.jsx';
 import AccountsScreen from './screens/AccountsScreen.jsx';
 import BudgetScreen from './screens/BudgetScreen.jsx';
+import BudgetFull from './screens/BudgetFull.jsx';
 import TransactionsScreen from './screens/TransactionsScreen.jsx';
 import SettingsScreen from './screens/SettingsScreen.jsx';
 import DivisasScreen from './screens/DivisasScreen.jsx';
@@ -21,6 +22,7 @@ export default function App() {
         <Route path="/home" element={<HomeScreen />} />
         <Route path="/accounts" element={<AccountsScreen />} />
         <Route path="/budget" element={<BudgetScreen />} />
+        <Route path="/budget/full" element={<BudgetFull />} />
         <Route path="/transactions" element={<TransactionsScreen />} />
         <Route path="/settings" element={<SettingsScreen />} />
         <Route path="/divisas" element={<DivisasScreen />} />

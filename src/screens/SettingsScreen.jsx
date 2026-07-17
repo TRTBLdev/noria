@@ -188,6 +188,8 @@ export default function SettingsScreen() {
   const [newTagIconKey, setNewTagIconKey] = useState('');
   const [newTagParentId, setNewTagParentId] = useState('');
   const [newTagPillar, setNewTagPillar] = useState('NEED');
+  const [newTagBudget, setNewTagBudget] = useState('');
+  const [editTagBudget, setEditTagBudget] = useState('');
   const [editingIncomeTypeId, setEditingIncomeTypeId] = useState(null);
   const [editIncomeTypeName, setEditIncomeTypeName] = useState('');
   const [editIncomeTypeIconKey, setEditIncomeTypeIconKey] = useState('');
@@ -460,17 +462,22 @@ export default function SettingsScreen() {
         const parent = tags.find(t => t.id === parentIdVal);
         if (parent) finalPillar = parent.pillar || 'NEED';
       }
+      const parsedBudget = parseFloat(newTagBudget);
+      const monthlyBudget = isNaN(parsedBudget) || parsedBudget <= 0 ? null : parsedBudget;
+
       await db.tags.add({
         name: newTagName.trim(),
         iconKey: newTagIconKey || null,
         kind: newTagKind,
         pillar: finalPillar,
-        parentId: parentIdVal
+        parentId: parentIdVal,
+        monthlyBudget: newTagKind === 'EXPENSE' ? monthlyBudget : null
       });
       setNewTagName('');
       setNewTagIconKey('');
       setNewTagParentId('');
       setNewTagPillar('NEED');
+      setNewTagBudget('');
       setShowAddTagForm(false);
       setMessage('Categoría añadida');
       setTimeout(() => setMessage(''), 2000);
@@ -488,11 +495,16 @@ export default function SettingsScreen() {
         const parent = tags.find(t => t.id === parentIdVal);
         if (parent) finalPillar = parent.pillar || 'NEED';
       }
+      const currentTag = tags.find(t => t.id === id);
+      const parsedBudget = parseFloat(editTagBudget);
+      const monthlyBudget = isNaN(parsedBudget) || parsedBudget <= 0 ? null : parsedBudget;
+
       await db.tags.update(id, {
         name: editTagName.trim(),
         iconKey: editTagIconKey || null,
         pillar: finalPillar,
-        parentId: parentIdVal
+        parentId: parentIdVal,
+        monthlyBudget: (currentTag?.kind || 'EXPENSE') === 'EXPENSE' ? monthlyBudget : null
       });
       
       // If it's a parent tag, update all children to have the same pillar
@@ -501,6 +513,7 @@ export default function SettingsScreen() {
       }
 
       setEditingTagId(null);
+      setEditTagBudget('');
       setMessage('Categoría actualizada');
       setTimeout(() => setMessage(''), 2000);
     } catch {
@@ -777,9 +790,24 @@ export default function SettingsScreen() {
                 </div>
               )}
 
+              {tag.kind === 'EXPENSE' && (
+                <div>
+                  <label className="block mb-1 text-[11px] text-noria-muted">Presupuesto Mensual Objetivo (USD)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="Ej. 150"
+                    value={editTagBudget}
+                    onChange={e => setEditTagBudget(e.target.value)}
+                    className="muji-input text-[12px]"
+                  />
+                </div>
+              )}
+
               <IconGridPicker value={editTagIconKey} onChange={setEditTagIconKey} />
               <div className="grid grid-cols-2 gap-2">
-                <OutlineButton onClick={() => setEditingTagId(null)}>Cancelar</OutlineButton>
+                <OutlineButton onClick={() => { setEditingTagId(null); setEditTagBudget(''); }}>Cancelar</OutlineButton>
                 <OutlineButton onClick={() => handleUpdateTag(tag.id)}>Guardar</OutlineButton>
               </div>
             </div>
@@ -808,6 +836,11 @@ export default function SettingsScreen() {
                   {tag.name}
                 </span>
                 {!tag.parentId && <CategoryTag name={tag.pillar} size="xs" />}
+                {tag.kind === 'EXPENSE' && tag.monthlyBudget > 0 && (
+                  <span className="font-mono text-[10px] text-noria-muted ml-2">
+                    (${tag.monthlyBudget.toFixed(2)}/mes)
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-1">
                 <button type="button" onClick={() => { 
@@ -816,6 +849,7 @@ export default function SettingsScreen() {
                   setEditTagIconKey(tag.iconKey || ''); 
                   setEditTagParentId(tag.parentId ? tag.parentId.toString() : '');
                   setEditTagPillar(tag.pillar || 'NEED');
+                  setEditTagBudget(tag.monthlyBudget ? tag.monthlyBudget.toString() : '');
                 }} className="p-1.5 text-noria-muted hover:text-noria-text focus:outline-none" title="Editar categoría">
                   <Pencil size={12} strokeWidth={1.5} />
                 </button>
@@ -898,10 +932,25 @@ export default function SettingsScreen() {
                   </div>
                 )}
                 
+                {kind === 'EXPENSE' && (
+                  <div>
+                    <label className="block mb-1 text-[11px] text-noria-muted">Presupuesto Mensual Objetivo (USD)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="Ej. 150"
+                      value={newTagBudget}
+                      onChange={e => setNewTagBudget(e.target.value)}
+                      className="muji-input text-[12px]"
+                    />
+                  </div>
+                )}
+                
                 <IconGridPicker value={newTagIconKey} onChange={setNewTagIconKey} />
                 
                 <div className="grid grid-cols-2 gap-2">
-                  <OutlineButton onClick={() => { setShowAddTagForm(false); setNewTagIconKey(''); setNewTagParentId(''); }}>Cancelar</OutlineButton>
+                  <OutlineButton onClick={() => { setShowAddTagForm(false); setNewTagIconKey(''); setNewTagParentId(''); setNewTagBudget(''); }}>Cancelar</OutlineButton>
                   <OutlineButton type="submit">Crear</OutlineButton>
                 </div>
               </form>

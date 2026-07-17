@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
 import Header from '../components/Header.jsx';
@@ -321,6 +321,31 @@ export default function HomeScreen() {
     const end = new Date(endOfWeek); end.setHours(23, 59, 59, 999);
     return t >= start && t <= end;
   });
+
+  // 1.5. Estimado semanal de gastos variables
+  const totalWeeklyVariableBudget = useMemo(() => {
+    if (!tags.length) return 0;
+    const sumMonthly = tags
+      .filter(t => t.kind === 'EXPENSE' && t.monthlyBudget > 0)
+      .reduce((sum, t) => sum + t.monthlyBudget, 0);
+    return (sumMonthly * 7) / 30.4375;
+  }, [tags]);
+
+  const weeklyNeedsVariable = useMemo(() => {
+    if (!tags.length) return 0;
+    const sumMonthly = tags
+      .filter(t => t.kind === 'EXPENSE' && t.pillar === 'NEED' && t.monthlyBudget > 0)
+      .reduce((sum, t) => sum + t.monthlyBudget, 0);
+    return (sumMonthly * 7) / 30.4375;
+  }, [tags]);
+
+  const weeklyWantsVariable = useMemo(() => {
+    if (!tags.length) return 0;
+    const sumMonthly = tags
+      .filter(t => t.kind === 'EXPENSE' && t.pillar === 'WANT' && t.monthlyBudget > 0)
+      .reduce((sum, t) => sum + t.monthlyBudget, 0);
+    return (sumMonthly * 7) / 30.4375;
+  }, [tags]);
 
   // 2. Filtrar si hay una fecha seleccionada
   const displayedAnchors = thisWeekAnchors.filter(a => {
@@ -856,17 +881,21 @@ export default function HomeScreen() {
                     </div>
                   </div>
                   <div className="flex items-center space-x-3">
-                    <p className="text-[15px] font-mono font-[700] text-noria-text">
-                      {formatAmountWithSymbol(anchor.amount, anchor.currency)}
+                    <p className="text-[14px] font-mono font-[700] text-noria-text flex items-baseline">
+                      <span>{formatAmountWithSymbol(anchor.amount, anchor.currency)}</span>
+                      {isAnchorOverdue(anchor) ? (
+                        <span className="text-[8px] font-mono font-bold text-[#9F2F2D] ml-1.5">[VENCIDO]</span>
+                      ) : (
+                        <span className="text-[8px] font-mono font-bold text-noria-muted ml-1.5">[PENDIENTE]</span>
+                      )}
                     </p>
                     <button
                       id={`pay-anchor-btn-${anchor.id}`}
                       onClick={() => handlePayAnchor(anchor)}
-                      className="w-7 h-7 border flex items-center justify-center transition-colors focus:outline-none"
-                      style={{ borderColor: 'rgba(26,26,26,0.22)', color: 'rgba(26,26,26,0.34)' }}
+                      className="w-5 h-5 flex items-center justify-center transition-colors focus:outline-none bg-transparent hover:bg-black/5 text-[#1A1A1A]/40 hover:text-noria-text shrink-0"
                       title="Marcar como pagado"
                     >
-                      <Check size={11} strokeWidth={2} />
+                      <Check size={12} strokeWidth={2.5} />
                     </button>
                   </div>
                 </div>
@@ -875,17 +904,38 @@ export default function HomeScreen() {
 
               {/* Paid — muted with strikethrough */}
               {paidAnchors.map(anchor => (
-                <div key={anchor.id} className="noria-row" style={{ opacity: 0.3 }}>
+                <div key={anchor.id} className="noria-row text-noria-text/60">
                   <div className="flex items-center space-x-3">
-                    <div className="w-7 h-7 border flex items-center justify-center"
-                      style={{ background: 'rgba(100,124,120,0.10)', borderColor: 'rgba(100,124,120,0.35)', color: '#647C78' }}>
-                      <Check size={11} strokeWidth={2} />
+                    <div className="w-5 h-5 border border-[#1A1A1A]/35 flex items-center justify-center text-[9px] font-mono font-bold text-[#1A1A1A]/60 bg-[#1A1A1A]/5 shrink-0">
+                      X
                     </div>
-                    <p className="text-[15px] font-[400] text-noria-text line-through">{anchor.name}</p>
+                    <p className="text-[15px] font-[400] text-noria-text/50 line-through">{anchor.name}</p>
                   </div>
-                  <p className="text-[15px] font-mono font-[700] text-noria-text">{formatAmountWithSymbol(anchor.amount, anchor.currency)}</p>
+                  <p className="text-[14px] font-mono font-[700] text-noria-text/50 flex items-baseline line-through">
+                    <span>{formatAmountWithSymbol(anchor.amount, anchor.currency)}</span>
+                    <span className="text-[8px] font-mono font-bold text-[#4F8F58] ml-1.5 no-underline">[OK]</span>
+                  </p>
                 </div>
               ))}
+            </div>
+          )}
+
+          {totalWeeklyVariableBudget > 0 && (
+            <div className="mt-4 border-2 border-[#1A1A1A] p-3 font-mono text-[9px] uppercase tracking-[0.1em] bg-transparent">
+              <div className="flex justify-between items-center text-[#1A1A1A]/50 font-[700] pb-2 border-b border-[#1A1A1A]/10">
+                <span>ESTIMADO VARIABLE SEMANAL</span>
+                <span className="font-sans text-[11px] font-bold text-noria-text">~ {formatAmountWithSymbol(totalWeeklyVariableBudget, baseCurrency)}</span>
+              </div>
+              <div className="divide-y divide-[#1A1A1A]/5 text-[9px] pt-1">
+                <div className="flex justify-between items-center py-1.5">
+                  <span className="text-[#1A1A1A]/75 pl-2 border-l-2 border-[#4F8F58]">NECESIDADES</span>
+                  <span className="font-sans font-bold">~ {formatAmountWithSymbol(weeklyNeedsVariable, baseCurrency)}</span>
+                </div>
+                <div className="flex justify-between items-center py-1.5">
+                  <span className="text-[#1A1A1A]/75 pl-2 border-l-2 border-[#3F7F9C]">DESEOS</span>
+                  <span className="font-sans font-bold">~ {formatAmountWithSymbol(weeklyWantsVariable, baseCurrency)}</span>
+                </div>
+              </div>
             </div>
           )}
 

@@ -10,6 +10,7 @@ export default function HomeostasisBar() {
   const monthlyIncomeObj = useLiveQuery(() => db.app_config.get('monthlyIncome'));
   // Configurable pillar percentages (default 50/30/20)
   const pillarPctObj     = useLiveQuery(() => db.app_config.get('pillarPct'));
+  const dbCurrencies     = useLiveQuery(() => db.currencies.toArray()) || [];
 
   const baseCurrency   = baseCurrencyObj?.value  || 'USD';
   const monthlyIncome  = monthlyIncomeObj?.value  || 0;
@@ -23,11 +24,26 @@ export default function HomeostasisBar() {
     return all.filter(t => new Date(t.date) >= start && t.type === 'OUT');
   }) || [];
 
+  const convertAmountToBase = (t) => {
+    const amtUSD = t.amountUSD ?? t.amount;
+    if (baseCurrency === 'USD') return amtUSD;
+    if (baseCurrency === 'VES') {
+      const activeVES = dbCurrencies.find(c => c.code === 'VES');
+      const rate = activeVES && activeVES.exchangeRate ? activeVES.exchangeRate : 40.0;
+      return amtUSD * rate;
+    }
+    if (baseCurrency === 'EUR') {
+      return amtUSD / 1.08;
+    }
+    return amtUSD;
+  };
+
   let spentNeeds = 0, spentWants = 0, spentSavings = 0;
   transactions.forEach(t => {
-    if (t.pillar === 'NEED') spentNeeds  += t.amount;
-    if (t.pillar === 'WANT') spentWants  += t.amount;
-    if (t.pillar === 'SAVE') spentSavings += t.amount;
+    const amtBase = convertAmountToBase(t);
+    if (t.pillar === 'NEED') spentNeeds  += amtBase;
+    if (t.pillar === 'WANT') spentWants  += amtBase;
+    if (t.pillar === 'SAVE') spentSavings += amtBase;
   });
 
   const goalNeeds    = monthlyIncome * (pillarPct.NEED / 100);
