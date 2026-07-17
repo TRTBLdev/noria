@@ -19,7 +19,7 @@ export default function MetasTab({
 
   const fmt = (n, dec = 2) => {
     if (typeof n !== 'number') return '0.00';
-    return n.toLocaleString('es-ES', {
+    return n.toLocaleString('en-US', {
       minimumFractionDigits: dec,
       maximumFractionDigits: dec
     });

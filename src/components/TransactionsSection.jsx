@@ -42,7 +42,7 @@ export default function TransactionsSection({
 
   const fmt = (n) => {
     if (typeof n !== 'number') return '0.00';
-    return n.toLocaleString('es-ES', { minimumFractionDigits: 2 });
+    return n.toLocaleString('en-US', { minimumFractionDigits: 2 });
   };
 
   const getAccountName = (id) => accounts.find(a => a.id === id)?.name || 'Cuenta desconocida';

@@ -22,7 +22,21 @@ const INSTRUMENT_TYPES = [
   { value: 'CASH', label: 'Efectivo / Físico' }
 ];
 
-const fmt = (n, d = 2) => n.toLocaleString('es-ES', { minimumFractionDigits: d, maximumFractionDigits: d });
+const fmt = (n, d = 2) => n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+
+const getCurrencySymbol = (code) => {
+  if (code === 'VES') return 'Bs';
+  if (code === 'EUR') return '€';
+  if (code === 'USDT' || code === 'USDC') return code;
+  return '$';
+};
+
+const formatAmountWithSymbol = (amt, code, d = 2) => {
+  const symbol = getCurrencySymbol(code);
+  const formatted = fmt(amt, d);
+  if (code === 'VES') return `${formatted} ${symbol}`;
+  return `${symbol}${formatted}`;
+};
 
 /* ── SUB-COMPONENTE: Listado / Editor de Instrumentos (Reutilizable) ── */
 function InstrumentListEditor({ instrumentsList, setInstrumentsList }) {
@@ -607,9 +621,26 @@ export default function AccountsScreen() {
   const anchors = useLiveQuery(() => db.anchors.toArray()) || [];
   const transactions = useLiveQuery(() => db.transactions.toArray()) || [];
   const tags = useLiveQuery(() => db.tags.orderBy('name').toArray()) || [];
+  const lots = useLiveQuery(() => db.lots.toArray()) || [];
 
   const activeAccounts = accounts.filter(a => !a.isArchived);
   const archivedAccounts = accounts.filter(a => a.isArchived);
+
+  const getAccountBalanceInUSD = (acc) => {
+    if (acc.currency === 'USD' || acc.currency === 'USDT' || acc.currency === 'USDC') {
+      return acc.balance;
+    }
+    const currencyLots = lots.filter(l => l.currency === acc.currency && l.remainingAmount > 0);
+    const totalRemaining = currencyLots.reduce((sum, l) => sum + l.remainingAmount, 0);
+    const totalUSD = currencyLots.reduce((sum, l) => sum + (l.remainingAmount / l.effectiveRate), 0);
+    if (totalUSD > 0) {
+      const avgRate = totalRemaining / totalUSD;
+      return acc.balance / avgRate;
+    }
+    if (acc.currency === 'VES') return acc.balance / 40.0;
+    if (acc.currency === 'EUR') return acc.balance * 1.08;
+    return acc.balance;
+  };
   const toggleSection = (key) => setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
   const defaultIncomeType = incomeTypes.find(type => type.legacyKey === 'OTHER') || incomeTypes[0] || null;
   const resolveIncomeTypeId = (source) => {
@@ -650,8 +681,10 @@ export default function AccountsScreen() {
     const category = accountCategory(account);
     const allocated = allocationsByAccount[account.id] || 0;
     const availableBalance = Math.max(0, account.balance - allocated);
-    summary.netWorth += account.balance;
-    summary[category] += availableBalance;
+    const availableBalanceUSD = getAccountBalanceInUSD({ ...account, balance: availableBalance });
+    const balanceUSD = getAccountBalanceInUSD(account);
+    summary.netWorth += balanceUSD;
+    summary[category] += availableBalanceUSD;
     return summary;
   }, { netWorth: 0, cash: 0, banks: 0, wallets: 0, goals: goalsDistribution });
 
@@ -1271,8 +1304,7 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
                     <p className="label-section mb-1">{selectedAccountInstitution?.name || 'Institución'}</p>
                     <h3 className="text-title text-noria-text font-[400] leading-tight">{selectedAccount.name}</h3>
                     <p className="text-[28px] font-[300] text-noria-text mt-3">
-                      ${fmt(selectedAccount.balance)}
-                      <span className="text-[14px] font-[500] ml-2 text-noria-muted">{selectedAccount.currency}</span>
+                      {formatAmountWithSymbol(selectedAccount.balance, selectedAccount.currency)}
                     </p>
                     {(() => {
                       const committedInMacetas = macetaAllocations
@@ -1285,11 +1317,11 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
                         <div className="mt-2 pt-2 border-t border-[rgba(0,0,0,0.05)] text-[12px] space-y-0.5 text-noria-text/60">
                           <div className="flex justify-between font-mono">
                             <span>Comprometido:</span>
-                            <span className="text-noria-amber font-[500]">${fmt(committedInMacetas)}</span>
+                             <span className="text-noria-amber font-[500]">{formatAmountWithSymbol(committedInMacetas, selectedAccount.currency)}</span>
                           </div>
                           <div className="flex justify-between font-mono">
                             <span>Disponible real:</span>
-                            <span className="text-[#5C7A52] font-[500]">${fmt(availableBalance)}</span>
+                             <span className="text-[#5C7A52] font-[500]">{formatAmountWithSymbol(availableBalance, selectedAccount.currency)}</span>
                           </div>
                         </div>
                       );
@@ -1943,11 +1975,11 @@ function AssignFundsModal({ maceta, onClose, accounts, macetaAllocations, onSave
                   <div className="flex-1 min-w-0 pr-2">
                     <p className="text-[13px] font-[400] text-noria-text truncate">{acc.name}</p>
                     <p className="text-[10px] text-noria-muted uppercase tracking-wider mt-0.5">
-                      Total: ${fmt(acc.balance)} · <span className="font-[500]" style={{ color: disponible > 0 ? '#5C7A52' : 'inherit' }}>Disp: ${fmt(disponible)}</span>
+                      Total: {formatAmountWithSymbol(acc.balance, acc.currency)} · <span className="font-[500]" style={{ color: disponible > 0 ? '#5C7A52' : 'inherit' }}>Disp: {formatAmountWithSymbol(disponible, acc.currency)}</span>
                     </p>
                   </div>
                   <div className="w-28 flex items-center space-x-1">
-                    <span className="text-[12px] text-noria-muted">$</span>
+                    <span className="text-[12px] text-noria-muted">{getCurrencySymbol(acc.currency)}</span>
                     <input
                       type="number"
                       step="1"

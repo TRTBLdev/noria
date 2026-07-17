@@ -9,6 +9,7 @@ import PillarTag from '../components/PillarTag.jsx';
 import CategoryTag from '../components/CategoryTag.jsx';
 import CategoryIcon from '../components/CategoryIcon.jsx';
 import { useNavigate } from 'react-router-dom';
+import { formatNumber, formatCurrency } from '../utils/format';
 import { Plus, Pencil, Archive, ArchiveRestore, Trash2, Check, ChevronDown, ChevronUp, MoreHorizontal } from 'lucide-react';
 
 export default function BudgetScreen() {
@@ -55,6 +56,40 @@ export default function BudgetScreen() {
   const macetaAllocations = useLiveQuery(() => db.maceta_allocations.toArray()) || [];
   const transactions = useLiveQuery(() => db.transactions.toArray()) || [];
   const tags = useLiveQuery(() => db.tags.toArray()) || [];
+  const dbCurrencies = useLiveQuery(() => db.currencies.toArray()) || [];
+  const lots = useLiveQuery(() => db.lots.toArray()) || [];
+
+  const getAccountBalanceInUSD = (acc) => {
+    if (acc.currency === 'USD' || acc.currency === 'USDT' || acc.currency === 'USDC') {
+      return acc.balance;
+    }
+    const currencyLots = lots.filter(l => l.currency === acc.currency && l.remainingAmount > 0);
+    const totalRemaining = currencyLots.reduce((sum, l) => sum + l.remainingAmount, 0);
+    const totalUSD = currencyLots.reduce((sum, l) => sum + (l.remainingAmount / l.effectiveRate), 0);
+    if (totalUSD > 0) {
+      const avgRate = totalRemaining / totalUSD;
+      return acc.balance / avgRate;
+    }
+    if (acc.currency === 'VES') return acc.balance / 40.0;
+    if (acc.currency === 'EUR') return acc.balance * 1.08;
+    return acc.balance;
+  };
+
+  const convertAmountToUSD = (amt, currency) => {
+    if (currency === 'USD' || currency === 'USDT' || currency === 'USDC' || !currency) {
+      return amt;
+    }
+    const currencyLots = lots.filter(l => l.currency === currency && l.remainingAmount > 0);
+    const totalRemaining = currencyLots.reduce((sum, l) => sum + l.remainingAmount, 0);
+    const totalUSD = currencyLots.reduce((sum, l) => sum + (l.remainingAmount / l.effectiveRate), 0);
+    if (totalUSD > 0) {
+      const avgRate = totalRemaining / totalUSD;
+      return amt / avgRate;
+    }
+    if (currency === 'VES') return amt / 40.0;
+    if (currency === 'EUR') return amt * 1.08;
+    return amt;
+  };
 
   // Migración retrospectiva en caliente de anclas heredadas
   React.useEffect(() => {
@@ -84,7 +119,7 @@ export default function BudgetScreen() {
     const d = new Date(t.date);
     return d >= startOfMonth && d <= endOfMonth && t.type === 'IN';
   });
-  const totalIngresosMes = thisMonthIncomes.reduce((sum, t) => sum + t.amount, 0);
+  const totalIngresosMes = thisMonthIncomes.reduce((sum, t) => sum + (t.amountUSD ?? t.amount), 0);
 
   // Instancias de este mes
   const thisMonthInstances = anchors.filter(a => {
@@ -93,20 +128,20 @@ export default function BudgetScreen() {
     return d >= startOfMonth && d <= endOfMonth;
   });
 
-  const totalAggregatedBalance = activeAccounts.reduce((sum, a) => sum + a.balance, 0);
-  const totalAllocatedToMacetas = macetaAllocations.reduce((sum, a) => sum + a.amount, 0);
+  const totalAggregatedBalance = activeAccounts.reduce((sum, a) => sum + getAccountBalanceInUSD(a), 0);
+  const totalAllocatedToMacetas = macetaAllocations.reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
 
   // Gastos Recurrentes de este mes
   const thisMonthGastos = thisMonthInstances.filter(a => a.pillar === 'NEED' || a.pillar === 'WANT');
-  const planifiedGastos = thisMonthGastos.reduce((sum, a) => sum + a.amount, 0);
-  const paidGastos = thisMonthGastos.filter(a => a.status === 'PAID').reduce((sum, a) => sum + a.amount, 0);
-  const pendingGastos = thisMonthGastos.filter(a => a.status !== 'PAID').reduce((sum, a) => sum + a.amount, 0);
+  const planifiedGastos = thisMonthGastos.reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
+  const paidGastos = thisMonthGastos.filter(a => a.status === 'PAID').reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
+  const pendingGastos = thisMonthGastos.filter(a => a.status !== 'PAID').reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
 
   // Aportes a Metas de este mes
   const thisMonthAhorros = thisMonthInstances.filter(a => a.pillar === 'SAVE');
-  const planifiedAhorros = thisMonthAhorros.reduce((sum, a) => sum + a.amount, 0);
-  const paidAhorros = thisMonthAhorros.filter(a => a.status === 'PAID').reduce((sum, a) => sum + a.amount, 0);
-  const pendingAhorros = thisMonthAhorros.filter(a => a.status !== 'PAID').reduce((sum, a) => sum + a.amount, 0);
+  const planifiedAhorros = thisMonthAhorros.reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
+  const paidAhorros = thisMonthAhorros.filter(a => a.status === 'PAID').reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
+  const pendingAhorros = thisMonthAhorros.filter(a => a.status !== 'PAID').reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
 
   const totalComprometido = planifiedGastos + planifiedAhorros;
 
@@ -118,11 +153,24 @@ export default function BudgetScreen() {
   const templatesActive = templates.filter(a => !a.isArchived);
   const templatesPaused = templates.filter(a => a.isArchived);
 
-  const fmt = (n) => {
-    if (typeof n !== 'number') return '0.00';
-    return n.toLocaleString('es-ES', { minimumFractionDigits: 2 });
+  const fmt = (n, currencyCode = 'USD') => {
+    return formatCurrency(n, currencyCode, dbCurrencies);
   };
-  
+
+  const getCurrencySymbol = (code) => {
+    if (code === 'VES') return 'Bs';
+    if (code === 'EUR') return '€';
+    if (code === 'USDT' || code === 'USDC') return code;
+    return '$';
+  };
+
+  const formatAmountWithSymbol = (amt, code) => {
+    const symbol = getCurrencySymbol(code);
+    const formatted = fmt(amt);
+    if (code === 'VES') return `${formatted} ${symbol}`;
+    return `${symbol}${formatted}`;
+  };
+
   const getAccountName = (id) => accounts.find(a => a.id === id)?.name || 'Ninguna';
   const getTag = (id, kind = 'EXPENSE') => tags.find(t => t.id === id && (t.kind || 'EXPENSE') === kind) || null;
 
@@ -553,7 +601,7 @@ export default function BudgetScreen() {
               <CategoryTag name={category?.name} size="xs" />
             </div>
             <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.09em] text-noria-muted leading-relaxed">
-              <span>${fmt(src.amount)}</span>
+              <span>{formatAmountWithSymbol(src.amount, src.currency)}</span>
               <span> · {getFrequencyLabel(src.frequencyInterval, src.frequencyUnit)}</span>
               {src.accountId && <span> · De: {getAccountName(src.accountId)}</span>}
               <span> · Inicio/Prox: {nextDate}</span>
@@ -878,7 +926,7 @@ export default function BudgetScreen() {
                             </span>
                           </div>
                           <div className="flex items-center space-x-2 pl-2 shrink-0">
-                            <span className="text-[11px]">${fmt(inst.amount)}</span>
+                            <span className="text-[11px]">{formatAmountWithSymbol(inst.amount, inst.currency)}</span>
                             <span className="text-[8px] font-[700] px-1.5 py-0.5 tracking-wide border border-[#1A1A1A]" style={{ background: statusBg, color: statusTextCol }}>
                               {statusLabel}
                             </span>
@@ -1051,7 +1099,7 @@ export default function BudgetScreen() {
                   {activeAccounts.map(acc => {
                     const inst = institutions.find(i => i.id === acc.institutionId);
                     const label = inst ? `${inst.name} - ${acc.name} (${acc.type})` : `${acc.name} (${acc.type})`;
-                    return <option key={acc.id} value={acc.id}>{label} (${fmt(acc.balance)})</option>;
+                    return <option key={acc.id} value={acc.id}>{label} (${fmt(acc.balance, acc.currency)})</option>;
                   })}
                 </select>
               </div>
@@ -1101,7 +1149,7 @@ export default function BudgetScreen() {
                       {activeAccounts.map(acc => {
                         const inst = institutions.find(i => i.id === acc.institutionId);
                         const label = inst ? `${inst.name} - ${acc.name} (${acc.type})` : `${acc.name} (${acc.type})`;
-                        return <option key={acc.id} value={acc.id}>{label} (${fmt(acc.balance)})</option>;
+                        return <option key={acc.id} value={acc.id}>{label} (${fmt(acc.balance, acc.currency)})</option>;
                       })}
                     </select>
                   </div>
@@ -1116,13 +1164,13 @@ export default function BudgetScreen() {
                     <div>
                       <label className="muji-header block mb-1">Origen</label>
                       <select value={transFromAccountId} onChange={e => setTransFromAccountId(e.target.value)} className="muji-input" required>
-                        {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} (${fmt(acc.balance)})</option>)}
+                        {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} (${fmt(acc.balance, acc.currency)})</option>)}
                       </select>
                     </div>
                     <div>
                       <label className="muji-header block mb-1">Destino</label>
                       <select value={transToAccountId} onChange={e => setTransToAccountId(e.target.value)} className="muji-input" required>
-                        {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} (${fmt(acc.balance)})</option>)}
+                        {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} (${fmt(acc.balance, acc.currency)})</option>)}
                       </select>
                     </div>
                   </div>

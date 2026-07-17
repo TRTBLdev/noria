@@ -2,7 +2,7 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Settings, ArrowLeft } from 'lucide-react';
 
-export default function Header({ title = 'Noria', showBack = false }) {
+export default function Header({ title = 'Noria', showBack = false, action = null }) {
   const navigate = useNavigate();
 
   return (
@@ -25,15 +25,19 @@ export default function Header({ title = 'Noria', showBack = false }) {
       </h1>
 
       <div className="w-10 flex justify-end">
-        {!showBack && title !== 'Configuración' && (
-          <button
-            id="header-settings-btn"
-            onClick={() => navigate('/settings')}
-            className="p-1 -mr-1 transition-colors focus:outline-none" style={{ color: 'rgba(26,26,26,0.62)' }}
-            aria-label="Configuración"
-          >
-            <Settings size={20} strokeWidth={1.5} />
-          </button>
+        {action ? (
+          action
+        ) : (
+          !showBack && title !== 'Configuración' && (
+            <button
+              id="header-settings-btn"
+              onClick={() => navigate('/settings')}
+              className="p-1 -mr-1 transition-colors focus:outline-none" style={{ color: 'rgba(26,26,26,0.62)' }}
+              aria-label="Configuración"
+            >
+              <Settings size={20} strokeWidth={1.5} />
+            </button>
+          )
         )}
       </div>
     </header>

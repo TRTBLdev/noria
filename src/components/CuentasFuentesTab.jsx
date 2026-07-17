@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { Landmark, Wallet, CreditCard, Archive, TrendingUp, ChevronUp, ChevronDown } from 'lucide-react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../db/db.js';
 
 const INSTRUMENT_TYPES = [
   { value: 'DEBIT_CARD', label: 'Tarjeta de Debito' },
@@ -27,9 +29,26 @@ export default function CuentasFuentesTab({
       [id]: !prev[id]
     }));
   };
+
+  const dbCurrencies = useLiveQuery(() => db.currencies.toArray()) || [];
+
+  const getCurrencySymbol = (code) => {
+    const currencyObj = dbCurrencies.find(c => c.code === code);
+    return currencyObj?.symbol || code;
+  };
+
+  const formatBalance = (balance, currencyCode) => {
+    const symbol = getCurrencySymbol(currencyCode);
+    const formatted = fmt(balance);
+    if (currencyCode === 'VES') {
+      return `${formatted} ${symbol}`;
+    }
+    return `${symbol}${formatted}`;
+  };
+
   const fmt = (n) => {
     if (typeof n !== 'number') return '0.00';
-    return n.toLocaleString('es-ES', { minimumFractionDigits: 2 });
+    return n.toLocaleString('en-US', { minimumFractionDigits: 2 });
   };
 
   const instGroups = institutions
@@ -126,7 +145,7 @@ export default function CuentasFuentesTab({
                                 </div>
                               </div>
                               <div className="text-right shrink-0">
-                                <p className="font-mono text-[18px] font-[700] text-noria-text">${fmt(acc.balance)}</p>
+                                <p className="font-mono text-[18px] font-[700] text-noria-text">{formatBalance(acc.balance, acc.currency)}</p>
                                 <p className="label-section">{acc.currency}</p>
                               </div>
                             </div>
@@ -171,7 +190,7 @@ export default function CuentasFuentesTab({
                             </p>
                           </div>
                           <div className="text-right">
-                            <p className="text-[14px] font-[400] text-noria-text">${fmt(acc.balance)}</p>
+                            <p className="text-[14px] font-[400] text-noria-text">{formatBalance(acc.balance, acc.currency)}</p>
                             <p className="label-section">{acc.currency}</p>
                           </div>
                         </button>

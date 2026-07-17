@@ -14,6 +14,7 @@ import IncomeTypeTag from '../components/IncomeTypeTag.jsx';
 import { Plus, Check, ChevronDown, ChevronUp } from 'lucide-react';
 
 import { useNavigate } from 'react-router-dom';
+import { formatNumber, formatCurrency } from '../utils/format';
 
 export default function HomeScreen() {
   const navigate = useNavigate();
@@ -55,12 +56,47 @@ export default function HomeScreen() {
   const macetas = useLiveQuery(() => db.macetas.toArray()) || [];
   const macetaAllocations = useLiveQuery(() => db.maceta_allocations.toArray()) || [];
   const tags = useLiveQuery(() => db.tags.toArray()) || [];
+  const lots = useLiveQuery(() => db.lots.toArray()) || [];
+  const dbCurrencies = useLiveQuery(() => db.currencies.toArray()) || [];
 
   const startOfMonth = new Date(); startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0);
   const thisMonthIncomes = transactions.filter(t => new Date(t.date) >= startOfMonth && t.type === 'IN');
 
   const activeAccounts = accounts.filter(a => !a.isArchived);
-  const aggregatedBalance = activeAccounts.reduce((sum, acc) => sum + acc.balance, 0);
+
+  const getAccountBalanceInUSD = (acc) => {
+    if (acc.currency === 'USD' || acc.currency === 'USDT' || acc.currency === 'USDC') {
+      return acc.balance;
+    }
+    const currencyLots = lots.filter(l => l.currency === acc.currency && l.remainingAmount > 0);
+    const totalRemaining = currencyLots.reduce((sum, l) => sum + l.remainingAmount, 0);
+    const totalUSD = currencyLots.reduce((sum, l) => sum + (l.remainingAmount / l.effectiveRate), 0);
+    if (totalUSD > 0) {
+      const avgRate = totalRemaining / totalUSD;
+      return acc.balance / avgRate;
+    }
+    if (acc.currency === 'VES') return acc.balance / 40.0;
+    if (acc.currency === 'EUR') return acc.balance * 1.08;
+    return acc.balance;
+  };
+
+  const convertAmountToUSD = (amt, currency) => {
+    if (currency === 'USD' || currency === 'USDT' || currency === 'USDC' || !currency) {
+      return amt;
+    }
+    const currencyLots = lots.filter(l => l.currency === currency && l.remainingAmount > 0);
+    const totalRemaining = currencyLots.reduce((sum, l) => sum + l.remainingAmount, 0);
+    const totalUSD = currencyLots.reduce((sum, l) => sum + (l.remainingAmount / l.effectiveRate), 0);
+    if (totalUSD > 0) {
+      const avgRate = totalRemaining / totalUSD;
+      return amt / avgRate;
+    }
+    if (currency === 'VES') return amt / 40.0;
+    if (currency === 'EUR') return amt * 1.08;
+    return amt;
+  };
+
+  const aggregatedBalance = activeAccounts.reduce((sum, acc) => sum + getAccountBalanceInUSD(acc), 0);
 
   // Estado para la burbuja del día seleccionado en la Línea de Flotación Semanal
   const [selectedDate, setSelectedDate] = useState(null);
@@ -89,7 +125,7 @@ export default function HomeScreen() {
   const endOfWeek = new Date(weekDays[6]);
   endOfWeek.setHours(23, 59, 59, 999);
 
-  const incomeSum = thisMonthIncomes.reduce((sum, inc) => sum + inc.amount, 0);
+  const incomeSum = thisMonthIncomes.reduce((sum, inc) => sum + (inc.amountUSD ?? inc.amount), 0);
 
   // Lógica de auto-renovación mensual de plantillas e instancias de cobro
   useEffect(() => {
@@ -305,15 +341,15 @@ export default function HomeScreen() {
     return d >= startM && d <= endM;
   });
 
-  const totalAllocatedToMacetas = macetaAllocations.reduce((sum, a) => sum + a.amount, 0);
+  const totalAllocatedToMacetas = macetaAllocations.reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
 
   const pendingGastos = thisMonthInstances
     .filter(a => a.status !== 'PAID' && (a.pillar === 'NEED' || a.pillar === 'WANT'))
-    .reduce((sum, a) => sum + a.amount, 0);
+    .reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
 
   const pendingAhorros = thisMonthInstances
     .filter(a => a.status !== 'PAID' && a.pillar === 'SAVE')
-    .reduce((sum, a) => sum + a.amount, 0);
+    .reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
 
   const disponibleDelMes = Math.max(0, aggregatedBalance - totalAllocatedToMacetas - pendingGastos - pendingAhorros);
 
@@ -596,7 +632,21 @@ export default function HomeScreen() {
     setAnchorName(''); setAnchorAmount(''); setAnchorDueDate(''); setAnchorAccountId(''); setAnchorTagId('');
   };
 
-  const fmt = (n) => n.toLocaleString('es-ES', { minimumFractionDigits: 2 });
+  const fmt = (n, currencyCode = 'USD') => formatCurrency(n, currencyCode, dbCurrencies);
+
+  const getCurrencySymbol = (code) => {
+    if (code === 'VES') return 'Bs';
+    if (code === 'EUR') return '€';
+    if (code === 'USDT' || code === 'USDC') return code;
+    return '$';
+  };
+
+  const formatAmountWithSymbol = (amt, code) => {
+    const symbol = getCurrencySymbol(code);
+    const formatted = fmt(amt);
+    if (code === 'VES') return `${formatted} ${symbol}`;
+    return `${symbol}${formatted}`;
+  };
 
   const isAnchorOverdue = (anchor) => {
     if (!anchor.nextDueDate) return false;
@@ -807,7 +857,7 @@ export default function HomeScreen() {
                   </div>
                   <div className="flex items-center space-x-3">
                     <p className="text-[15px] font-mono font-[700] text-noria-text">
-                      ${fmt(anchor.amount)}
+                      {formatAmountWithSymbol(anchor.amount, anchor.currency)}
                     </p>
                     <button
                       id={`pay-anchor-btn-${anchor.id}`}
@@ -833,7 +883,7 @@ export default function HomeScreen() {
                     </div>
                     <p className="text-[15px] font-[400] text-noria-text line-through">{anchor.name}</p>
                   </div>
-                  <p className="text-[15px] font-mono font-[700] text-noria-text">${fmt(anchor.amount)}</p>
+                  <p className="text-[15px] font-mono font-[700] text-noria-text">{formatAmountWithSymbol(anchor.amount, anchor.currency)}</p>
                 </div>
               ))}
             </div>
@@ -1067,7 +1117,7 @@ export default function HomeScreen() {
                         const label = inst ? `${inst.name} · ${acc.name} (${acc.type})` : `${acc.name} (${acc.type})`;
                         return (
                           <option key={acc.id} value={acc.id}>
-                            {label} (${fmt(acc.balance)})
+                            {label} (${fmt(acc.balance, acc.currency)})
                           </option>
                         );
                       })}
@@ -1105,7 +1155,7 @@ export default function HomeScreen() {
                           const label = inst ? `${inst.name} · ${acc.name} (${acc.type})` : `${acc.name} (${acc.type})`;
                           return (
                             <option key={acc.id} value={acc.id}>
-                              {label} (${fmt(acc.balance)})
+                              {label} (${fmt(acc.balance, acc.currency)})
                             </option>
                           );
                         })}
@@ -1125,7 +1175,7 @@ export default function HomeScreen() {
                           const label = inst ? `${inst.name} · ${acc.name} (${acc.type})` : `${acc.name} (${acc.type})`;
                           return (
                             <option key={acc.id} value={acc.id}>
-                              {label} (${fmt(acc.balance)})
+                              {label} (${fmt(acc.balance, acc.currency)})
                             </option>
                           );
                         })}
@@ -1226,7 +1276,7 @@ export default function HomeScreen() {
                     const label = inst ? `${inst.name} · ${acc.name} (${acc.type})` : `${acc.name} (${acc.type})`;
                     return (
                       <option key={acc.id} value={acc.id}>
-                        {label} (${fmt(acc.balance)})
+                        {label} (${fmt(acc.balance, acc.currency)})
                       </option>
                     );
                   })}

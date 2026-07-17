@@ -70,7 +70,7 @@ export default function HomeostasisBar() {
     },
   ];
 
-  const fmt = (n) => n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmt = (n) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   if (monthlyIncome === 0) {
     return (

@@ -8,7 +8,7 @@ import { getIncomeType } from './IncomeTypeIcon.jsx';
 
 const fmt = (n, d = 2) => {
   if (typeof n !== 'number') return '0.00';
-  return n.toLocaleString('es-ES', { minimumFractionDigits: d, maximumFractionDigits: d });
+  return n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 };
 
 export default function FAB() {
@@ -39,6 +39,9 @@ export default function FAB() {
   const [newSourceIncomeTypeId, setNewSourceIncomeTypeId] = useState('');
   const [error, setError]   = useState('');
   const [success, setSuccess] = useState(false);
+
+  const selectedAccount = accounts.find(a => a.id.toString() === accountId);
+  const selectedAccountCurrency = selectedAccount?.currency || baseCurrency;
 
   // Seed defaults when data loads
   useEffect(() => {
@@ -321,20 +324,104 @@ export default function FAB() {
               });
         }
 
-        await db.transactions.add({
-          date: new Date(date + 'T12:00:00'),
-          type: activeForm === 'GASTO' ? 'OUT' : 'IN',
-          amount: parsedAmount,
-          currency: selectedAccount.currency,
-          accountId: parseInt(accountId),
-          tagId: activeForm === 'GASTO' && tagId ? parseInt(tagId) : null,
-          pillar:   activeForm === 'GASTO' ? pillar : null,
-          incomeSourceId: activeForm === 'INGRESO' ? resolvedSourceId : null,
-          description: description.trim(),
-        });
+        let lotConsumptions = [];
+        let costUSD = null;
+        const transactionId = 'TX-' + Date.now();
 
-        const delta = activeForm === 'GASTO' ? -parsedAmount : parsedAmount;
-        await db.accounts.update(parseInt(accountId), { balance: selectedAccount.balance + delta });
+        // GASTO EN VES (Consumo FIFO)
+        if (activeForm === 'GASTO' && selectedAccount.currency === 'VES') {
+          // Consultar lotes activos de VES
+          const activeVESLots = await db.lots
+            .where('currency').equals('VES')
+            .filter(l => l.remainingAmount > 0)
+            .toArray();
+
+          // Ordenar por fecha (FIFO)
+          activeVESLots.sort((a, b) => new Date(a.date) - new Date(b.date) || a.id - b.id);
+
+          const totalActiveVES = activeVESLots.reduce((sum, l) => sum + l.remainingAmount, 0);
+
+          if (totalActiveVES < parsedAmount) {
+            setError(`Saldo de lotes insuficiente en VES para registrar este gasto. Disponible: Bs. ${totalActiveVES.toLocaleString('es-VE', { minimumFractionDigits: 2 })}. Por favor registra una transferencia o ingreso primero.`);
+            return;
+          }
+
+          let remainingToConsume = parsedAmount;
+          let calculatedUSD = 0;
+          for (const lot of activeVESLots) {
+            if (remainingToConsume <= 0) break;
+            const toConsume = Math.min(lot.remainingAmount, remainingToConsume);
+            lotConsumptions.push({
+              lotId: lot.id,
+              amountConsumed: toConsume,
+              rate: lot.effectiveRate
+            });
+            calculatedUSD += (toConsume / lot.effectiveRate);
+            remainingToConsume -= toConsume;
+          }
+          costUSD = parseFloat(calculatedUSD.toFixed(2));
+        }
+
+        // INGRESO EN VES (Creación de Lote)
+        let parsedRate = null;
+        if (activeForm === 'INGRESO' && selectedAccount.currency === 'VES') {
+          parsedRate = parseFloat(exchangeRate);
+          if (isNaN(parsedRate) || parsedRate <= 0) {
+            setError('Por favor ingresa una tasa de cambio válida para el ingreso en VES.');
+            return;
+          }
+          costUSD = parseFloat((parsedAmount / parsedRate).toFixed(2));
+        }
+
+        await db.transaction('rw', [db.accounts, db.transactions, db.lots], async () => {
+          // 1. Agregar transacción
+          await db.transactions.add({
+            id: transactionId,
+            date: new Date(date + 'T12:00:00'),
+            type: activeForm === 'GASTO' ? 'OUT' : 'IN',
+            amount: parsedAmount,
+            currency: selectedAccount.currency,
+            accountId: parseInt(accountId),
+            tagId: activeForm === 'GASTO' && tagId ? parseInt(tagId) : null,
+            pillar: activeForm === 'GASTO' ? pillar : null,
+            incomeSourceId: activeForm === 'INGRESO' ? resolvedSourceId : null,
+            description: description.trim(),
+            amountUSD: selectedAccount.currency === 'USD' ? parsedAmount : costUSD,
+            lotConsumption: lotConsumptions.length > 0 ? JSON.stringify(lotConsumptions) : null,
+          });
+
+          // 2. Crear lote si es ingreso en VES
+          if (activeForm === 'INGRESO' && selectedAccount.currency === 'VES' && parsedRate) {
+            await db.lots.add({
+              transactionId,
+              accountId: selectedAccount.id,
+              currency: 'VES',
+              amount: parsedAmount,
+              remainingAmount: parsedAmount,
+              effectiveRate: parsedRate,
+              status: 'ACTIVE',
+              date: new Date(date + 'T12:00:00')
+            });
+          }
+
+          // 3. Consumir lotes si es gasto en VES
+          if (activeForm === 'GASTO' && selectedAccount.currency === 'VES' && lotConsumptions.length > 0) {
+            for (const consumption of lotConsumptions) {
+              const lot = await db.lots.get(consumption.lotId);
+              if (lot) {
+                const newRemaining = Math.max(0, lot.remainingAmount - consumption.amountConsumed);
+                await db.lots.update(consumption.lotId, {
+                  remainingAmount: newRemaining,
+                  status: newRemaining === 0 ? 'EXHAUSTED' : 'ACTIVE'
+                });
+              }
+            }
+          }
+
+          // 4. Actualizar balance de la cuenta
+          const delta = activeForm === 'GASTO' ? -parsedAmount : parsedAmount;
+          await db.accounts.update(parseInt(accountId), { balance: selectedAccount.balance + delta });
+        });
       }
 
       setSuccess(true);
@@ -521,16 +608,32 @@ export default function FAB() {
                     </div>
                   ) : (
                     /* GASTO/INGRESO - Standard Hero Amount Input */
-                    <div className="py-3 border-b border-[rgba(0,0,0,0.07)]">
-                      <p className="label-section mb-2">Monto ({baseCurrency})</p>
-                      <input
-                        id="tx-amount"
-                        type="number" step="0.01" inputMode="decimal"
-                        value={amount} onChange={e => setAmount(e.target.value)}
-                        placeholder="0.00"
-                        className="w-full text-[32px] font-[300] text-noria-text bg-transparent outline-none placeholder:text-[rgba(26,26,26,0.15)]"
-                        autoFocus required
-                      />
+                    <div className="space-y-4">
+                      <div className="py-3 border-b border-[rgba(0,0,0,0.07)]">
+                        <p className="label-section mb-2">Monto ({selectedAccountCurrency})</p>
+                        <input
+                          id="tx-amount"
+                          type="number" step="0.01" inputMode="decimal"
+                          value={amount} onChange={e => setAmount(e.target.value)}
+                          placeholder="0.00"
+                          className="w-full text-[32px] font-[300] text-noria-text bg-transparent outline-none placeholder:text-[rgba(26,26,26,0.15)]"
+                          autoFocus required
+                        />
+                      </div>
+
+                      {activeForm === 'INGRESO' && selectedAccountCurrency === 'VES' && (
+                        <div className="py-2 border-b border-[rgba(0,0,0,0.07)] animate-fade-in">
+                          <p className="label-section mb-1">Tasa de Cambio (Bs/$)</p>
+                          <input
+                            id="tx-rate"
+                            type="number" step="0.0001" inputMode="decimal"
+                            value={exchangeRate} onChange={e => setExchangeRate(e.target.value)}
+                            placeholder="Ej. 40.00"
+                            className="w-full text-[18px] font-mono text-noria-text bg-transparent outline-none placeholder:text-[rgba(26,26,26,0.15)]"
+                            required
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
 
