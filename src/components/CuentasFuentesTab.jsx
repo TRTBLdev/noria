@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Landmark, Wallet, CreditCard, Archive, TrendingUp, ChevronUp, ChevronDown } from 'lucide-react';
+import { Landmark, Wallet, CreditCard, Archive, TrendingUp, ChevronUp, ChevronDown, Pencil, Trash2 } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
 
@@ -22,12 +22,38 @@ export default function CuentasFuentesTab({
   selectedAccountId = null
 }) {
   const [collapsedInsts, setCollapsedInsts] = useState({});
+  const [editingInstId, setEditingInstId] = useState(null);
+  const [editInstName, setEditInstName] = useState('');
 
   const toggleInstCollapse = (id) => {
     setCollapsedInsts(prev => ({
       ...prev,
       [id]: !prev[id]
     }));
+  };
+
+  const handleSaveInstitution = async (id) => {
+    if (!editInstName.trim()) return;
+    try {
+      await db.institutions.update(id, { name: editInstName.trim() });
+      const relatedAccs = accounts.filter(a => a.institutionId === id);
+      for (const acc of relatedAccs) {
+        await db.accounts.update(acc.id, { name: editInstName.trim() });
+      }
+      setEditingInstId(null);
+    } catch {
+      alert("Error al renombrar la institución");
+    }
+  };
+
+  const handleDeleteInstitution = async (id, name) => {
+    if (confirm(`¿Estás seguro de eliminar la institución "${name}"?`)) {
+      try {
+        await db.institutions.delete(id);
+      } catch {
+        alert("Error al eliminar la institución");
+      }
+    }
   };
 
   const dbCurrencies = useLiveQuery(() => db.currencies.toArray()) || [];
@@ -91,26 +117,88 @@ export default function CuentasFuentesTab({
               const isCollapsed = !!collapsedInsts[inst.id];
 
               return (
-                <div key={inst.id} className="animate-fade-in">
-                  <button
-                    type="button"
-                    onClick={() => toggleInstCollapse(inst.id)}
-                    className="w-full flex justify-between items-baseline mb-3 pb-2 border-b border-[rgba(26,26,26,0.16)] text-left focus:outline-none hover:border-[#647C78] transition-colors"
-                  >
-                    <div className="flex items-center space-x-2 min-w-0">
+                <div key={inst.id} className="animate-fade-in group mb-4">
+                  <div className="flex justify-between items-center mb-3 pb-2 border-b border-[rgba(26,26,26,0.16)]">
+                    <button
+                      type="button"
+                      onClick={() => toggleInstCollapse(inst.id)}
+                      className="flex items-center space-x-2 min-w-0 text-left focus:outline-none hover:opacity-80 transition-opacity"
+                    >
                       {isCollapsed ? (
                         <ChevronDown size={11} strokeWidth={2.5} className="shrink-0 text-noria-text" />
                       ) : (
                         <ChevronUp size={11} strokeWidth={2.5} className="shrink-0 text-noria-text" />
                       )}
                       <Landmark size={12} strokeWidth={1.5} className="shrink-0" style={{ color: 'rgba(26,26,26,0.35)' }} />
-                      <span className="label-section truncate">{inst.name}</span>
+                      
+                      {editingInstId === inst.id ? (
+                        <input
+                          type="text"
+                          value={editInstName}
+                          onChange={e => setEditInstName(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') handleSaveInstitution(inst.id);
+                            if (e.key === 'Escape') setEditingInstId(null);
+                          }}
+                          className="bg-transparent border-b border-[#1A1A1A] outline-none text-[12px] font-semibold text-noria-text px-1 w-32"
+                          autoFocus
+                          onClick={e => e.stopPropagation()}
+                        />
+                      ) : (
+                        <span className="label-section truncate">{inst.name}</span>
+                      )}
+                      
                       <span className="label-section shrink-0" style={{ color: 'rgba(26,26,26,0.2)' }}>· {inst.type}</span>
+                    </button>
+
+                    <div className="flex items-center space-x-3 shrink-0">
+                      {editingInstId === inst.id ? (
+                        <div className="flex items-center space-x-1">
+                          <button
+                            type="button"
+                            onClick={() => handleSaveInstitution(inst.id)}
+                            className="p-1 text-[#5C7A52] hover:bg-[rgba(26,26,26,0.05)] text-[12px] font-bold"
+                          >
+                            ✓
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingInstId(null)}
+                            className="p-1 text-[#9F2F2D] hover:bg-[rgba(26,26,26,0.05)] text-[12px] font-bold"
+                          >
+                            ✗
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="hidden group-hover:flex items-center space-x-1 animate-fade-in">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingInstId(inst.id);
+                              setEditInstName(inst.name);
+                            }}
+                            className="p-1 text-noria-muted hover:text-noria-text focus:outline-none"
+                            title="Renombrar entidad"
+                          >
+                            <Pencil size={11} strokeWidth={1.5} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteInstitution(inst.id, inst.name)}
+                            disabled={accs.length > 0}
+                            className="p-1 text-noria-muted hover:text-[#9F2F2D] disabled:opacity-30 focus:outline-none flex-shrink-0"
+                            title={accs.length > 0 ? "Tiene cuentas asociadas" : "Eliminar entidad"}
+                          >
+                            <Trash2 size={11} strokeWidth={1.5} />
+                          </button>
+                        </div>
+                      )}
+
+                      <span className="text-[11px] font-[500] font-mono" style={{ color: 'rgba(26,26,26,0.45)' }}>
+                        {balanceStr}
+                      </span>
                     </div>
-                    <span className="text-[11px] font-[500] shrink-0 font-mono" style={{ color: 'rgba(26,26,26,0.45)' }}>
-                      {balanceStr}
-                    </span>
-                  </button>
+                  </div>
 
                   {!isCollapsed && (
                     <div className="space-y-3">

@@ -14,7 +14,10 @@ import {
   Pencil,
   Plus,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  ChevronRight,
+  Search,
+  X
 } from 'lucide-react';
 
 const PILLARS = {
@@ -144,7 +147,8 @@ export default function SettingsScreen() {
     institutions: false,
     expenseTags: false,
     incomeTypes: false,
-    currencies: false
+    currencies: false,
+    thirdParties: false
   });
 
   const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
@@ -160,6 +164,7 @@ export default function SettingsScreen() {
   const incomeSources = useLiveQuery(() => db.income_sources.toArray()) || [];
   const accounts = useLiveQuery(() => db.accounts.toArray()) || [];
   const currencies = useLiveQuery(() => db.currencies.toArray()) || [];
+  const thirdParties = useLiveQuery(() => db.third_parties.orderBy('name').toArray()) || [];
 
   const baseCurrency = baseCurrencyObj?.value || 'USD';
   const monthlyIncome = monthlyIncomeObj?.value || 0;
@@ -175,16 +180,26 @@ export default function SettingsScreen() {
   const [editingTagId, setEditingTagId] = useState(null);
   const [editTagName, setEditTagName] = useState('');
   const [editTagIconKey, setEditTagIconKey] = useState('');
+  const [editTagParentId, setEditTagParentId] = useState('');
+  const [editTagPillar, setEditTagPillar] = useState('NEED');
   const [showAddTagForm, setShowAddTagForm] = useState(false);
   const [newTagKind, setNewTagKind] = useState('EXPENSE');
   const [newTagName, setNewTagName] = useState('');
   const [newTagIconKey, setNewTagIconKey] = useState('');
+  const [newTagParentId, setNewTagParentId] = useState('');
+  const [newTagPillar, setNewTagPillar] = useState('NEED');
   const [editingIncomeTypeId, setEditingIncomeTypeId] = useState(null);
   const [editIncomeTypeName, setEditIncomeTypeName] = useState('');
   const [editIncomeTypeIconKey, setEditIncomeTypeIconKey] = useState('');
   const [showAddIncomeTypeForm, setShowAddIncomeTypeForm] = useState(false);
   const [newIncomeTypeName, setNewIncomeTypeName] = useState('');
   const [newIncomeTypeIconKey, setNewIncomeTypeIconKey] = useState('');
+
+  const [editingThirdPartyId, setEditingThirdPartyId] = useState(null);
+  const [editThirdPartyName, setEditThirdPartyName] = useState('');
+  const [showAddThirdPartyForm, setShowAddThirdPartyForm] = useState(false);
+  const [newThirdPartyName, setNewThirdPartyName] = useState('');
+  const [thirdPartySearch, setThirdPartySearch] = useState('');
 
   const [editingCurrencyId, setEditingCurrencyId] = useState(null);
   const [editCurrencyName, setEditCurrencyName] = useState('');
@@ -200,6 +215,8 @@ export default function SettingsScreen() {
   const [newCurrencyIsFiat, setNewCurrencyIsFiat] = useState(true);
   const [newCurrencyIsActive, setNewCurrencyIsActive] = useState(true);
   const [newCurrencyDecimalPlaces, setNewCurrencyDecimalPlaces] = useState(2);
+
+  const [expandedParentTagIds, setExpandedParentTagIds] = useState({});
 
   const [isConfiguringPin, setIsConfiguringPin] = useState(false);
   const [isDeactivatingPin, setIsDeactivatingPin] = useState(false);
@@ -431,43 +448,29 @@ export default function SettingsScreen() {
     reader.readAsText(file);
   };
 
-  const handleUpdateInst = async (id) => {
-    if (!editInstName.trim()) return;
-    try {
-      await db.institutions.update(id, { name: editInstName.trim(), type: editInstType });
-      const relatedAccs = accounts.filter(a => a.institutionId === id);
-      for (const acc of relatedAccs) await db.accounts.update(acc.id, { name: editInstName.trim() });
-      setEditingInstId(null);
-      setMessage('Banco actualizado');
-      setTimeout(() => setMessage(''), 2000);
-    } catch {
-      setError('Error al actualizar el banco');
-    }
-  };
 
-  const handleDeleteInst = async (id, name) => {
-    const count = accounts.filter(a => a.institutionId === id).length;
-    if (count > 0) {
-      alert(`No puedes eliminar la institución "${name}" porque tiene ${count} cuenta(s) asociada(s).`);
-      return;
-    }
-    if (!confirm(`¿Eliminar la institución "${name}"?`)) return;
-    try {
-      await db.institutions.delete(id);
-      setMessage('Institución eliminada');
-      setTimeout(() => setMessage(''), 2000);
-    } catch {
-      setError('Error al eliminar');
-    }
-  };
 
   const handleCreateTag = async (e) => {
     e.preventDefault();
     if (!newTagName.trim()) return;
     try {
-      await db.tags.add({ name: newTagName.trim(), iconKey: newTagIconKey || null, kind: newTagKind });
+      const parentIdVal = newTagParentId ? parseInt(newTagParentId) : null;
+      let finalPillar = newTagPillar;
+      if (parentIdVal) {
+        const parent = tags.find(t => t.id === parentIdVal);
+        if (parent) finalPillar = parent.pillar || 'NEED';
+      }
+      await db.tags.add({
+        name: newTagName.trim(),
+        iconKey: newTagIconKey || null,
+        kind: newTagKind,
+        pillar: finalPillar,
+        parentId: parentIdVal
+      });
       setNewTagName('');
       setNewTagIconKey('');
+      setNewTagParentId('');
+      setNewTagPillar('NEED');
       setShowAddTagForm(false);
       setMessage('Categoría añadida');
       setTimeout(() => setMessage(''), 2000);
@@ -479,7 +482,24 @@ export default function SettingsScreen() {
   const handleUpdateTag = async (id) => {
     if (!editTagName.trim()) return;
     try {
-      await db.tags.update(id, { name: editTagName.trim(), iconKey: editTagIconKey || null });
+      const parentIdVal = editTagParentId ? parseInt(editTagParentId) : null;
+      let finalPillar = editTagPillar;
+      if (parentIdVal) {
+        const parent = tags.find(t => t.id === parentIdVal);
+        if (parent) finalPillar = parent.pillar || 'NEED';
+      }
+      await db.tags.update(id, {
+        name: editTagName.trim(),
+        iconKey: editTagIconKey || null,
+        pillar: finalPillar,
+        parentId: parentIdVal
+      });
+      
+      // If it's a parent tag, update all children to have the same pillar
+      if (!parentIdVal) {
+        await db.tags.where('parentId').equals(id).modify({ pillar: finalPillar });
+      }
+
       setEditingTagId(null);
       setMessage('Categoría actualizada');
       setTimeout(() => setMessage(''), 2000);
@@ -489,8 +509,23 @@ export default function SettingsScreen() {
   };
 
   const handleDeleteTag = async (id, name) => {
-    if (!confirm(`¿Eliminar la categoría "${name}"?`)) return;
     try {
+      const children = await db.tags.where('parentId').equals(id).toArray();
+      let confirmMsg = `¿Eliminar la categoría "${name}"?`;
+      if (children.length > 0) {
+        confirmMsg = `La categoría "${name}" tiene ${children.length} subcategorías. Si la eliminas, también se borrarán todas sus subcategorías. ¿Deseas continuar?`;
+      }
+      if (!confirm(confirmMsg)) return;
+
+      // Nullify tagId in transactions for this category
+      await db.transactions.where('tagId').equals(id).modify({ tagId: null });
+
+      // Handle children
+      for (const child of children) {
+        await db.transactions.where('tagId').equals(child.id).modify({ tagId: null });
+        await db.tags.delete(child.id);
+      }
+
       await db.tags.delete(id);
       setMessage('Categoría eliminada');
       setTimeout(() => setMessage(''), 2000);
@@ -498,6 +533,61 @@ export default function SettingsScreen() {
       setError('Error al eliminar');
     }
   };
+
+  const handleCreateThirdParty = async (e) => {
+    e.preventDefault();
+    if (!newThirdPartyName.trim()) return;
+    try {
+      await db.third_parties.add({ name: newThirdPartyName.trim() });
+      setNewThirdPartyName('');
+      setShowAddThirdPartyForm(false);
+      setMessage('Tercero añadido');
+      setTimeout(() => setMessage(''), 2000);
+    } catch {
+      setError('Error al crear tercero');
+    }
+  };
+
+  const handleUpdateThirdParty = async (id) => {
+    if (!editThirdPartyName.trim()) return;
+    try {
+      await db.third_parties.update(id, { name: editThirdPartyName.trim() });
+      setEditingThirdPartyId(null);
+      setMessage('Tercero actualizado');
+      setTimeout(() => setMessage(''), 2000);
+    } catch {
+      setError('Error al actualizar tercero');
+    }
+  };
+
+  const handleDeleteThirdParty = async (id, name) => {
+    try {
+      const txCount = await db.transactions.where('thirdPartyId').equals(id).count();
+      const debtsCount = await db.debts.where('thirdPartyId').equals(id).count();
+      
+      const totalAssociations = txCount + debtsCount;
+      let confirmMsg = `¿Eliminar al tercero "${name}"?`;
+      if (totalAssociations > 0) {
+        confirmMsg = `El tercero "${name}" está asociado a ${txCount} transacciones y ${debtsCount} deudas. Si lo eliminas, estas relaciones quedarán sin tercero asociado. ¿Deseas continuar?`;
+      }
+      
+      if (!confirm(confirmMsg)) return;
+
+      if (txCount > 0) {
+        await db.transactions.where('thirdPartyId').equals(id).modify({ thirdPartyId: null });
+      }
+      if (debtsCount > 0) {
+        await db.debts.where('thirdPartyId').equals(id).modify({ thirdPartyId: null });
+      }
+
+      await db.third_parties.delete(id);
+      setMessage('Tercero eliminado');
+      setTimeout(() => setMessage(''), 2000);
+    } catch {
+      setError('Error al eliminar tercero');
+    }
+  };
+
 
   const handleCreateIncomeType = async (e) => {
     e.preventDefault();
@@ -634,34 +724,131 @@ export default function SettingsScreen() {
     }
   };
 
-  const activeInstitutions = institutions.length;
-  const totalAccounts = accounts.length;
+
   const expenseTags = tags.filter(tag => (tag.kind || 'EXPENSE') === 'EXPENSE');
+
+  const toggleParentTag = (id) => {
+    setExpandedParentTagIds(prev => ({
+      ...prev,
+      [id]: !prev[id]
+    }));
+  };
 
   const renderTagCatalog = (kind, title, catalogTags, addLabel) => {
     const sectionKey = 'expenseTags';
     const isAddingHere = showAddTagForm && newTagKind === kind;
+
+    const parentTags = catalogTags.filter(tag => !tag.parentId);
+    const subTags = catalogTags.filter(tag => tag.parentId);
+
+    const renderTagRow = (tag, isSub = false, hasChildren = false, isExpanded = false) => {
+      const isEditing = editingTagId === tag.id;
+
+      return (
+        <div key={tag.id} className={`border-b border-[#1A1A1A]/10 py-2.5 ${isSub ? 'ml-6 border-l border-[#1A1A1A]/20 pl-4 bg-noria-bg/5' : ''}`}>
+          {isEditing ? (
+            <div className="space-y-2">
+              <input type="text" value={editTagName} onChange={e => setEditTagName(e.target.value)} className="muji-input text-[12px]" required />
+              
+              {!hasChildren && (
+                <div>
+                  <label className="block mb-1 text-[11px] text-noria-muted">Categoría Padre</label>
+                  <select value={editTagParentId} onChange={e => {
+                    setEditTagParentId(e.target.value);
+                    if (e.target.value) {
+                      const parent = tags.find(p => p.id === parseInt(e.target.value));
+                      if (parent) setEditTagPillar(parent.pillar || 'NEED');
+                    }
+                  }} className="muji-input text-[12px]">
+                    <option value="">Ninguna (Categoría Principal)</option>
+                    {parentTags.filter(p => p.id !== tag.id).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </div>
+              )}
+
+              {!editTagParentId && (
+                <div>
+                  <label className="block mb-1 text-[11px] text-noria-muted">Pilar por defecto</label>
+                  <select value={editTagPillar} onChange={e => setEditTagPillar(e.target.value)} className="muji-input text-[12px]">
+                    <option value="NEED">Necesidad (Need)</option>
+                    <option value="WANT">Deseo (Want)</option>
+                    <option value="SAVE">Ahorro (Save)</option>
+                  </select>
+                </div>
+              )}
+
+              <IconGridPicker value={editTagIconKey} onChange={setEditTagIconKey} />
+              <div className="grid grid-cols-2 gap-2">
+                <OutlineButton onClick={() => setEditingTagId(null)}>Cancelar</OutlineButton>
+                <OutlineButton onClick={() => handleUpdateTag(tag.id)}>Guardar</OutlineButton>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-1.5">
+                {!isSub ? (
+                  hasChildren ? (
+                    <button
+                      type="button"
+                      onClick={() => toggleParentTag(tag.id)}
+                      className="p-1 -ml-1 text-noria-muted hover:text-noria-text focus:outline-none flex-shrink-0"
+                      title={isExpanded ? "Colapsar subcategorías" : "Expandir subcategorías"}
+                    >
+                      {isExpanded ? <ChevronDown size={12} strokeWidth={2} /> : <ChevronRight size={12} strokeWidth={2} />}
+                    </button>
+                  ) : (
+                    <div className="w-5 flex-shrink-0" />
+                  )
+                ) : null}
+                <CategoryIcon iconKey={tag.iconKey} size={15} />
+                <span 
+                  className={`truncate text-[14px] font-[600] text-noria-text ${hasChildren ? 'cursor-pointer select-none hover:opacity-80' : ''}`}
+                  onClick={() => hasChildren && toggleParentTag(tag.id)}
+                >
+                  {tag.name}
+                </span>
+                {!tag.parentId && <CategoryTag name={tag.pillar} size="xs" />}
+              </div>
+              <div className="flex items-center gap-1">
+                <button type="button" onClick={() => { 
+                  setEditingTagId(tag.id); 
+                  setEditTagName(tag.name); 
+                  setEditTagIconKey(tag.iconKey || ''); 
+                  setEditTagParentId(tag.parentId ? tag.parentId.toString() : '');
+                  setEditTagPillar(tag.pillar || 'NEED');
+                }} className="p-1.5 text-noria-muted hover:text-noria-text focus:outline-none" title="Editar categoría">
+                  <Pencil size={12} strokeWidth={1.5} />
+                </button>
+                <button type="button" onClick={() => handleDeleteTag(tag.id, tag.name)} className="p-1.5 text-noria-muted hover:text-[#9F2F2D] focus:outline-none" title="Eliminar categoría">
+                  <Trash2 size={12} strokeWidth={1.5} />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    };
 
     return (
       <>
         <button
           type="button"
           onClick={() => toggleSection(sectionKey)}
-          className="flex w-full items-center justify-between gap-3 border-b border-[#1A1A1A] py-4 text-left focus:outline-none"
+          className="flex w-full items-center justify-between gap-3 border-b border-[#1A1A1A]/10 py-3 text-left focus:outline-none"
         >
           <div>
-            <p className="text-[15px] font-[600] text-noria-text">{title}</p>
-            <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-noria-muted">
+            <p className="text-[14px] font-[600] text-noria-text">{title}</p>
+            <p className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-noria-muted font-bold">
               {catalogTags.length} categorías
             </p>
           </div>
-          <span className="h-10 w-10 border border-[#1A1A1A] flex items-center justify-center">
+          <span className="text-noria-muted p-1 hover:text-noria-text transition-colors">
             {openSections[sectionKey] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </span>
         </button>
 
         {openSections[sectionKey] && (
-          <div className="space-y-3 border-b border-[#1A1A1A] py-4">
+          <div className="space-y-3 border-b border-[#1A1A1A]/10 py-3.5">
             <button
               type="button"
               onClick={() => {
@@ -669,6 +856,8 @@ export default function SettingsScreen() {
                 setNewTagKind(kind);
                 setNewTagName('');
                 setNewTagIconKey('');
+                setNewTagParentId('');
+                setNewTagPillar('NEED');
               }}
               className="flex items-center gap-1 font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-[#647C78] focus:outline-none"
             >
@@ -677,76 +866,87 @@ export default function SettingsScreen() {
             </button>
 
             {isAddingHere && (
-              <form onSubmit={handleCreateTag} className="space-y-3 border border-[#1A1A1A] p-3">
+              <form onSubmit={handleCreateTag} className="space-y-3 border border-[#1A1A1A] p-3 text-[12px]">
                 <p className="font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-noria-muted">Nueva categoría</p>
-                <input type="text" value={newTagName} onChange={e => setNewTagName(e.target.value)} placeholder="Ej. Mascotas" className="muji-input text-[12px]" required />
+                <div>
+                  <label className="block mb-1 text-[11px] text-noria-muted">Nombre</label>
+                  <input type="text" value={newTagName} onChange={e => setNewTagName(e.target.value)} placeholder="Ej. Mascotas" className="muji-input text-[12px]" required />
+                </div>
+                
+                <div>
+                  <label className="block mb-1 text-[11px] text-noria-muted">Categoría Padre (Opcional)</label>
+                  <select value={newTagParentId} onChange={e => {
+                    setNewTagParentId(e.target.value);
+                    if (e.target.value) {
+                      const parent = tags.find(p => p.id === parseInt(e.target.value));
+                      if (parent) setNewTagPillar(parent.pillar || 'NEED');
+                    }
+                  }} className="muji-input text-[12px]">
+                    <option value="">Ninguna (Categoría Principal)</option>
+                    {parentTags.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </div>
+
+                {!newTagParentId && (
+                  <div>
+                    <label className="block mb-1 text-[11px] text-noria-muted">Pilar por defecto</label>
+                    <select value={newTagPillar} onChange={e => setNewTagPillar(e.target.value)} className="muji-input text-[12px]">
+                      <option value="NEED">Necesidad (Need)</option>
+                      <option value="WANT">Deseo (Want)</option>
+                      <option value="SAVE">Ahorro (Save)</option>
+                    </select>
+                  </div>
+                )}
+                
                 <IconGridPicker value={newTagIconKey} onChange={setNewTagIconKey} />
+                
                 <div className="grid grid-cols-2 gap-2">
-                  <OutlineButton onClick={() => { setShowAddTagForm(false); setNewTagIconKey(''); }}>Cancelar</OutlineButton>
+                  <OutlineButton onClick={() => { setShowAddTagForm(false); setNewTagIconKey(''); setNewTagParentId(''); }}>Cancelar</OutlineButton>
                   <OutlineButton type="submit">Crear</OutlineButton>
                 </div>
               </form>
             )}
 
-            {catalogTags.map(tag => {
-              const isEditing = editingTagId === tag.id;
+            {parentTags.map(parent => {
+              const children = subTags.filter(st => st.parentId === parent.id);
+              const isExpanded = !!expandedParentTagIds[parent.id];
               return (
-                <div key={tag.id} className="border-b border-[#1A1A1A]/14 py-3">
-                  {isEditing ? (
-                    <div className="space-y-2">
-                      <input type="text" value={editTagName} onChange={e => setEditTagName(e.target.value)} className="muji-input text-[12px]" required />
-                      <IconGridPicker value={editTagIconKey} onChange={setEditTagIconKey} />
-                      <div className="grid grid-cols-2 gap-2">
-                        <OutlineButton onClick={() => setEditingTagId(null)}>Cancelar</OutlineButton>
-                        <OutlineButton onClick={() => handleUpdateTag(tag.id)}>Guardar</OutlineButton>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <CategoryIcon iconKey={tag.iconKey} size={15} />
-                        <span className="truncate text-[14px] font-[600] text-noria-text">{tag.name}</span>
-                        <CategoryTag name={tag.name} size="xs" />
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <button type="button" onClick={() => { setEditingTagId(tag.id); setEditTagName(tag.name); setEditTagIconKey(tag.iconKey || ''); }} className="p-1.5 text-noria-muted hover:text-noria-text focus:outline-none" title="Editar categoría">
-                          <Pencil size={12} strokeWidth={1.5} />
-                        </button>
-                        <button type="button" onClick={() => handleDeleteTag(tag.id, tag.name)} className="p-1.5 text-noria-muted hover:text-[#9F2F2D] focus:outline-none" title="Eliminar categoría">
-                          <Trash2 size={12} strokeWidth={1.5} />
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                <React.Fragment key={parent.id}>
+                  {renderTagRow(parent, false, children.length > 0, isExpanded)}
+                  {isExpanded && children.map(child => renderTagRow(child, true))}
+                </React.Fragment>
               );
             })}
+
+            {/* Render orphaned subcategories just in case */}
+            {subTags.filter(st => !parentTags.some(p => p.id === st.parentId)).map(orphan => renderTagRow(orphan, true))}
           </div>
         )}
       </>
     );
   };
 
+
   const renderIncomeTypeCatalog = () => (
     <>
       <button
         type="button"
         onClick={() => toggleSection('incomeTypes')}
-        className="flex w-full items-center justify-between gap-3 border-b border-[#1A1A1A] py-4 text-left focus:outline-none"
+        className="flex w-full items-center justify-between gap-3 border-b border-[#1A1A1A]/10 py-3 text-left focus:outline-none"
       >
         <div>
-          <p className="text-[15px] font-[600] text-noria-text">Tipos de ingreso</p>
-          <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-noria-muted">
+          <p className="text-[14px] font-[600] text-noria-text">Tipos de ingreso</p>
+          <p className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-noria-muted font-bold">
             {incomeTypes.length} tipos
           </p>
         </div>
-        <span className="h-10 w-10 border border-[#1A1A1A] flex items-center justify-center">
+        <span className="text-noria-muted p-1 hover:text-noria-text transition-colors">
           {openSections.incomeTypes ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
         </span>
       </button>
 
       {openSections.incomeTypes && (
-        <div className="space-y-3 border-b border-[#1A1A1A] py-4">
+        <div className="space-y-3 border-b border-[#1A1A1A]/10 py-3.5">
           <button
             type="button"
             onClick={() => {
@@ -821,21 +1021,21 @@ export default function SettingsScreen() {
         <button
           type="button"
           onClick={() => toggleSection('currencies')}
-          className="flex w-full items-center justify-between gap-3 border-b border-[#1A1A1A] py-4 text-left focus:outline-none"
+          className="flex w-full items-center justify-between gap-3 border-b border-[#1A1A1A]/10 py-3 text-left focus:outline-none"
         >
           <div>
-            <p className="text-[15px] font-[600] text-noria-text">Divisas</p>
-            <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-noria-muted">
+            <p className="text-[14px] font-[600] text-noria-text">Divisas</p>
+            <p className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-noria-muted font-bold">
               {currencies.length} divisas registradas
             </p>
           </div>
-          <span className="h-10 w-10 border border-[#1A1A1A] flex items-center justify-center">
+          <span className="text-noria-muted p-1 hover:text-noria-text transition-colors">
             {openSections.currencies ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </span>
         </button>
 
         {openSections.currencies && (
-          <div className="space-y-3 border-b border-[#1A1A1A] py-4">
+          <div className="space-y-3 border-b border-[#1A1A1A]/10 py-3.5">
             <button
               type="button"
               onClick={() => {
@@ -999,6 +1199,119 @@ export default function SettingsScreen() {
     );
   };
 
+  const renderThirdPartyCatalog = () => {
+    const isAddingHere = showAddThirdPartyForm;
+    const filteredThirdParties = thirdParties.filter(tp =>
+      tp.name.toLowerCase().includes(thirdPartySearch.toLowerCase())
+    );
+
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => toggleSection('thirdParties')}
+          className="flex w-full items-center justify-between gap-3 border-b border-[#1A1A1A]/10 py-3 text-left focus:outline-none"
+        >
+          <div>
+            <p className="text-[14px] font-[600] text-noria-text">Terceros / Comercios</p>
+            <p className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.1em] text-noria-muted font-bold">
+              {thirdParties.length} registrados
+            </p>
+          </div>
+          <span className="text-noria-muted p-1 hover:text-noria-text transition-colors">
+            {openSections.thirdParties ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </span>
+        </button>
+
+        {openSections.thirdParties && (
+          <div className="space-y-3.5 border-b border-[#1A1A1A]/10 py-3.5 animate-fade-in">
+            <div className="flex justify-between items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAddThirdPartyForm(!isAddingHere);
+                  setNewThirdPartyName('');
+                }}
+                className="flex items-center gap-1 font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-[#647C78] focus:outline-none shrink-0"
+              >
+                <Plus size={12} />
+                Añadir tercero
+              </button>
+
+              {/* Search bar inside catalog */}
+              <div className="relative flex-1 max-w-[200px]">
+                <input
+                  type="text"
+                  value={thirdPartySearch}
+                  onChange={e => setThirdPartySearch(e.target.value)}
+                  placeholder="Buscar tercero..."
+                  className="muji-input text-[12px] bg-transparent pl-8 border-b border-[rgba(26,26,26,0.25)] focus:border-[#1A1A1A] w-full"
+                />
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-noria-muted" size={12} />
+                {thirdPartySearch && (
+                  <button
+                    type="button"
+                    onClick={() => setThirdPartySearch('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-noria-muted hover:text-noria-text focus:outline-none"
+                  >
+                    <X size={11} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {isAddingHere && (
+              <form onSubmit={handleCreateThirdParty} className="space-y-3 border border-[#1A1A1A] p-3 text-[12px]">
+                <p className="font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-noria-muted">Nuevo tercero</p>
+                <input type="text" value={newThirdPartyName} onChange={e => setNewThirdPartyName(e.target.value)} placeholder="Ej. Abasto San José" className="muji-input text-[12px]" required />
+                <div className="grid grid-cols-2 gap-2">
+                  <OutlineButton onClick={() => setShowAddThirdPartyForm(false)}>Cancelar</OutlineButton>
+                  <OutlineButton type="submit">Crear</OutlineButton>
+                </div>
+              </form>
+            )}
+
+            {filteredThirdParties.length === 0 ? (
+              <p className="text-[11px] text-noria-muted italic text-center py-4">No se encontraron terceros.</p>
+            ) : (
+              <div className="max-h-72 overflow-y-auto pr-1 bg-transparent p-3 border border-[#1A1A1A] text-[12px] font-mono leading-relaxed space-y-2">
+                {filteredThirdParties.map(tp => {
+                  const isEditing = editingThirdPartyId === tp.id;
+                  return (
+                    <div key={tp.id} className="border-b border-[#1A1A1A]/10 pb-2 last:border-b-0 last:pb-0">
+                      {isEditing ? (
+                        <div className="space-y-2 py-1">
+                          <input type="text" value={editThirdPartyName} onChange={e => setEditThirdPartyName(e.target.value)} className="muji-input text-[12px]" required />
+                          <div className="grid grid-cols-2 gap-2">
+                            <OutlineButton onClick={() => setEditingThirdPartyId(null)}>Cancelar</OutlineButton>
+                            <OutlineButton onClick={() => handleUpdateThirdParty(tp.id)}>Guardar</OutlineButton>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between gap-3 py-1.5">
+                          <span className="truncate text-[13px] font-[600] text-noria-text">{tp.name}</span>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button type="button" onClick={() => { setEditingThirdPartyId(tp.id); setEditThirdPartyName(tp.name); }} className="p-1 text-noria-muted hover:text-noria-text focus:outline-none" title="Editar tercero">
+                              <Pencil size={11} strokeWidth={1.5} />
+                            </button>
+                            <button type="button" onClick={() => handleDeleteThirdParty(tp.id, tp.name)} className="p-1 text-noria-muted hover:text-[#9F2F2D] focus:outline-none" title="Eliminar tercero">
+                              <Trash2 size={11} strokeWidth={1.5} />
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </>
+    );
+  };
+
+
   return (
     <div className="min-h-screen pb-24 pt-16" style={{ background: '#F5F2ED' }}>
       <Header title="Configuración" showBack={true} />
@@ -1160,74 +1473,11 @@ export default function SettingsScreen() {
             open={openSections.catalogs}
             onToggle={() => toggleSection('catalogs')}
           >
-            <div className="border-y border-[#1A1A1A]">
+            <div className="border-y border-[#1A1A1A]/10">
               {renderTagCatalog('EXPENSE', 'Categorías de gasto', expenseTags, 'Añadir categoría')}
               {renderIncomeTypeCatalog()}
               {renderCurrenciesCatalog()}
-
-              <button
-                type="button"
-                onClick={() => toggleSection('institutions')}
-                className="flex w-full items-center justify-between gap-3 border-b border-[#1A1A1A] py-4 text-left focus:outline-none"
-              >
-                <div>
-                  <p className="text-[15px] font-[600] text-noria-text">Instituciones</p>
-                  <p className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.1em] text-noria-muted">
-                    {activeInstitutions} entidades / {totalAccounts} cuentas
-                  </p>
-                </div>
-                <span className="h-10 w-10 border border-[#1A1A1A] flex items-center justify-center">
-                  {openSections.institutions ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                </span>
-              </button>
-
-              {openSections.institutions && (
-                <div className="space-y-3 border-b border-[#1A1A1A] py-4">
-                  {institutions.map(inst => {
-                    const isEditing = editingInstId === inst.id;
-                    const relatedCount = accounts.filter(a => a.institutionId === inst.id).length;
-
-                    return (
-                      <div key={inst.id} className="border border-[#1A1A1A]/20 p-3">
-                        {isEditing ? (
-                          <div className="space-y-2">
-                            <input type="text" value={editInstName} onChange={e => setEditInstName(e.target.value)} className="muji-input text-[12px]" required />
-                            <select value={editInstType} onChange={e => setEditInstType(e.target.value)} className="muji-input text-[12px]">
-                              <option value="BANK">Banco</option>
-                              <option value="NEOBANK">Banco digital</option>
-                              <option value="EXCHANGE">Exchange</option>
-                              <option value="HOT_WALLET">Hot Wallet</option>
-                              <option value="COLD_WALLET">Cold Wallet</option>
-                              <option value="CASH">Efectivo</option>
-                            </select>
-                            <div className="grid grid-cols-2 gap-2">
-                              <OutlineButton onClick={() => setEditingInstId(null)}>Cancelar</OutlineButton>
-                              <OutlineButton onClick={() => handleUpdateInst(inst.id)}>Guardar</OutlineButton>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="flex items-center justify-between gap-3">
-                            <div>
-                              <p className="text-[14px] font-[600] text-noria-text">{inst.name}</p>
-                              <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-noria-muted">
-                                {inst.type} / {relatedCount} {relatedCount === 1 ? 'cuenta' : 'cuentas'}
-                              </p>
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <button type="button" onClick={() => { setEditingInstId(inst.id); setEditInstName(inst.name); setEditInstType(inst.type); }} className="p-1.5 text-noria-muted hover:text-noria-text focus:outline-none" title="Editar banco">
-                                <Pencil size={12} strokeWidth={1.5} />
-                              </button>
-                              <button type="button" onClick={() => handleDeleteInst(inst.id, inst.name)} disabled={relatedCount > 0} className="p-1.5 text-noria-muted hover:text-[#9F2F2D] disabled:opacity-30 focus:outline-none" title={relatedCount > 0 ? 'No se puede eliminar' : 'Eliminar banco'}>
-                                <Trash2 size={12} strokeWidth={1.5} />
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              {renderThirdPartyCatalog()}
 
             </div>
           </SectionAccordion>

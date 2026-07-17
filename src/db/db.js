@@ -92,6 +92,11 @@ db.version(7).stores({
   }
 });
 
+db.version(8).stores({
+  tags: '++id, name, pillar, iconKey, kind, parentId',
+  transactions: '++id, date, type, amount, currency, accountId, tagId, anchorId, incomeSourceId, pillar, description, transferId, thirdPartyId, splitGroupId',
+});
+
 
 // Seed data function to populate catalogs on first open
 export async function seedDatabase() {

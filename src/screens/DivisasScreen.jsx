@@ -24,7 +24,6 @@ const fmtRate = (n) => {
 export default function DivisasScreen() {
   const navigate = useNavigate();
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [isCalcOpen, setIsCalcOpen] = useState(false);
 
   // Queries
   const activeLots = useLiveQuery(() => db.lots.filter(l => l.remainingAmount > 0).toArray()) || [];
@@ -42,91 +41,11 @@ export default function DivisasScreen() {
   const totalUSDValue = activeVESLots.reduce((sum, l) => sum + (l.remainingAmount / l.effectiveRate), 0);
   const averageWeightedRate = totalUSDValue > 0 ? (totalVESRemaining / totalUSDValue) : 0;
 
-  // Currencies list for calculator
-  const activeCurrencies = dbCurrencies.length > 0
-    ? dbCurrencies.filter(c => c.isActive)
-    : [
-        { code: 'USD', name: 'Dólar' },
-        { code: 'VES', name: 'Bolívar' },
-        { code: 'USDT', name: 'Tether' }
-      ];
 
-  // Calculator states
-  const [calcCurrencyA, setCalcCurrencyA] = useState('USD');
-  const [calcCurrencyB, setCalcCurrencyB] = useState('VES');
-  const [rate, setRate] = useState('');
-  const [amountA, setAmountA] = useState('');
-  const [amountB, setAmountB] = useState('');
-
-  // Calculator logic
-  const handleAmountAChange = (val, currentRate = rate) => {
-    setAmountA(val);
-    const parsedAmount = parseFloat(val);
-    const parsedRate = parseFloat(currentRate);
-    if (!isNaN(parsedAmount) && !isNaN(parsedRate) && parsedRate > 0) {
-      setAmountB((parsedAmount * parsedRate).toFixed(2));
-    } else {
-      setAmountB('');
-    }
-  };
-
-  const handleAmountBChange = (val, currentRate = rate) => {
-    setAmountB(val);
-    const parsedAmount = parseFloat(val);
-    const parsedRate = parseFloat(currentRate);
-    if (!isNaN(parsedAmount) && !isNaN(parsedRate) && parsedRate > 0) {
-      setAmountA((parsedAmount / parsedRate).toFixed(2));
-    } else {
-      setAmountA('');
-    }
-  };
-
-  const handleRateChangeLocal = (val) => {
-    setRate(val);
-    if (amountA !== '') {
-      handleAmountAChange(amountA, val);
-    } else if (amountB !== '') {
-      handleAmountBChange(amountB, val);
-    }
-  };
-
-  const handleSwap = () => {
-    const tempCurr = calcCurrencyA;
-    setCalcCurrencyA(calcCurrencyB);
-    setCalcCurrencyB(tempCurr);
-    
-    const tempAmt = amountA;
-    setAmountA(amountB);
-    setAmountB(tempAmt);
-
-    const parsedRate = parseFloat(rate);
-    if (!isNaN(parsedRate) && parsedRate > 0) {
-      setRate((1 / parsedRate).toFixed(4));
-    } else {
-      setRate('');
-    }
-  };
-
-  const handleClear = () => {
-    setAmountA('');
-    setAmountB('');
-    setRate('');
-  };
 
   return (
     <div className="min-h-screen pb-24 pt-16" style={{ background: '#F5F2ED' }}>
-      <Header 
-        title="Divisas" 
-        action={
-          <button
-            onClick={() => setIsCalcOpen(true)}
-            className="p-1 focus:outline-none text-noria-text hover:text-[#647C78] transition-colors"
-            title="Abrir Calculadora"
-          >
-            <Calculator size={18} strokeWidth={1.8} />
-          </button>
-        }
-      />
+      <Header title="Divisas" />
 
       <main className="mx-auto max-w-md px-6 space-y-6">
         {/* -- RESUMEN TÉCNICO DE LOTES -- */}
@@ -297,128 +216,6 @@ export default function DivisasScreen() {
           )}
         </section>
       </main>
-
-      {/* -- BOTTOM SHEET: CALCULADORA DE CONVERSIÓN MULTIMONEDA -- */}
-      {isCalcOpen && (
-        <>
-          <div 
-            className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40 animate-fade-in" 
-            onClick={() => setIsCalcOpen(false)} 
-          />
-          <div 
-            className="fixed bottom-0 left-0 right-0 z-50 max-h-[85vh] max-w-md mx-auto overflow-y-auto bg-[#F5F2ED] border-t-2 border-l-2 border-r-2 border-[#1A1A1A] animate-slide-up px-6 pb-10 pt-4"
-            style={{ boxShadow: '0 -8px 40px rgba(0,0,0,0.08)', borderRadius: '0px' }}
-          >
-            {/* Handle bar */}
-            <div className="flex justify-center mb-3">
-              <div className="w-8 h-[3px] rounded-full bg-[rgba(26,26,26,0.12)]" />
-            </div>
-
-            {/* Header */}
-            <div className="flex justify-between items-center mb-5">
-              <h4 className="text-[16px] font-[500] uppercase tracking-wider text-noria-text">Calculadora Divisas</h4>
-              <button 
-                onClick={() => setIsCalcOpen(false)} 
-                className="focus:outline-none p-1 text-noria-muted hover:text-noria-text"
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            {/* Selector de Monedas */}
-            <div className="grid grid-cols-5 gap-2 items-center mb-4">
-              <div className="col-span-2">
-                <label className="muji-header block mb-1">De (A)</label>
-                <select 
-                  value={calcCurrencyA} 
-                  onChange={e => setCalcCurrencyA(e.target.value)}
-                  className="muji-input font-mono text-[13px]"
-                >
-                  {activeCurrencies.map(c => (
-                    <option key={c.code} value={c.code}>{c.code}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="col-span-1 flex justify-center pt-4">
-                <button 
-                  type="button"
-                  onClick={handleSwap}
-                  className="w-8 h-8 border border-[#1A1A1A] flex items-center justify-center hover:bg-noria-text/[0.03] transition-colors focus:outline-none"
-                  title="Intercambiar divisas"
-                >
-                  <Coins size={14} />
-                </button>
-              </div>
-
-              <div className="col-span-2">
-                <label className="muji-header block mb-1">A (B)</label>
-                <select 
-                  value={calcCurrencyB} 
-                  onChange={e => setCalcCurrencyB(e.target.value)}
-                  className="muji-input font-mono text-[13px]"
-                >
-                  {activeCurrencies.map(c => (
-                    <option key={c.code} value={c.code}>{c.code}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {/* Tasa de Cambio */}
-            <div className="py-2.5 border-b border-[rgba(26,26,26,0.12)] mb-4">
-              <label className="muji-header block mb-1">Tasa de Cambio ({calcCurrencyB}/{calcCurrencyA})</label>
-              <input 
-                type="number" 
-                step="0.0001" 
-                inputMode="decimal"
-                value={rate} 
-                onChange={e => handleRateChangeLocal(e.target.value)}
-                placeholder="Ej. 40.00"
-                className="w-full text-[18px] font-mono text-noria-text bg-transparent outline-none placeholder:text-[rgba(26,26,26,0.15)]"
-              />
-            </div>
-
-            {/* Campos de Monto */}
-            <div className="grid grid-cols-2 gap-4 mb-6">
-              <div className="py-2.5 border-b border-[rgba(26,26,26,0.12)]">
-                <label className="muji-header block mb-1">Monto en {calcCurrencyA}</label>
-                <input 
-                  type="number" 
-                  step="0.01" 
-                  inputMode="decimal"
-                  value={amountA} 
-                  onChange={e => handleAmountAChange(e.target.value)}
-                  placeholder="0.00"
-                  className="w-full text-[20px] font-mono text-noria-text bg-transparent outline-none placeholder:text-[rgba(26,26,26,0.15)]"
-                />
-              </div>
-
-              <div className="py-2.5 border-b border-[rgba(26,26,26,0.12)]">
-                <label className="muji-header block mb-1">Monto en {calcCurrencyB}</label>
-                <input 
-                  type="number" 
-                  step="0.01" 
-                  inputMode="decimal"
-                  value={amountB} 
-                  onChange={e => handleAmountBChange(e.target.value)}
-                  placeholder="0.00"
-                  className="w-full text-[20px] font-mono text-noria-text bg-transparent outline-none placeholder:text-[rgba(26,26,26,0.15)]"
-                />
-              </div>
-            </div>
-
-            {/* Botones de acción */}
-            <button
-              type="button"
-              onClick={handleClear}
-              className="w-full py-3.5 border border-[#1A1A1A] text-[12px] font-[500] uppercase tracking-wider hover:bg-noria-text/[0.03] transition-colors focus:outline-none"
-            >
-              Limpiar Campos
-            </button>
-          </div>
-        </>
-      )}
 
       <BottomNav />
     </div>

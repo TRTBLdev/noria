@@ -63,9 +63,34 @@ export default function CategorySelect({
         className="w-full border border-[#1A1A1A]/40 bg-transparent px-2 py-2 font-mono text-[12px] text-noria-text outline-none focus:border-[#647C78]"
       >
         <option value="">Sin categoría</option>
-        {sortedTags.map(tag => (
-          <option key={tag.id} value={tag.id}>{tag.name}</option>
-        ))}
+        {(() => {
+          const parentTags = sortedTags.filter(tag => !tag.parentId);
+          const subTags = sortedTags.filter(tag => tag.parentId);
+          
+          return (
+            <>
+              {parentTags.map(parent => {
+                const children = subTags.filter(st => st.parentId === parent.id);
+                return (
+                  <React.Fragment key={parent.id}>
+                    <option value={parent.id}>{parent.name}</option>
+                    {children.map(child => (
+                      <option key={child.id} value={child.id}>
+                        &nbsp;&nbsp;↳ {child.name}
+                      </option>
+                    ))}
+                  </React.Fragment>
+                );
+              })}
+              {/* Orphaned subcategories */}
+              {subTags.filter(st => !parentTags.some(p => p.id === st.parentId)).map(orphan => (
+                <option key={orphan.id} value={orphan.id}>
+                  &nbsp;&nbsp;↳ {orphan.name}
+                </option>
+              ))}
+            </>
+          );
+        })()}
       </select>
 
       {isAdding && (

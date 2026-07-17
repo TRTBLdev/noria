@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
-import { Plus, X, ArrowDownLeft, ArrowUpRight, ArrowLeftRight } from 'lucide-react';
+import { Plus, X, ArrowDownLeft, ArrowUpRight, ArrowLeftRight, Calculator, Coins } from 'lucide-react';
 import CategorySelect from './CategorySelect.jsx';
 import IncomeTypeSelect from './IncomeTypeSelect.jsx';
 import { getIncomeType } from './IncomeTypeIcon.jsx';
@@ -9,6 +9,31 @@ import { getIncomeType } from './IncomeTypeIcon.jsx';
 const fmt = (n, d = 2) => {
   if (typeof n !== 'number') return '0.00';
   return n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+};
+
+const getAccountLabel = (acc, inst) => {
+  const typeLabel = {
+    CHECKING: 'Corriente',
+    SAVINGS: 'Ahorro',
+    CREDIT: 'Crédito',
+    CASH: 'Efectivo'
+  }[acc.type] || acc.type;
+  
+  let baseName = '';
+  if (inst) {
+    if (inst.name.toLowerCase() === acc.name.toLowerCase()) {
+      baseName = inst.name;
+    } else {
+      baseName = `${inst.name} · ${acc.name}`;
+    }
+  } else {
+    baseName = acc.name;
+  }
+  
+  if (acc.type !== 'CASH') {
+    return `${baseName} (${typeLabel})`;
+  }
+  return baseName;
 };
 
 export default function FAB() {
@@ -24,14 +49,17 @@ export default function FAB() {
   const incomeTypes   = useLiveQuery(() => db.income_types.orderBy('name').toArray()) || [];
   const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
   const baseCurrency  = baseCurrencyObj?.value || 'USD';
+  const thirdParties  = useLiveQuery(() => db.third_parties.toArray()) || [];
+
+  const instruments   = useLiveQuery(() => db.instruments.toArray())  || [];
 
   const [date, setDate]               = useState(new Date().toISOString().slice(0, 10));
   const [accountId, setAccountId]     = useState('');
   const [toAccountId, setToAccountId] = useState('');
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('');
   const [amount, setAmount]           = useState('');
   const [amountReceived, setAmountReceived] = useState('');
   const [exchangeRate, setExchangeRate]     = useState('');
-  const [pillar, setPillar]           = useState('NEED');
   const [tagId, setTagId]             = useState('');
   const [description, setDescription] = useState('');
   const [incomeSourceId, setIncomeSourceId] = useState('');
@@ -40,17 +68,127 @@ export default function FAB() {
   const [error, setError]   = useState('');
   const [success, setSuccess] = useState(false);
 
+  const [thirdPartyInput, setThirdPartyInput] = useState('');
+  const [selectedThirdPartyId, setSelectedThirdPartyId] = useState('');
+  const [showThirdPartySuggestions, setShowThirdPartySuggestions] = useState(false);
+
+  const [isSplit, setIsSplit] = useState(false);
+  const [splits, setSplits] = useState([{ amount: '', tagId: '', pillar: 'NEED', description: '' }]);
+
+  // Calculator states
+  const [isCalcOpen, setIsCalcOpen] = useState(false);
+  const dbCurrencies = useLiveQuery(() => db.currencies.toArray()) || [];
+  const activeCurrencies = dbCurrencies.length > 0
+    ? dbCurrencies.filter(c => c.isActive)
+    : [
+        { code: 'USD', name: 'Dólar' },
+        { code: 'VES', name: 'Bolívar' },
+        { code: 'USDT', name: 'Tether' }
+      ];
+
+  const [calcCurrencyA, setCalcCurrencyA] = useState('USD');
+  const [calcCurrencyB, setCalcCurrencyB] = useState('VES');
+  const [rate, setRate] = useState('');
+  const [amountA, setAmountA] = useState('');
+  const [amountB, setAmountB] = useState('');
+
+  // Calculator logic
+  const handleAmountAChange = (val, currentRate = rate) => {
+    setAmountA(val);
+    const parsedAmount = parseFloat(val);
+    const parsedRate = parseFloat(currentRate);
+    if (!isNaN(parsedAmount) && !isNaN(parsedRate) && parsedRate > 0) {
+      setAmountB((parsedAmount * parsedRate).toFixed(2));
+    } else {
+      setAmountB('');
+    }
+  };
+
+  const handleAmountBChange = (val, currentRate = rate) => {
+    setAmountB(val);
+    const parsedAmount = parseFloat(val);
+    const parsedRate = parseFloat(currentRate);
+    if (!isNaN(parsedAmount) && !isNaN(parsedRate) && parsedRate > 0) {
+      setAmountA((parsedAmount / parsedRate).toFixed(2));
+    } else {
+      setAmountA('');
+    }
+  };
+
+  const handleRateChangeLocal = (val) => {
+    setRate(val);
+    if (amountA !== '') {
+      handleAmountAChange(amountA, val);
+    } else if (amountB !== '') {
+      handleAmountBChange(amountB, val);
+    }
+  };
+
+  const handleSwap = () => {
+    const tempCurr = calcCurrencyA;
+    setCalcCurrencyA(calcCurrencyB);
+    setCalcCurrencyB(tempCurr);
+    
+    const tempAmt = amountA;
+    setAmountA(amountB);
+    setAmountB(tempAmt);
+
+    const parsedRate = parseFloat(rate);
+    if (!isNaN(parsedRate) && parsedRate > 0) {
+      setRate((1 / parsedRate).toFixed(4));
+    } else {
+      setRate('');
+    }
+  };
+
+  const handleClear = () => {
+    setAmountA('');
+    setAmountB('');
+    setRate('');
+  };
+
   const selectedAccount = accounts.find(a => a.id.toString() === accountId);
   const selectedAccountCurrency = selectedAccount?.currency || baseCurrency;
+
+  const INSTRUMENT_TYPES = [
+    { value: 'DEBIT_CARD', label: 'Tarjeta de Débito' },
+    { value: 'MOBILE_PAYMENT', label: 'Pago Móvil' },
+    { value: 'CREDIT_CARD', label: 'Tarjeta de Crédito' },
+    { value: 'WIRE_TRANSFER', label: 'Transferencia Bancaria' },
+    { value: 'CASH', label: 'Efectivo / Físico' }
+  ];
+
+  const getAccountIdFromPaymentMethod = (val) => {
+    if (val.startsWith('inst-')) {
+      const instId = parseInt(val.replace('inst-', ''));
+      const inst = instruments.find(i => i.id === instId);
+      return inst ? inst.accountId.toString() : '';
+    } else if (val.startsWith('acc-')) {
+      return val.replace('acc-', '');
+    }
+    return '';
+  };
+
+  const getDefaultPaymentMethodForAccount = (accId, instList) => {
+    if (!accId) return '';
+    const accInsts = instList.filter(i => i.accountId.toString() === accId.toString());
+    if (accInsts.length > 0) {
+      return `inst-${accInsts[0].id}`;
+    }
+    return `acc-${accId}`;
+  };
 
   // Seed defaults when data loads
   useEffect(() => {
     if (activeAccounts.length > 0) {
+      const currentIdStr = accountId || activeAccounts[0].id.toString();
       if (!accountId) {
-        setAccountId(activeAccounts[0].id.toString());
+        setAccountId(currentIdStr);
+      }
+      if (!selectedPaymentMethod) {
+        setSelectedPaymentMethod(getDefaultPaymentMethodForAccount(currentIdStr, instruments));
       }
       // Ensure target account is different
-      const currentIdStr = accountId || activeAccounts[0].id.toString();
       const otherAcc = activeAccounts.find(a => a.id.toString() !== currentIdStr);
       if (otherAcc && (!toAccountId || toAccountId === currentIdStr)) {
         setToAccountId(otherAcc.id.toString());
@@ -58,7 +196,7 @@ export default function FAB() {
     }
     if (incomeSources.length > 0 && !incomeSourceId) setIncomeSourceId(incomeSources[0].id.toString());
     if (incomeTypes.length > 0 && !newSourceIncomeTypeId) setNewSourceIncomeTypeId(incomeTypes[0].id.toString());
-  }, [activeAccounts, incomeSources, incomeTypes, accountId, toAccountId, newSourceIncomeTypeId]);
+  }, [activeAccounts, incomeSources, incomeTypes, accountId, toAccountId, newSourceIncomeTypeId, instruments, selectedPaymentMethod]);
 
   // Close bottom sheet on outside click
   useEffect(() => {
@@ -83,9 +221,15 @@ export default function FAB() {
     setTagId('');
     setError('');
     setSuccess(false);
+    setThirdPartyInput('');
+    setSelectedThirdPartyId('');
+    setIsSplit(false);
+    setSplits([{ amount: '', tagId: '', pillar: 'NEED', description: '' }]);
     if (activeAccounts.length > 0) {
-      setAccountId(activeAccounts[0].id.toString());
-      const otherAcc = activeAccounts.find(a => a.id.toString() !== activeAccounts[0].id.toString());
+      const defaultAccId = activeAccounts[0].id.toString();
+      setAccountId(defaultAccId);
+      setSelectedPaymentMethod(getDefaultPaymentMethodForAccount(defaultAccId, instruments));
+      const otherAcc = activeAccounts.find(a => a.id.toString() !== defaultAccId);
       if (otherAcc) {
         setToAccountId(otherAcc.id.toString());
       }
@@ -93,7 +237,6 @@ export default function FAB() {
     if (incomeSources.length > 0) setIncomeSourceId(incomeSources[0].id.toString());
     if (incomeTypes.length > 0) setNewSourceIncomeTypeId(incomeTypes[0].id.toString());
     setDate(new Date().toISOString().slice(0, 10));
-    setPillar('NEED');
   };
 
   const handleSourceAccountChange = (id) => {
@@ -171,6 +314,10 @@ export default function FAB() {
 
   const openForm = (type) => {
     setIsOpen(false);
+    if (type === 'CALCULADORA') {
+      setIsCalcOpen(true);
+      return;
+    }
     resetForm();
     setActiveForm(type);
   };
@@ -308,6 +455,18 @@ export default function FAB() {
         const selectedAccount = accounts.find(a => a.id.toString() === accountId);
         if (!selectedAccount) { setError('Cuenta no encontrada'); return; }
 
+        let feeAmountVal = 0;
+        let selectedInstrumentId = null;
+        if (activeForm === 'GASTO' && selectedPaymentMethod) {
+          if (selectedPaymentMethod.startsWith('inst-')) {
+            selectedInstrumentId = parseInt(selectedPaymentMethod.replace('inst-', ''));
+            const inst = instruments.find(i => i.id === selectedInstrumentId);
+            if (inst) {
+              feeAmountVal = (parsedAmount * (inst.feePercentage || 0) / 100) + (inst.feeFixed || 0);
+            }
+          }
+        }
+
         let resolvedSourceId = incomeSourceId ? parseInt(incomeSourceId) : null;
         if (activeForm === 'INGRESO' && (incomeSourceId === 'new' || newSourceName.trim())) {
           const nameToUse = newSourceName.trim();
@@ -341,12 +500,13 @@ export default function FAB() {
 
           const totalActiveVES = activeVESLots.reduce((sum, l) => sum + l.remainingAmount, 0);
 
-          if (totalActiveVES < parsedAmount) {
-            setError(`Saldo de lotes insuficiente en VES para registrar este gasto. Disponible: Bs. ${totalActiveVES.toLocaleString('es-VE', { minimumFractionDigits: 2 })}. Por favor registra una transferencia o ingreso primero.`);
+          const totalGastoConFee = parsedAmount + feeAmountVal;
+          if (totalActiveVES < totalGastoConFee) {
+            setError(`Saldo de lotes insuficiente en VES para registrar este gasto con comisión. Requerido: Bs. ${totalGastoConFee.toLocaleString('es-VE', { minimumFractionDigits: 2 })} (Disponible: Bs. ${totalActiveVES.toLocaleString('es-VE', { minimumFractionDigits: 2 })}).`);
             return;
           }
 
-          let remainingToConsume = parsedAmount;
+          let remainingToConsume = totalGastoConFee;
           let calculatedUSD = 0;
           for (const lot of activeVESLots) {
             if (remainingToConsume <= 0) break;
@@ -373,22 +533,104 @@ export default function FAB() {
           costUSD = parseFloat((parsedAmount / parsedRate).toFixed(2));
         }
 
-        await db.transaction('rw', [db.accounts, db.transactions, db.lots], async () => {
-          // 1. Agregar transacción
-          await db.transactions.add({
-            id: transactionId,
-            date: new Date(date + 'T12:00:00'),
-            type: activeForm === 'GASTO' ? 'OUT' : 'IN',
-            amount: parsedAmount,
-            currency: selectedAccount.currency,
-            accountId: parseInt(accountId),
-            tagId: activeForm === 'GASTO' && tagId ? parseInt(tagId) : null,
-            pillar: activeForm === 'GASTO' ? pillar : null,
-            incomeSourceId: activeForm === 'INGRESO' ? resolvedSourceId : null,
-            description: description.trim(),
-            amountUSD: selectedAccount.currency === 'USD' ? parsedAmount : costUSD,
-            lotConsumption: lotConsumptions.length > 0 ? JSON.stringify(lotConsumptions) : null,
-          });
+        // Validación de splits
+        if (activeForm === 'GASTO' && isSplit) {
+          let splitSum = 0;
+          for (let i = 0; i < splits.length; i++) {
+            const s = splits[i];
+            const sAmt = parseFloat(s.amount);
+            if (isNaN(sAmt) || sAmt <= 0) {
+              setError(`Monto inválido en la división #${i + 1}`);
+              return;
+            }
+            if (!s.tagId) {
+              setError(`Selecciona una categoría en la división #${i + 1}`);
+              return;
+            }
+            splitSum += sAmt;
+          }
+          if (Math.abs(splitSum - parsedAmount) > 0.01) {
+            setError(`La suma de las divisiones (${fmt(splitSum)}) debe coincidir con el monto total (${fmt(parsedAmount)})`);
+            return;
+          }
+        }
+
+        await db.transaction('rw', [db.accounts, db.transactions, db.lots, db.third_parties], async () => {
+          // Resolviendo el Tercero (Comercio)
+          let resolvedThirdPartyId = selectedThirdPartyId ? parseInt(selectedThirdPartyId) : null;
+          if (thirdPartyInput.trim()) {
+            const match = thirdParties.find(tp => tp.name.toLowerCase() === thirdPartyInput.trim().toLowerCase());
+            if (match) {
+              resolvedThirdPartyId = match.id;
+            } else {
+              resolvedThirdPartyId = await db.third_parties.add({ name: thirdPartyInput.trim() });
+            }
+          }
+
+          // 1. Agregar transacción o transacciones divididas
+          if (activeForm === 'GASTO' && isSplit) {
+            const splitGroupId = 'SPLIT-' + Date.now();
+            const totalGastoConFee = parsedAmount + feeAmountVal;
+            
+            for (const split of splits) {
+              const parsedSplitAmount = parseFloat(split.amount);
+              const splitProportion = parsedSplitAmount / parsedAmount;
+              
+              const splitFee = feeAmountVal * splitProportion;
+              const splitTotalAmount = parsedSplitAmount + splitFee;
+              const splitTotalProportion = splitTotalAmount / totalGastoConFee;
+
+              // Proporción de lotes consumidos
+              const splitLotConsumptions = lotConsumptions.map(c => ({
+                lotId: c.lotId,
+                amountConsumed: c.amountConsumed * splitTotalProportion,
+                rate: c.rate
+              }));
+
+              const splitCostUSD = costUSD !== null ? costUSD * splitTotalProportion : null;
+
+              const splitTag = tags.find(t => t.id === parseInt(split.tagId));
+              const splitPillar = splitTag?.pillar || 'NEED';
+
+              await db.transactions.add({
+                date: new Date(date + 'T12:00:00'),
+                type: 'OUT',
+                amount: splitTotalAmount,
+                fee: splitFee,
+                currency: selectedAccount.currency,
+                accountId: parseInt(accountId),
+                tagId: parseInt(split.tagId),
+                pillar: splitPillar,
+                description: split.description.trim() || description.trim(),
+                amountUSD: selectedAccount.currency === 'USD' ? splitTotalAmount : splitCostUSD,
+                lotConsumption: splitLotConsumptions.length > 0 ? JSON.stringify(splitLotConsumptions) : null,
+                thirdPartyId: resolvedThirdPartyId,
+                instrumentId: selectedInstrumentId,
+                splitGroupId
+              });
+            }
+          } else {
+            const totalAmountToSave = activeForm === 'GASTO' ? (parsedAmount + feeAmountVal) : parsedAmount;
+            const selectedTag = tags.find(t => t.id === parseInt(tagId));
+            const resolvedPillar = selectedTag?.pillar || 'NEED';
+            await db.transactions.add({
+              id: transactionId,
+              date: new Date(date + 'T12:00:00'),
+              type: activeForm === 'GASTO' ? 'OUT' : 'IN',
+              amount: totalAmountToSave,
+              fee: activeForm === 'GASTO' ? feeAmountVal : undefined,
+              currency: selectedAccount.currency,
+              accountId: parseInt(accountId),
+              tagId: activeForm === 'GASTO' && tagId ? parseInt(tagId) : null,
+              pillar: activeForm === 'GASTO' ? resolvedPillar : null,
+              incomeSourceId: activeForm === 'INGRESO' ? resolvedSourceId : null,
+              description: description.trim(),
+              amountUSD: selectedAccount.currency === 'USD' ? totalAmountToSave : costUSD,
+              lotConsumption: lotConsumptions.length > 0 ? JSON.stringify(lotConsumptions) : null,
+              thirdPartyId: resolvedThirdPartyId,
+              instrumentId: selectedInstrumentId
+            });
+          }
 
           // 2. Crear lote si es ingreso en VES
           if (activeForm === 'INGRESO' && selectedAccount.currency === 'VES' && parsedRate) {
@@ -419,9 +661,10 @@ export default function FAB() {
           }
 
           // 4. Actualizar balance de la cuenta
-          const delta = activeForm === 'GASTO' ? -parsedAmount : parsedAmount;
+          const delta = activeForm === 'GASTO' ? -(parsedAmount + feeAmountVal) : parsedAmount;
           await db.accounts.update(parseInt(accountId), { balance: selectedAccount.balance + delta });
         });
+
       }
 
       setSuccess(true);
@@ -449,6 +692,12 @@ export default function FAB() {
       icon: <ArrowDownLeft size={17} strokeWidth={1.6} />,
       label: 'Gasto',
       color: '#C58A14',
+    },
+    {
+      type: 'CALCULADORA',
+      icon: <Calculator size={17} strokeWidth={1.6} />,
+      label: 'Calculadora',
+      color: '#1A1A1A',
     },
   ];
 
@@ -621,6 +870,32 @@ export default function FAB() {
                         />
                       </div>
 
+                      {activeForm === 'GASTO' && (
+                        (() => {
+                          if (!selectedPaymentMethod) return null;
+                          const instId = selectedPaymentMethod.startsWith('inst-') ? parseInt(selectedPaymentMethod.replace('inst-', '')) : null;
+                          const inst = instId ? instruments.find(i => i.id === instId) : null;
+                          if (!inst || (!inst.feePercentage && !inst.feeFixed)) return null;
+                          
+                          const baseAmt = parseFloat(amount) || 0;
+                          const estimatedFee = (baseAmt * (inst.feePercentage || 0) / 100) + (inst.feeFixed || 0);
+                          if (estimatedFee <= 0) return null;
+                          
+                          return (
+                            <div className="p-2.5 border border-[rgba(0,0,0,0.06)] rounded bg-[rgba(26,26,26,0.01)] text-[12px] font-mono text-noria-text/60 space-y-1 animate-fade-in">
+                              <div className="flex justify-between">
+                                <span>Comisión estimada:</span>
+                                <span className="text-noria-amber font-[500]">{estimatedFee.toLocaleString('en-US', { minimumFractionDigits: 2 })} {selectedAccountCurrency}</span>
+                              </div>
+                              <div className="flex justify-between border-t border-[rgba(0,0,0,0.06)] pt-1 text-[11px]">
+                                <span>Total a debitar:</span>
+                                <span className="font-[600] text-[#1A1A1A]">{(baseAmt + estimatedFee).toLocaleString('en-US', { minimumFractionDigits: 2 })} {selectedAccountCurrency}</span>
+                              </div>
+                            </div>
+                          );
+                        })()
+                      )}
+
                       {activeForm === 'INGRESO' && selectedAccountCurrency === 'VES' && (
                         <div className="py-2 border-b border-[rgba(0,0,0,0.07)] animate-fade-in">
                           <p className="label-section mb-1">Tasa de Cambio (Bs/$)</p>
@@ -633,6 +908,65 @@ export default function FAB() {
                             required
                           />
                         </div>
+                      )}
+                      
+                      {activeForm === 'GASTO' && (
+                        <div className="flex items-center space-x-2 pt-1 animate-fade-in">
+                          <input
+                            type="checkbox"
+                            id="is-split-checkbox"
+                            checked={isSplit}
+                            onChange={e => setIsSplit(e.target.checked)}
+                            className="h-4 w-4 border-[#1A1A1A] accent-[#4F8F58]"
+                          />
+                          <label htmlFor="is-split-checkbox" className="text-[12px] font-mono uppercase tracking-[0.05em] text-noria-text font-[500] cursor-pointer select-none">
+                            Dividir Gasto (Ticket Mixto)
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Tercero / Comercio */}
+                  {(activeForm === 'GASTO' || activeForm === 'INGRESO') && (
+                    <div className="relative">
+                      <label className="muji-header block mb-1">Tercero / Comercio</label>
+                      <input
+                        type="text"
+                        value={thirdPartyInput}
+                        onChange={e => {
+                          setThirdPartyInput(e.target.value);
+                          setSelectedThirdPartyId('');
+                          setShowThirdPartySuggestions(true);
+                        }}
+                        onFocus={() => setShowThirdPartySuggestions(true)}
+                        onBlur={() => setTimeout(() => setShowThirdPartySuggestions(false), 200)}
+                        placeholder="Ej. Abasto San José"
+                        className="muji-input"
+                      />
+                      {showThirdPartySuggestions && thirdPartyInput.trim() && (
+                        (() => {
+                          const filtered = thirdParties.filter(tp => tp.name.toLowerCase().includes(thirdPartyInput.toLowerCase()));
+                          if (filtered.length === 0) return null;
+                          return (
+                            <div className="absolute left-0 right-0 z-50 mt-1 max-h-40 overflow-y-auto border border-[#1A1A1A] bg-[#F5F2ED] py-1 shadow-md">
+                              {filtered.map(tp => (
+                                <button
+                                  key={tp.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setThirdPartyInput(tp.name);
+                                    setSelectedThirdPartyId(tp.id.toString());
+                                    setShowThirdPartySuggestions(false);
+                                  }}
+                                  className="block w-full px-3 py-1.5 text-left text-[12px] hover:bg-[#1A1A1A]/10 text-noria-text"
+                                >
+                                  {tp.name}
+                                </button>
+                              ))}
+                            </div>
+                          );
+                        })()
                       )}
                     </div>
                   )}
@@ -681,29 +1015,8 @@ export default function FAB() {
                     </div>
                   )}
 
-                  {/* Pillar pills */}
-                  {activeForm === 'GASTO' && (
-                    <div>
-                      <p className="muji-header mb-2">Pilar</p>
-                      <div className="flex space-x-2">
-                        {[['NEED','Necesidad','#4F8F58','rgba(79,143,88,0.12)'],
-                          ['WANT','Deseo','#3F7F9C','rgba(63,127,156,0.12)'],
-                          ['SAVE','Ahorro','#C58A14','rgba(197,138,20,0.12)']].map(([val, label, col, bg]) => (
-                          <button key={val} type="button" onClick={() => setPillar(val)}
-                            className="flex-1 py-2.5 text-[10px] font-mono font-[700] uppercase tracking-[0.12em] border transition-all"
-                            style={{
-                              borderColor: pillar === val ? col : 'rgba(26,26,26,0.10)',
-                              background:  pillar === val ? bg  : 'transparent',
-                              color:       pillar === val ? col : 'rgba(26,26,26,0.4)',
-                            }}>
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {activeForm === 'GASTO' && (
+                  {/* Category - Hide if isSplit */}
+                  {activeForm === 'GASTO' && !isSplit && (
                     <CategorySelect
                       id="tx-category"
                       value={tagId}
@@ -712,6 +1025,81 @@ export default function FAB() {
                       kind="EXPENSE"
                       className="max-w-[320px]"
                     />
+                  )}
+
+                  {/* Splits Breakdown */}
+                  {activeForm === 'GASTO' && isSplit && (
+                    <div className="space-y-4 p-3 border border-[#1A1A1A]/30 rounded bg-noria-bg/5 animate-fade-in">
+                      <p className="font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-noria-muted">Desglose del gasto</p>
+                      {splits.map((split, index) => (
+                        <div key={index} className="space-y-3 border-b border-[#1A1A1A]/10 pb-3 last:border-b-0 last:pb-0">
+                          <div className="flex justify-between items-center">
+                            <span className="text-[11px] font-mono font-[700] text-noria-muted uppercase font-semibold">Línea #{index + 1}</span>
+                            {splits.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => setSplits(splits.filter((_, i) => i !== index))}
+                                className="text-[10px] font-mono uppercase text-[#9F2F2D] font-bold"
+                              >
+                                Eliminar
+                              </button>
+                            )}
+                          </div>
+                          
+                          <div className="grid grid-cols-1 gap-3">
+                            <div>
+                              <label className="text-[10px] font-mono uppercase text-noria-muted block mb-0.5">Monto</label>
+                              <input
+                                type="number" step="0.01" placeholder="0.00"
+                                value={split.amount}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  setSplits(splits.map((s, i) => i === index ? { ...s, amount: val } : s));
+                                }}
+                                className="muji-input text-[12px]"
+                                required
+                              />
+                            </div>
+                          </div>
+
+                          <div>
+                            <CategorySelect
+                              id={`split-cat-${index}`}
+                              label="Categoría"
+                              value={split.tagId}
+                              onChange={val => {
+                                const selectedCat = tags.find(t => t.id.toString() === val);
+                                const defaultPillar = selectedCat?.pillar || 'NEED';
+                                setSplits(splits.map((s, i) => i === index ? { ...s, tagId: val, pillar: defaultPillar } : s));
+                              }}
+                              tags={tags}
+                              kind="EXPENSE"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-[10px] font-mono uppercase text-noria-muted block mb-0.5">Detalle (Opcional)</label>
+                            <input
+                              type="text" placeholder="Ej. Tomates"
+                              value={split.description}
+                              onChange={e => {
+                                const val = e.target.value;
+                                setSplits(splits.map((s, i) => i === index ? { ...s, description: val } : s));
+                              }}
+                              className="muji-input text-[12px]"
+                            />
+                          </div>
+                        </div>
+                      ))}
+
+                      <button
+                        type="button"
+                        onClick={() => setSplits([...splits, { amount: '', tagId: '', pillar: 'NEED', description: '' }])}
+                        className="w-full py-2 border border-dashed border-[#1A1A1A]/40 text-[11px] font-mono font-[700] uppercase tracking-wide text-[#647C78] hover:bg-[#1A1A1A]/5"
+                      >
+                        + Añadir línea
+                      </button>
+                    </div>
                   )}
 
                   {/* Account + Date row */}
@@ -725,7 +1113,7 @@ export default function FAB() {
                             className="muji-input" required>
                             {activeAccounts.map(acc => {
                               const inst = institutions.find(i => i.id === acc.institutionId);
-                              const label = inst ? `${inst.name} · ${acc.name} (${acc.type})` : `${acc.name} (${acc.type})`;
+                              const label = getAccountLabel(acc, inst);
                               return <option key={acc.id} value={acc.id}>{label} ({acc.currency})</option>;
                             })}
                           </select>
@@ -736,7 +1124,7 @@ export default function FAB() {
                             className="muji-input" required>
                             {activeAccounts.map(acc => {
                               const inst = institutions.find(i => i.id === acc.institutionId);
-                              const label = inst ? `${inst.name} · ${acc.name} (${acc.type})` : `${acc.name} (${acc.type})`;
+                              const label = getAccountLabel(acc, inst);
                               return <option key={acc.id} value={acc.id}>{label} ({acc.currency})</option>;
                             })}
                           </select>
@@ -752,15 +1140,67 @@ export default function FAB() {
                     /* Account + Date row standard */
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className="muji-header block mb-1">Cuenta</label>
-                        <select id="tx-account" value={accountId} onChange={e => setAccountId(e.target.value)}
-                          className="muji-input" required>
-                          {activeAccounts.map(acc => {
-                            const inst = institutions.find(i => i.id === acc.institutionId);
-                            const label = inst ? `${inst.name} · ${acc.name} (${acc.type})` : `${acc.name} (${acc.type})`;
-                            return <option key={acc.id} value={acc.id}>{label} ({acc.currency})</option>;
-                          })}
-                        </select>
+                        {activeForm === 'GASTO' ? (
+                          <>
+                            <label className="muji-header block mb-1">Medio de Pago</label>
+                            <select
+                              id="tx-payment-method"
+                              value={selectedPaymentMethod}
+                              onChange={e => {
+                                const val = e.target.value;
+                                setSelectedPaymentMethod(val);
+                                setAccountId(getAccountIdFromPaymentMethod(val));
+                              }}
+                              className="muji-input" required
+                            >
+                              {activeAccounts.map(acc => {
+                                const inst = institutions.find(i => i.id === acc.institutionId);
+                                const accLabel = getAccountLabel(acc, inst);
+                                const accInstruments = instruments.filter(i => i.accountId === acc.id);
+                                
+                                if (accInstruments.length === 0) {
+                                  return (
+                                    <option key={`acc-${acc.id}`} value={`acc-${acc.id}`}>
+                                      {accLabel}
+                                    </option>
+                                  );
+                                }
+                                
+                                return (
+                                  <optgroup key={acc.id} label={`${accLabel} (${acc.currency})`}>
+                                    {accInstruments.map(i => {
+                                      const typeLabel = INSTRUMENT_TYPES.find(t => t.value === i.type)?.label || i.type;
+                                      const name = i.alias ? `${typeLabel} (${i.alias})` : typeLabel;
+                                      const feeText = (i.feePercentage > 0 || i.feeFixed > 0)
+                                        ? ` (${i.feePercentage > 0 ? `${i.feePercentage}%` : ''}${i.feePercentage > 0 && i.feeFixed > 0 ? ' + ' : ''}${i.feeFixed > 0 ? `${i.feeFixed}` : ''} fee)`
+                                        : '';
+                                      return (
+                                        <option key={`inst-${i.id}`} value={`inst-${i.id}`}>
+                                          {name}{feeText}
+                                        </option>
+                                      );
+                                    })}
+                                    <option value={`acc-${acc.id}`}>
+                                      Saldo de cuenta
+                                    </option>
+                                  </optgroup>
+                                );
+                              })}
+                            </select>
+                          </>
+                        ) : (
+                          <>
+                            <label className="muji-header block mb-1">Cuenta</label>
+                            <select id="tx-account" value={accountId} onChange={e => setAccountId(e.target.value)}
+                              className="muji-input" required>
+                             {activeAccounts.map(acc => {
+                                const inst = institutions.find(i => i.id === acc.institutionId);
+                                const label = getAccountLabel(acc, inst);
+                                return <option key={acc.id} value={acc.id}>{label} ({acc.currency})</option>;
+                              })}
+                            </select>
+                          </>
+                        )}
                       </div>
                       <div>
                         <label className="muji-header block mb-1">Fecha</label>
@@ -781,6 +1221,127 @@ export default function FAB() {
                 </div>
               )}
             </form>
+          </div>
+        </>
+      )}
+      {/* -- BOTTOM SHEET: CALCULADORA DE CONVERSIÓN MULTIMONEDA -- */}
+      {isCalcOpen && (
+        <>
+          <div 
+            className="fixed inset-0 bg-[rgba(26,26,26,0.12)] z-40 animate-fade-in" 
+            onClick={() => setIsCalcOpen(false)} 
+          />
+          <div 
+            className="fixed bottom-0 left-0 right-0 z-50 max-h-[85vh] max-w-md mx-auto overflow-y-auto bg-[#F5F2ED] border-t-2 border-l-2 border-r-2 border-[#1A1A1A] animate-slide-up px-6 pb-10 pt-4"
+            style={{ boxShadow: '0 -8px 40px rgba(0,0,0,0.08)', borderRadius: '0px' }}
+          >
+            {/* Handle bar */}
+            <div className="flex justify-center mb-3">
+              <div className="w-8 h-[3px] rounded-full bg-[rgba(26,26,26,0.12)]" />
+            </div>
+
+            {/* Header */}
+            <div className="flex justify-between items-center mb-5">
+              <h4 className="text-[16px] font-[500] uppercase tracking-wider text-noria-text">Calculadora Divisas</h4>
+              <button 
+                onClick={() => setIsCalcOpen(false)} 
+                className="focus:outline-none p-1 text-noria-muted hover:text-noria-text"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Selector de Monedas */}
+            <div className="grid grid-cols-5 gap-2 items-center mb-4">
+              <div className="col-span-2">
+                <label className="muji-header block mb-1">De (A)</label>
+                <select 
+                  value={calcCurrencyA} 
+                  onChange={e => setCalcCurrencyA(e.target.value)}
+                  className="muji-input font-mono text-[13px]"
+                >
+                  {activeCurrencies.map(c => (
+                    <option key={c.code} value={c.code}>{c.code}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="col-span-1 flex justify-center pt-4">
+                <button 
+                  type="button"
+                  onClick={handleSwap}
+                  className="w-8 h-8 border border-[#1A1A1A] flex items-center justify-center hover:bg-noria-text/[0.03] transition-colors focus:outline-none"
+                  title="Intercambiar divisas"
+                >
+                  <Coins size={14} />
+                </button>
+              </div>
+
+              <div className="col-span-2">
+                <label className="muji-header block mb-1">A (B)</label>
+                <select 
+                  value={calcCurrencyB} 
+                  onChange={e => setCalcCurrencyB(e.target.value)}
+                  className="muji-input font-mono text-[13px]"
+                >
+                  {activeCurrencies.map(c => (
+                    <option key={c.code} value={c.code}>{c.code}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Tasa de Cambio */}
+            <div className="py-2.5 border-b border-[rgba(26,26,26,0.12)] mb-4">
+              <label className="muji-header block mb-1">Tasa de Cambio ({calcCurrencyB}/{calcCurrencyA})</label>
+              <input 
+                type="number" 
+                step="0.0001" 
+                inputMode="decimal"
+                value={rate} 
+                onChange={e => handleRateChangeLocal(e.target.value)}
+                placeholder="Ej. 40.00"
+                className="w-full text-[18px] font-mono text-noria-text bg-transparent outline-none placeholder:text-[rgba(26,26,26,0.15)]"
+              />
+            </div>
+
+            {/* Campos de Monto */}
+            <div className="grid grid-cols-2 gap-4 mb-6">
+              <div className="py-2.5 border-b border-[rgba(26,26,26,0.12)]">
+                <label className="muji-header block mb-1">Monto en {calcCurrencyA}</label>
+                <input 
+                  type="number" 
+                  step="0.01" 
+                  inputMode="decimal"
+                  value={amountA} 
+                  onChange={e => handleAmountAChange(e.target.value)}
+                  placeholder="0.00"
+                  className="w-full text-[20px] font-mono text-noria-text bg-transparent outline-none placeholder:text-[rgba(26,26,26,0.15)]"
+                />
+              </div>
+
+              <div className="py-2.5 border-b border-[rgba(26,26,26,0.12)]">
+                <label className="muji-header block mb-1">Monto en {calcCurrencyB}</label>
+                <input 
+                  type="number" 
+                  step="0.01" 
+                  inputMode="decimal"
+                  value={amountB} 
+                  onChange={e => handleAmountBChange(e.target.value)}
+                  placeholder="0.00"
+                  className="w-full text-[20px] font-mono text-noria-text bg-transparent outline-none placeholder:text-[rgba(26,26,26,0.15)]"
+                />
+              </div>
+            </div>
+
+            {/* Botones de acción */}
+            <button
+              type="button"
+              onClick={handleClear}
+              className="w-full py-3.5 border border-[#1A1A1A] text-[12px] font-[500] uppercase tracking-wider hover:bg-noria-text/[0.03] transition-colors focus:outline-none"
+            >
+              Limpiar Campos
+            </button>
           </div>
         </>
       )}

@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { db } from '../db/db.js';
 import { Search, Trash2, Pencil, ArrowDownRight, ArrowUpRight, ArrowLeftRight } from 'lucide-react';
 import PillarTag from './PillarTag.jsx';
 import CategoryTag from './CategoryTag.jsx';
@@ -24,6 +26,17 @@ export default function TransactionsSection({
   const [filterPillar, setFilterPillar] = useState('ALL');
   const [filterType, setFilterType] = useState('ALL');
   const [sortBy, setSortBy] = useState('DATE_DESC');
+  
+  const thirdParties = useLiveQuery(() => db.third_parties.toArray()) || [];
+  const instruments  = useLiveQuery(() => db.instruments.toArray())  || [];
+
+  const INSTRUMENT_TYPES = [
+    { value: 'DEBIT_CARD', label: 'Tarjeta de Débito' },
+    { value: 'MOBILE_PAYMENT', label: 'Pago Móvil' },
+    { value: 'CREDIT_CARD', label: 'Tarjeta de Crédito' },
+    { value: 'WIRE_TRANSFER', label: 'Transferencia Bancaria' },
+    { value: 'CASH', label: 'Efectivo / Físico' }
+  ];
 
   const [editingTx, setEditingTx] = useState(null);
   const [editDesc, setEditDesc] = useState('');
@@ -149,6 +162,11 @@ export default function TransactionsSection({
     const amountSign = isIncome ? '+' : '-';
     const amountColor = isTransfer ? '#1A1A1A' : isIncome ? '#4F8F58' : '#1A1A1A';
 
+    const tp = t.thirdPartyId ? thirdParties.find(item => item.id === t.thirdPartyId) : null;
+    const displayName = tp 
+      ? (t.description ? `${tp.name} · ${t.description}` : tp.name)
+      : (t.description || (isIncome ? 'Ingreso' : 'Gasto'));
+
     return (
       <div key={t.id} className="py-3 flex items-center gap-3">
         <div className="pt-0.5 flex-shrink-0">
@@ -164,15 +182,28 @@ export default function TransactionsSection({
         </div>
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center gap-2 min-w-0 flex-wrap">
             <span className="text-[14px] font-[500] text-noria-text truncate">
-              {t.description || (isIncome ? 'Ingreso' : 'Gasto')}
+              {displayName}
             </span>
+            {t.splitGroupId && (
+              <span className="font-mono text-[9px] uppercase tracking-[0.05em] px-1 border border-[#1A1A1A]/30 text-noria-muted select-none">
+                Split
+              </span>
+            )}
             <PillarTag pillar={t.pillar} size="xs" />
             <CategoryTag name={category?.name} size="xs" />
           </div>
           <p className="mt-0.5 text-[10px] text-noria-muted uppercase tracking-[0.1em] font-mono truncate">
-            {accountName}
+            {(() => {
+              const inst = t.instrumentId ? instruments.find(i => i.id === t.instrumentId) : null;
+              const instLabel = inst 
+                ? (inst.alias || (INSTRUMENT_TYPES.find(it => it.value === inst.type)?.label || inst.type)) 
+                : null;
+              const accountDisplay = instLabel ? `${accountName} (${instLabel})` : accountName;
+              const feeDisplay = t.fee > 0 ? ` · Fee: ${amountSign}$${fmt(t.fee)}` : '';
+              return accountDisplay + feeDisplay;
+            })()}
           </p>
         </div>
 

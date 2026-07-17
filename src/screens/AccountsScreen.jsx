@@ -41,7 +41,7 @@ const formatAmountWithSymbol = (amt, code, d = 2) => {
 /* ── SUB-COMPONENTE: Listado / Editor de Instrumentos (Reutilizable) ── */
 function InstrumentListEditor({ instrumentsList, setInstrumentsList }) {
   const addInstrument = () => {
-    setInstrumentsList(prev => [...prev, { id: Date.now(), type: 'DEBIT_CARD', alias: '' }]);
+    setInstrumentsList(prev => [...prev, { id: Date.now(), type: 'DEBIT_CARD', alias: '', feePercentage: 0, feeFixed: 0 }]);
   };
 
   const removeInstrument = (id) => {
@@ -86,14 +86,40 @@ function InstrumentListEditor({ instrumentsList, setInstrumentsList }) {
                 type="text"
                 value={inst.alias}
                 onChange={e => updateInstrument(inst.id, 'alias', e.target.value)}
-                placeholder="Alias (ej. Zinli Visa)"
-                className="bg-transparent text-[12px] text-noria-text outline-none flex-1 border-b border-transparent focus:border-[#5C7A52] px-1"
+                placeholder="Alias"
+                className="bg-transparent text-[12px] text-noria-text outline-none flex-1 min-w-[50px] border-b border-transparent focus:border-[#5C7A52] px-1"
               />
+
+              <div className="flex items-center space-x-0.5 shrink-0">
+                <input
+                  type="number"
+                  step="0.01"
+                  value={inst.feePercentage ?? ''}
+                  onChange={e => updateInstrument(inst.id, 'feePercentage', parseFloat(e.target.value) || 0)}
+                  placeholder="0.00"
+                  className="bg-transparent text-[11px] text-noria-text outline-none w-10 border-b border-transparent focus:border-[#5C7A52] text-right font-mono"
+                  title="Porcentaje de comisión"
+                />
+                <span className="text-[9px] text-noria-muted">%</span>
+              </div>
+
+              <div className="flex items-center space-x-0.5 shrink-0">
+                <span className="text-[9px] text-noria-muted">+</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={inst.feeFixed ?? ''}
+                  onChange={e => updateInstrument(inst.id, 'feeFixed', parseFloat(e.target.value) || 0)}
+                  placeholder="0.00"
+                  className="bg-transparent text-[11px] text-noria-text outline-none w-10 border-b border-transparent focus:border-[#5C7A52] text-right font-mono"
+                  title="Comisión fija"
+                />
+              </div>
 
               <button
                 type="button"
                 onClick={() => removeInstrument(inst.id)}
-                className="text-[#9F2F2D] p-1 focus:outline-none"
+                className="text-[#9F2F2D] p-1 focus:outline-none flex-shrink-0"
               >
                 <X size={12} />
               </button>
@@ -184,6 +210,8 @@ function AddAccountModal({ onClose, institutions, onCreated }) {
           accountId,
           type: inst.type,
           alias: inst.alias.trim(),
+          feePercentage: inst.feePercentage || 0,
+          feeFixed: inst.feeFixed || 0,
           status: 'ACTIVE'
         });
       }
@@ -331,7 +359,13 @@ function EditAccountForm({ account, institutions, onUpdated, onCancel }) {
   useEffect(() => {
     const fetchInstruments = async () => {
       const data = await db.instruments.where('accountId').equals(account.id).toArray();
-      setInstrumentsList(data.map(i => ({ id: i.id, type: i.type, alias: i.alias })));
+      setInstrumentsList(data.map(i => ({
+        id: i.id,
+        type: i.type,
+        alias: i.alias,
+        feePercentage: i.feePercentage || 0,
+        feeFixed: i.feeFixed || 0
+      })));
     };
     fetchInstruments();
 
@@ -382,6 +416,8 @@ function EditAccountForm({ account, institutions, onUpdated, onCancel }) {
           accountId: account.id,
           type: inst.type,
           alias: inst.alias.trim(),
+          feePercentage: inst.feePercentage || 0,
+          feeFixed: inst.feeFixed || 0,
           status: 'ACTIVE'
         });
       }
