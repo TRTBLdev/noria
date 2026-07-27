@@ -6,7 +6,6 @@ import {
   FormField,
   FormSheet,
   NumberInput,
-  SegmentedChoice,
   SelectInput,
   TextInput
 } from './FormSystem.jsx';
@@ -20,16 +19,15 @@ export default function AnchorFormModal({
   institutions = [],
   macetas = [],
   tags = [],
+  baseCurrency = '',
   allowedPillars = ['NEED', 'WANT', 'SAVE'],
 }) {
-  const defaultPillar = allowedPillars[0] || 'NEED';
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [accountId, setAccountId] = useState('');
   const [macetaId, setMacetaId] = useState('');
   const [tagId, setTagId] = useState('');
-  const [pillar, setPillar] = useState(defaultPillar);
   const [frequencyInterval, setFrequencyInterval] = useState(1);
   const [frequencyUnit, setFrequencyUnit] = useState('MONTHS');
   const [error, setError] = useState('');
@@ -43,7 +41,6 @@ export default function AnchorFormModal({
       setAccountId(anchor.accountId ? anchor.accountId.toString() : '');
       setMacetaId(anchor.macetaId ? anchor.macetaId.toString() : '');
       setTagId(anchor.tagId ? anchor.tagId.toString() : '');
-      setPillar(allowedPillars.includes(anchor.pillar) ? anchor.pillar : defaultPillar);
       setFrequencyInterval(anchor.frequencyInterval || 1);
       setFrequencyUnit(anchor.frequencyUnit || 'MONTHS');
 
@@ -64,23 +61,22 @@ export default function AnchorFormModal({
       setAccountId('');
       setMacetaId('');
       setTagId('');
-      setPillar(defaultPillar);
       setFrequencyInterval(1);
       setFrequencyUnit('MONTHS');
     }
 
     setError('');
-  }, [anchor, allowedPillars, defaultPillar, isOpen]);
+  }, [anchor, isOpen]);
 
   if (!isOpen) return null;
 
   const isEdit = !!anchor;
-  const pillarOptions = [
-    { value: 'NEED', label: 'Necesidad', color: '#4F8F58' },
-    { value: 'WANT', label: 'Deseo', color: '#3F7F9C' },
-    { value: 'SAVE', label: 'Ahorro', color: '#C58A14' }
-  ].filter(option => allowedPillars.includes(option.value));
-  const disabledPillars = isEdit && anchor?.pillar === 'SAVE' ? ['NEED', 'WANT'] : [];
+  const isSavings = allowedPillars.length === 1 && allowedPillars[0] === 'SAVE';
+  const selectedTag = tags.find(tag => tag.id === parseInt(tagId, 10));
+  const pillar = isSavings ? 'SAVE' : selectedTag?.pillar;
+  const selectedCurrency = pillar === 'SAVE'
+    ? (macetas.find(item => item.id === parseInt(macetaId, 10))?.currency || baseCurrency)
+    : (activeAccounts.find(item => item.id === parseInt(accountId, 10))?.currency || baseCurrency);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -98,8 +94,13 @@ export default function AnchorFormModal({
       return;
     }
 
+    if (!isSavings && !selectedTag) {
+      setError('Selecciona una categoria. El pilar se tomara de ella.');
+      return;
+    }
+
     if (!allowedPillars.includes(pillar)) {
-      setError('Este tipo de programacion no esta disponible aqui.');
+      setError('La categoria seleccionada no pertenece a un pilar disponible aqui.');
       return;
     }
 
@@ -141,7 +142,7 @@ export default function AnchorFormModal({
         </FormField>
 
         <div className="grid grid-cols-2 gap-4">
-          <FormField label="Monto (USD)" htmlFor="anchor-amount">
+          <FormField label={`Monto (${selectedCurrency})`} htmlFor="anchor-amount">
             <NumberInput
               id="anchor-amount"
               step="0.01"
@@ -157,14 +158,6 @@ export default function AnchorFormModal({
           </FormField>
         </div>
 
-        <SegmentedChoice
-          label="Pilar"
-          value={pillar}
-          onChange={setPillar}
-          options={pillarOptions}
-          disabledValues={disabledPillars}
-        />
-
         {pillar !== 'SAVE' && (
           <CategorySelect
             id="anchor-form-category"
@@ -173,6 +166,8 @@ export default function AnchorFormModal({
             tags={tags}
             kind="EXPENSE"
             className="max-w-[320px]"
+            required
+            allowCreate={false}
           />
         )}
 
@@ -191,7 +186,9 @@ export default function AnchorFormModal({
               <option value="" disabled>Selecciona Cuenta...</option>
               {activeAccounts.map(account => {
                 const inst = institutions.find(item => item.id === account.institutionId);
-                const label = inst ? `${inst.name} - ${account.name} (${account.type})` : `${account.name} (${account.type})`;
+                const label = inst
+                  ? `${inst.name} - ${account.name} (${account.currency})`
+                  : `${account.name} (${account.currency})`;
                 return <option key={account.id} value={account.id}>{label}</option>;
               })}
             </SelectInput>

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../db/db.js';
 import { validateBetaCode, sha256 } from '../config/access.private.js';
+import { importDatabase, navigateToAccess } from '../db/backup.js';
 import { ShieldCheck, Eye, EyeOff } from 'lucide-react';
 
 export default function AccessScreen() {
@@ -14,6 +15,7 @@ export default function AccessScreen() {
   const [error, setError] = useState('');
   const [attempts, setAttempts] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [restoreError, setRestoreError] = useState('');
 
   useEffect(() => {
     async function checkExistingAccess() {
@@ -85,6 +87,27 @@ export default function AccessScreen() {
       setError('Error al procesar el acceso');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRestore = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!confirm('La restauración reemplazará los datos locales actuales. ¿Continuar?')) {
+      e.target.value = '';
+      return;
+    }
+
+    setLoading(true);
+    setRestoreError('');
+    try {
+      await importDatabase(db, await file.text());
+      navigateToAccess();
+    } catch (err) {
+      console.error('Error restoring backup from access screen:', err);
+      setRestoreError(err.message || 'No se pudo restaurar el respaldo.');
+      setLoading(false);
+      e.target.value = '';
     }
   };
 
@@ -203,6 +226,11 @@ export default function AccessScreen() {
 
       {/* Bottom Footer Notice */}
       <footer className="pb-8 flex flex-col items-center space-y-2 select-none">
+        <label className="cursor-pointer text-[10px] uppercase tracking-[0.1em] text-noria-text/45 hover:text-noria-text/70">
+          Restaurar respaldo completo
+          <input type="file" accept=".json,application/json" onChange={handleRestore} disabled={loading} className="hidden" />
+        </label>
+        {restoreError && <p className="max-w-xs text-center text-[10px] text-[#9F2F2D]">{restoreError}</p>}
         <div className="flex items-center space-y-1 text-noria-text/30">
           <ShieldCheck size={14} className="mr-1.5" />
           <span className="text-[10px] uppercase tracking-[0.1em] font-light">

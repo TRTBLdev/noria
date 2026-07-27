@@ -23,10 +23,6 @@ export default function BottomNav() {
   }) || false;
 
   const handleTabClick = (path, name) => {
-    if (path === '/debts') {
-      alert(`${name} estará disponible próximamente.`);
-      return;
-    }
     navigate(path);
   };
 
@@ -34,8 +30,8 @@ export default function BottomNav() {
     { icon: Home,           name: 'Home',      path: '/home' },
     { icon: Wallet,         name: 'Patrimonio', path: '/accounts' },
     { icon: CalendarRange,  name: 'Flotación', path: '/budget' },
+    { icon: TrendingDown,   name: 'Deudas/Splits', path: '/debts' },
     { icon: Coins,          name: 'Divisas',    path: '/divisas' },
-    { icon: TrendingDown,   name: 'Deudas',    path: '/debts' },
   ];
 
   return (

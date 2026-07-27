@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Landmark, Wallet, CreditCard, Archive, TrendingUp, ChevronUp, ChevronDown, Pencil, Trash2 } from 'lucide-react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
+import { formatAmountWithSymbol } from '../utils/format.js';
 
 const INSTRUMENT_TYPES = [
   { value: 'DEBIT_CARD', label: 'Tarjeta de Debito' },
@@ -36,10 +37,6 @@ export default function CuentasFuentesTab({
     if (!editInstName.trim()) return;
     try {
       await db.institutions.update(id, { name: editInstName.trim() });
-      const relatedAccs = accounts.filter(a => a.institutionId === id);
-      for (const acc of relatedAccs) {
-        await db.accounts.update(acc.id, { name: editInstName.trim() });
-      }
       setEditingInstId(null);
     } catch {
       alert("Error al renombrar la institución");
@@ -58,24 +55,7 @@ export default function CuentasFuentesTab({
 
   const dbCurrencies = useLiveQuery(() => db.currencies.toArray()) || [];
 
-  const getCurrencySymbol = (code) => {
-    const currencyObj = dbCurrencies.find(c => c.code === code);
-    return currencyObj?.symbol || code;
-  };
-
-  const formatBalance = (balance, currencyCode) => {
-    const symbol = getCurrencySymbol(currencyCode);
-    const formatted = fmt(balance);
-    if (currencyCode === 'VES') {
-      return `${formatted} ${symbol}`;
-    }
-    return `${symbol}${formatted}`;
-  };
-
-  const fmt = (n) => {
-    if (typeof n !== 'number') return '0.00';
-    return n.toLocaleString('en-US', { minimumFractionDigits: 2 });
-  };
+  const formatBalance = (balance, currencyCode) => formatAmountWithSymbol(balance, currencyCode, dbCurrencies);
 
   const instGroups = institutions
     .map(inst => ({
@@ -101,18 +81,13 @@ export default function CuentasFuentesTab({
             )}
 
             {instGroups.map(({ inst, accs }) => {
-              const totalUSD = accs.filter(a => a.currency === 'USD').reduce((sum, a) => sum + a.balance, 0);
-              const totalVES = accs.filter(a => a.currency === 'VES').reduce((sum, a) => sum + a.balance, 0);
-              const totalUSDT = accs.filter(a => a.currency === 'USDT').reduce((sum, a) => sum + a.balance, 0);
-              const totalUSDC = accs.filter(a => a.currency === 'USDC').reduce((sum, a) => sum + a.balance, 0);
-              const totalEUR = accs.filter(a => a.currency === 'EUR').reduce((sum, a) => sum + a.balance, 0);
-              const balanceParts = [];
-              if (totalUSD > 0) balanceParts.push(`$${fmt(totalUSD)}`);
-              if (totalVES > 0) balanceParts.push(`${fmt(totalVES)} Bs`);
-              if (totalUSDT > 0) balanceParts.push(`${fmt(totalUSDT)} USDT`);
-              if (totalUSDC > 0) balanceParts.push(`${fmt(totalUSDC)} USDC`);
-              if (totalEUR > 0) balanceParts.push(`${fmt(totalEUR)} €`);
-              const balanceStr = balanceParts.join('  |  ') || '$0.00';
+              const totalsByCurrency = accs.reduce((totals, account) => {
+                totals[account.currency] = (totals[account.currency] || 0) + account.balance;
+                return totals;
+              }, {});
+              const balanceParts = Object.entries(totalsByCurrency)
+                .map(([code, total]) => formatBalance(total, code));
+              const balanceStr = balanceParts.join('  |  ') || '0.00';
 
               const isCollapsed = !!collapsedInsts[inst.id];
 

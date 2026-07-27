@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
 import { ChevronUp } from 'lucide-react';
+import { convertAmountToBase } from '../utils/currency.js';
+import CurrencyAmount from './CurrencyAmount.jsx';
 
 export default function HomeostasisBar() {
   const [expanded, setExpanded] = useState(null); // 'NEED' | 'WANT' | 'SAVE' | null
@@ -11,8 +13,9 @@ export default function HomeostasisBar() {
   // Configurable pillar percentages (default 50/30/20)
   const pillarPctObj     = useLiveQuery(() => db.app_config.get('pillarPct'));
   const dbCurrencies     = useLiveQuery(() => db.currencies.toArray()) || [];
+  const lots             = useLiveQuery(() => db.lots.toArray()) || [];
 
-  const baseCurrency   = baseCurrencyObj?.value  || 'USD';
+  const baseCurrency   = baseCurrencyObj?.value  || '';
   const monthlyIncome  = monthlyIncomeObj?.value  || 0;
   const pillarPct      = pillarPctObj?.value      || { NEED: 50, WANT: 30, SAVE: 20 };
 
@@ -24,23 +27,12 @@ export default function HomeostasisBar() {
     return all.filter(t => new Date(t.date) >= start && t.type === 'OUT');
   }) || [];
 
-  const convertAmountToBase = (t) => {
-    const amtUSD = t.amountUSD ?? t.amount;
-    if (baseCurrency === 'USD') return amtUSD;
-    if (baseCurrency === 'VES') {
-      const activeVES = dbCurrencies.find(c => c.code === 'VES');
-      const rate = activeVES && activeVES.exchangeRate ? activeVES.exchangeRate : 40.0;
-      return amtUSD * rate;
-    }
-    if (baseCurrency === 'EUR') {
-      return amtUSD / 1.08;
-    }
-    return amtUSD;
-  };
-
   let spentNeeds = 0, spentWants = 0, spentSavings = 0;
   transactions.forEach(t => {
-    const amtBase = convertAmountToBase(t);
+    const amtBase = t.baseCurrency === baseCurrency && Number.isFinite(t.baseAmount)
+      ? t.baseAmount
+      : convertAmountToBase(t.amount, t.currency, baseCurrency, lots, dbCurrencies);
+    if (amtBase === null) return;
     if (t.pillar === 'NEED') spentNeeds  += amtBase;
     if (t.pillar === 'WANT') spentWants  += amtBase;
     if (t.pillar === 'SAVE') spentSavings += amtBase;
@@ -87,7 +79,6 @@ export default function HomeostasisBar() {
   ];
 
   const fmt = (n) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
   if (monthlyIncome === 0) {
     return (
       <article>
@@ -135,9 +126,11 @@ export default function HomeostasisBar() {
               {p.label}
             </p>
             {/* Monto gastado */}
-            <p className="text-[15px] font-[400] text-noria-text leading-none">
-              ${fmt(p.spent)}
-            </p>
+            <CurrencyAmount 
+              amount={p.spent} 
+              currencyCode={baseCurrency} 
+              className="text-[15px] font-[400] text-noria-text leading-none" 
+            />
           </button>
         ))}
       </div>
@@ -173,20 +166,20 @@ export default function HomeostasisBar() {
           <div className="grid grid-cols-3 gap-2 pt-1">
             <div>
               <p className="label-section mb-0.5">Consumido</p>
-              <p className="text-[15px] font-[400]" style={{ color: p.textColor }}>${fmt(p.spent)}</p>
+              <CurrencyAmount amount={p.spent} currencyCode={baseCurrency} className="text-[15px] font-[400]" style={{ color: p.textColor }} />
             </div>
             <div>
               <p className="label-section mb-0.5">Límite</p>
-              <p className="text-[15px] font-[400] text-noria-text">${fmt(p.goal)}</p>
+              <CurrencyAmount amount={p.goal} currencyCode={baseCurrency} className="text-[15px] font-[400] text-noria-text" />
             </div>
             <div>
               <p className="label-section mb-0.5">Restante</p>
-              <p
+              <CurrencyAmount 
+                amount={Math.max(0, p.goal - p.spent)} 
+                currencyCode={baseCurrency} 
                 className="text-[15px] font-[400]"
                 style={{ color: p.spent > p.goal ? '#C58A14' : '#4F8F58' }}
-              >
-                ${fmt(Math.max(0, p.goal - p.spent))}
-              </p>
+              />
             </div>
           </div>
 
@@ -194,7 +187,7 @@ export default function HomeostasisBar() {
           <p className="text-[12px] text-noria-muted leading-relaxed">{p.desc}</p>
           {p.spent > p.goal && (
             <p className="text-[11px] font-[500]" style={{ color: '#C58A14' }}>
-              Superaste el límite por ${fmt(p.spent - p.goal)} {baseCurrency}.
+              Superaste el límite por <CurrencyAmount amount={p.spent - p.goal} currencyCode={baseCurrency} />.
             </p>
           )}
 

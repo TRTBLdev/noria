@@ -2,11 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
 import Header from '../components/Header.jsx';
+import FAB from '../components/FAB.jsx';
 import NoriaSwitch from '../components/NoriaSwitch.jsx';
 import CategoryTag from '../components/CategoryTag.jsx';
 import CategoryIcon from '../components/CategoryIcon.jsx';
 import IconGridPicker from '../components/IconGridPicker.jsx';
 import { sha256 } from '../config/access.private.js';
+import { exportDatabase, importDatabase, navigateToAccess } from '../db/backup.js';
 import {
   Download,
   Upload,
@@ -152,6 +154,7 @@ export default function SettingsScreen() {
   });
 
   const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
+  const lotCurrencyObj = useLiveQuery(() => db.app_config.get('lotCurrency'));
   const monthlyIncomeObj = useLiveQuery(() => db.app_config.get('monthlyIncome'));
   const maskBalancesObj = useLiveQuery(() => db.app_config.get('maskBalances'));
   const themeObj = useLiveQuery(() => db.app_config.get('theme'));
@@ -166,7 +169,8 @@ export default function SettingsScreen() {
   const currencies = useLiveQuery(() => db.currencies.toArray()) || [];
   const thirdParties = useLiveQuery(() => db.third_parties.orderBy('name').toArray()) || [];
 
-  const baseCurrency = baseCurrencyObj?.value || 'USD';
+  const baseCurrency = baseCurrencyObj?.value || '';
+  const lotCurrency = lotCurrencyObj?.value || '';
   const monthlyIncome = monthlyIncomeObj?.value || 0;
   const maskBalances = maskBalancesObj?.value || false;
   const theme = themeObj?.value || 'System';
@@ -209,6 +213,9 @@ export default function SettingsScreen() {
   const [editCurrencyIsFiat, setEditCurrencyIsFiat] = useState(true);
   const [editCurrencyIsActive, setEditCurrencyIsActive] = useState(true);
   const [editCurrencyDecimalPlaces, setEditCurrencyDecimalPlaces] = useState(2);
+  const [editCurrencySymbolPosition, setEditCurrencySymbolPosition] = useState('before');
+  const [editCurrencyBaseRelation, setEditCurrencyBaseRelation] = useState('UNTRACKED');
+  const [editCurrencyUnitsPerBase, setEditCurrencyUnitsPerBase] = useState('1');
 
   const [showAddCurrencyForm, setShowAddCurrencyForm] = useState(false);
   const [newCurrencyCode, setNewCurrencyCode] = useState('');
@@ -217,6 +224,9 @@ export default function SettingsScreen() {
   const [newCurrencyIsFiat, setNewCurrencyIsFiat] = useState(true);
   const [newCurrencyIsActive, setNewCurrencyIsActive] = useState(true);
   const [newCurrencyDecimalPlaces, setNewCurrencyDecimalPlaces] = useState(2);
+  const [newCurrencySymbolPosition, setNewCurrencySymbolPosition] = useState('before');
+  const [newCurrencyBaseRelation, setNewCurrencyBaseRelation] = useState('UNTRACKED');
+  const [newCurrencyUnitsPerBase, setNewCurrencyUnitsPerBase] = useState('1');
 
   const [expandedParentTagIds, setExpandedParentTagIds] = useState({});
 
@@ -403,8 +413,7 @@ export default function SettingsScreen() {
     setError('');
     setLoading(true);
     try {
-      const exportData = {};
-      for (const table of db.tables) exportData[table.name] = await table.toArray();
+      const exportData = await exportDatabase(db);
       const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -428,26 +437,17 @@ export default function SettingsScreen() {
       return;
     }
     setLoading(true);
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        const data = JSON.parse(event.target.result);
-        await db.transaction('rw', db.tables, async () => {
-          for (const table of db.tables) {
-            if (data[table.name]) {
-              await table.clear();
-              await table.bulkAdd(data[table.name]);
-            }
-          }
-        });
-        setMessage('Importado. Recargando...');
-        setTimeout(() => window.location.reload(), 1500);
-      } catch {
-        setError('Archivo inválido');
-        setLoading(false);
-      }
-    };
-    reader.readAsText(file);
+    setError('');
+    try {
+      await importDatabase(db, await file.text());
+      setMessage('Respaldo restaurado. Recargando...');
+      setTimeout(navigateToAccess, 800);
+    } catch (err) {
+      console.error('Error importing backup:', err);
+      setError(`No se pudo restaurar: ${err.message || 'error desconocido'}`);
+      setLoading(false);
+      e.target.value = '';
+    }
   };
 
 
@@ -659,8 +659,12 @@ export default function SettingsScreen() {
       setError('Por favor completa todos los campos');
       return;
     }
-    if (code.length < 3 || code.length > 4) {
+    if (!/^[A-Z]{3,4}$/.test(code)) {
       setError('El código debe tener entre 3 y 4 letras');
+      return;
+    }
+    if (newCurrencyBaseRelation === 'PARITY' && (!Number.isFinite(Number(newCurrencyUnitsPerBase)) || Number(newCurrencyUnitsPerBase) <= 0)) {
+      setError('La paridad debe ser mayor a cero');
       return;
     }
     try {
@@ -673,9 +677,12 @@ export default function SettingsScreen() {
         code,
         name: newCurrencyName.trim(),
         symbol: newCurrencySymbol.trim(),
+        symbolPosition: newCurrencySymbolPosition,
         isFiat: newCurrencyIsFiat,
         isActive: newCurrencyIsActive,
-        decimalPlaces: parseInt(newCurrencyDecimalPlaces, 10) || 2
+        decimalPlaces: Number.isInteger(parseInt(newCurrencyDecimalPlaces, 10)) ? parseInt(newCurrencyDecimalPlaces, 10) : 2,
+        baseRelation: newCurrencyBaseRelation,
+        unitsPerBase: newCurrencyBaseRelation === 'PARITY' ? Number(newCurrencyUnitsPerBase) : undefined,
       });
       setNewCurrencyCode('');
       setNewCurrencyName('');
@@ -683,6 +690,9 @@ export default function SettingsScreen() {
       setNewCurrencyIsFiat(true);
       setNewCurrencyIsActive(true);
       setNewCurrencyDecimalPlaces(2);
+      setNewCurrencySymbolPosition('before');
+      setNewCurrencyBaseRelation('UNTRACKED');
+      setNewCurrencyUnitsPerBase('1');
       setShowAddCurrencyForm(false);
       setMessage('Divisa añadida');
       setTimeout(() => setMessage(''), 2000);
@@ -691,15 +701,27 @@ export default function SettingsScreen() {
     }
   };
 
-  const handleUpdateCurrency = async (id) => {
+  const handleUpdateCurrency = async (currency) => {
     if (!editCurrencyName.trim() || !editCurrencySymbol.trim()) return;
+    if (!editCurrencyIsActive && (currency.code === baseCurrency || currency.code === lotCurrency)) {
+      setError('La moneda base y la divisa de lotes no pueden desactivarse.');
+      return;
+    }
+    const lockedRelation = currency.code === baseCurrency || currency.code === lotCurrency;
+    if (!lockedRelation && editCurrencyBaseRelation === 'PARITY' && (!Number.isFinite(Number(editCurrencyUnitsPerBase)) || Number(editCurrencyUnitsPerBase) <= 0)) {
+      setError('La paridad debe ser mayor a cero');
+      return;
+    }
     try {
-      await db.currencies.update(id, {
+      await db.currencies.update(currency.id, {
         name: editCurrencyName.trim(),
         symbol: editCurrencySymbol.trim(),
+        symbolPosition: editCurrencySymbolPosition,
         isFiat: editCurrencyIsFiat,
         isActive: editCurrencyIsActive,
-        decimalPlaces: parseInt(editCurrencyDecimalPlaces, 10) || 2
+        decimalPlaces: Number.isInteger(parseInt(editCurrencyDecimalPlaces, 10)) ? parseInt(editCurrencyDecimalPlaces, 10) : 2,
+        baseRelation: lockedRelation ? currency.baseRelation : editCurrencyBaseRelation,
+        unitsPerBase: !lockedRelation && editCurrencyBaseRelation === 'PARITY' ? Number(editCurrencyUnitsPerBase) : undefined,
       });
       setEditingCurrencyId(null);
       setMessage('Divisa actualizada');
@@ -710,9 +732,23 @@ export default function SettingsScreen() {
   };
 
   const handleDeleteCurrency = async (id, code) => {
-    const count = accounts.filter(a => a.currency === code).length;
+    if (code === baseCurrency || code === lotCurrency) {
+      alert(`No puedes eliminar "${code}" porque forma parte de la configuración contable.`);
+      return;
+    }
+    const referenceCounts = await Promise.all([
+      db.accounts.where('currency').equals(code).count(),
+      db.transactions.filter(item => item.currency === code || item.targetCurrency === code || item.baseCurrency === code).count(),
+      db.lots.filter(item => item.currency === code || item.costCurrency === code).count(),
+      db.anchors.where('currency').equals(code).count(),
+      db.debts.where('currency').equals(code).count(),
+      db.macetas.where('currency').equals(code).count(),
+      db.maceta_allocations.where('currency').equals(code).count(),
+      db.debt_payments.filter(item => item.currency === code || item.paymentCurrency === code).count(),
+    ]);
+    const count = referenceCounts.reduce((sum, value) => sum + value, 0);
     if (count > 0) {
-      alert(`No puedes eliminar la divisa "${code}" porque tiene ${count} cuenta(s) asociada(s).`);
+      alert(`No puedes eliminar "${code}" porque tiene ${count} registro(s) asociado(s).`);
       return;
     }
     if (!confirm(`¿Eliminar la divisa "${code}"?`)) return;
@@ -730,7 +766,7 @@ export default function SettingsScreen() {
     setLoading(true);
     try {
       await db.delete();
-      window.location.href = '/';
+      navigateToAccess();
     } catch {
       setError('Error al eliminar base de datos');
       setLoading(false);
@@ -792,7 +828,7 @@ export default function SettingsScreen() {
 
               {tag.kind === 'EXPENSE' && (
                 <div>
-                  <label className="block mb-1 text-[11px] text-noria-muted">Presupuesto Mensual Objetivo (USD)</label>
+                  <label className="block mb-1 text-[11px] text-noria-muted">Presupuesto Mensual Objetivo ({baseCurrency})</label>
                   <input
                     type="number"
                     step="0.01"
@@ -934,7 +970,7 @@ export default function SettingsScreen() {
                 
                 {kind === 'EXPENSE' && (
                   <div>
-                    <label className="block mb-1 text-[11px] text-noria-muted">Presupuesto Mensual Objetivo (USD)</label>
+                    <label className="block mb-1 text-[11px] text-noria-muted">Presupuesto Mensual Objetivo ({baseCurrency})</label>
                     <input
                       type="number"
                       step="0.01"
@@ -1095,6 +1131,9 @@ export default function SettingsScreen() {
                 setNewCurrencyIsFiat(true);
                 setNewCurrencyIsActive(true);
                 setNewCurrencyDecimalPlaces(2);
+                setNewCurrencySymbolPosition('before');
+                setNewCurrencyBaseRelation('UNTRACKED');
+                setNewCurrencyUnitsPerBase('1');
               }}
               className="flex items-center gap-1 font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-[#647C78] focus:outline-none"
             >
@@ -1109,7 +1148,7 @@ export default function SettingsScreen() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Código (3-4 letras)</label>
-                    <input type="text" value={newCurrencyCode} onChange={e => setNewCurrencyCode(e.target.value)} placeholder="Ej. USD" className="muji-input text-[12px]" required />
+                    <input type="text" value={newCurrencyCode} onChange={e => setNewCurrencyCode(e.target.value)} placeholder="Ej. ABC" className="muji-input text-[12px]" required />
                   </div>
                   <div>
                     <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Nombre</label>
@@ -1135,12 +1174,37 @@ export default function SettingsScreen() {
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Estado</label>
-                  <select value={newCurrencyIsActive ? 'active' : 'inactive'} onChange={e => setNewCurrencyIsActive(e.target.value === 'active')} className="muji-input text-[12px]">
-                    <option value="active">Activo</option>
-                    <option value="inactive">Inactivo</option>
-                  </select>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Posición del símbolo</label>
+                    <select value={newCurrencySymbolPosition} onChange={e => setNewCurrencySymbolPosition(e.target.value)} className="muji-input text-[12px]">
+                      <option value="before">Antes del monto</option>
+                      <option value="after">Después del monto</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Estado</label>
+                    <select value={newCurrencyIsActive ? 'active' : 'inactive'} onChange={e => setNewCurrencyIsActive(e.target.value === 'active')} className="muji-input text-[12px]">
+                      <option value="active">Activo</option>
+                      <option value="inactive">Inactivo</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Conversión a {baseCurrency}</label>
+                    <select value={newCurrencyBaseRelation} onChange={e => setNewCurrencyBaseRelation(e.target.value)} className="muji-input text-[12px]">
+                      <option value="UNTRACKED">Sin conversión</option>
+                      <option value="PARITY">Paridad fija</option>
+                    </select>
+                  </div>
+                  {newCurrencyBaseRelation === 'PARITY' && (
+                    <div>
+                      <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Unidades por 1 {baseCurrency}</label>
+                      <input type="number" min="0" step="any" value={newCurrencyUnitsPerBase} onChange={e => setNewCurrencyUnitsPerBase(e.target.value)} className="muji-input text-[12px] font-mono" required />
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
@@ -1153,6 +1217,7 @@ export default function SettingsScreen() {
             {currencies.map(currency => {
               const isEditing = editingCurrencyId === currency.id;
               const relatedCount = accounts.filter(a => a.currency === currency.code).length;
+              const relationLocked = currency.code === baseCurrency || currency.code === lotCurrency;
 
               return (
                 <div key={currency.id} className="border-b border-[#1A1A1A]/14 py-3">
@@ -1194,9 +1259,34 @@ export default function SettingsScreen() {
                         </div>
                       </div>
 
+                      <div>
+                        <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Posición del símbolo</label>
+                        <select value={editCurrencySymbolPosition} onChange={e => setEditCurrencySymbolPosition(e.target.value)} className="muji-input text-[12px]">
+                          <option value="before">Antes del monto</option>
+                          <option value="after">Después del monto</option>
+                        </select>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Conversión a {baseCurrency}</label>
+                          <select value={editCurrencyBaseRelation} onChange={e => setEditCurrencyBaseRelation(e.target.value)} disabled={relationLocked} className="muji-input text-[12px] disabled:opacity-50">
+                            {relationLocked && <option value={currency.code === baseCurrency ? 'BASE' : 'LOTS'}>{currency.code === baseCurrency ? 'Moneda base' : 'Lotes FIFO'}</option>}
+                            {!relationLocked && <option value="UNTRACKED">Sin conversión</option>}
+                            {!relationLocked && <option value="PARITY">Paridad fija</option>}
+                          </select>
+                        </div>
+                        {!relationLocked && editCurrencyBaseRelation === 'PARITY' && (
+                          <div>
+                            <label className="block text-[9px] font-mono uppercase text-noria-muted mb-1">Unidades por 1 {baseCurrency}</label>
+                            <input type="number" min="0" step="any" value={editCurrencyUnitsPerBase} onChange={e => setEditCurrencyUnitsPerBase(e.target.value)} className="muji-input text-[12px] font-mono" />
+                          </div>
+                        )}
+                      </div>
+
                       <div className="grid grid-cols-2 gap-2">
                         <OutlineButton onClick={() => setEditingCurrencyId(null)}>Cancelar</OutlineButton>
-                        <OutlineButton onClick={() => handleUpdateCurrency(currency.id)}>Guardar</OutlineButton>
+                        <OutlineButton onClick={() => handleUpdateCurrency(currency)}>Guardar</OutlineButton>
                       </div>
                     </div>
                   ) : (
@@ -1208,7 +1298,7 @@ export default function SettingsScreen() {
                           <span className="truncate text-[13px] text-noria-text">{currency.name}</span>
                         </div>
                         <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-noria-muted mt-0.5">
-                          {currency.isFiat ? 'Fiat' : 'Crypto'} / {currency.decimalPlaces} decimales / {currency.isActive ? 'Activo' : 'Inactivo'} {relatedCount > 0 ? `· ${relatedCount} cuenta(s)` : ''}
+                          {currency.isFiat ? 'Fiat' : 'Crypto'} / {currency.decimalPlaces} decimales / {currency.isActive ? 'Activo' : 'Inactivo'} / {currency.code === baseCurrency ? 'Base' : currency.code === lotCurrency ? 'Lotes FIFO' : currency.baseRelation === 'PARITY' ? `${currency.unitsPerBase} por ${baseCurrency}` : 'Sin conversión'} {relatedCount > 0 ? `· ${relatedCount} cuenta(s)` : ''}
                         </p>
                       </div>
                       <div className="flex items-center gap-1">
@@ -1221,6 +1311,9 @@ export default function SettingsScreen() {
                             setEditCurrencyIsFiat(currency.isFiat);
                             setEditCurrencyIsActive(currency.isActive);
                             setEditCurrencyDecimalPlaces(currency.decimalPlaces);
+                            setEditCurrencySymbolPosition(currency.symbolPosition || 'before');
+                            setEditCurrencyBaseRelation(currency.code === baseCurrency ? 'BASE' : currency.code === lotCurrency ? 'LOTS' : currency.baseRelation || 'UNTRACKED');
+                            setEditCurrencyUnitsPerBase(String(currency.unitsPerBase || 1));
                           }}
                           className="p-1.5 text-noria-muted hover:text-noria-text focus:outline-none"
                           title="Editar divisa"
@@ -1499,6 +1592,11 @@ export default function SettingsScreen() {
             <p className="mb-5 text-[13px] leading-relaxed text-noria-muted">
               Ajusta la distribución. Los otros pilares se compensan automáticamente para mantener 100%.
             </p>
+            <SettingRow
+              label="Ingreso mensual promedio"
+              meta={`Base de homeostasis · ${baseCurrency}`}
+              right={<input id="settings-income-input" type="number" min="0" step="any" value={monthlyIncome} onChange={e => putConfig('monthlyIncome', parseFloat(e.target.value) || 0)} className="w-28 border-0 border-b border-[#1A1A1A]/40 bg-transparent text-right font-mono text-[13px] text-noria-text outline-none focus:border-[#647C78]" />}
+            />
             <div className="space-y-5">
               <PillarControl pillar="NEED" value={needPct} onChange={handleLinkedPillarChange} />
               <PillarControl pillar="WANT" value={wantPct} onChange={handleLinkedPillarChange} />
@@ -1537,19 +1635,14 @@ export default function SettingsScreen() {
             onToggle={() => toggleSection('preferences')}
           >
             <SettingRow
-              label="Ingreso mensual base"
-              right={<input id="settings-income-input" type="number" value={monthlyIncome} onChange={e => putConfig('monthlyIncome', parseFloat(e.target.value) || 0)} className="w-28 border-0 border-b border-[#1A1A1A]/40 bg-transparent text-right font-mono text-[13px] text-noria-text outline-none focus:border-[#647C78]" />}
+              label="Moneda base"
+              right={<span id="settings-currency-select" className="font-mono text-[13px] font-bold">{baseCurrency}</span>}
             />
             <SettingRow
-              label="Moneda base"
-              right={
-                <select id="settings-currency-select" value={baseCurrency} onChange={e => putConfig('baseCurrency', e.target.value)} className="border-0 border-b border-[#1A1A1A]/40 bg-transparent font-mono text-[13px] text-noria-text outline-none focus:border-[#647C78]">
-                  <option value="USD">USD</option>
-                  <option value="USDT">USDT</option>
-                  <option value="USDC">USDC</option>
-                </select>
-              }
+              label="Divisa de lotes"
+              right={<span className="font-mono text-[13px] font-bold">{lotCurrency || 'No activada'}</span>}
             />
+            <p className="-mt-1 pb-2 text-[9px] leading-relaxed text-noria-muted">Estas decisiones contables quedan fijas. Para cambiarlas debes eliminar la base local y completar un onboarding nuevo.</p>
             <SettingRow
               label="Apariencia"
               right={
@@ -1578,6 +1671,7 @@ export default function SettingsScreen() {
           </SectionAccordion>
         </div>
       </main>
+      <FAB />
     </div>
   );
 }

@@ -1,26 +1,34 @@
 import React from 'react';
 import { X } from 'lucide-react';
 
-export function FormSheet({ title, onClose, children, footer, className = '' }) {
+export function FormSheet({ title, onClose, children, footer, className = '', showHandle = false, maxHeight = '88vh' }) {
   return (
     <>
       <div className="fixed inset-0 z-40 bg-[rgba(26,26,26,0.14)]" onClick={onClose} />
       <div
         className={[
-          'fixed bottom-0 left-0 right-0 z-50 mx-auto max-h-[88vh] max-w-md animate-slide-up overflow-y-auto border-l-2 border-r-2 border-t-2 border-[#1A1A1A] bg-[#F5F2ED]',
+          'fixed bottom-0 left-0 right-0 z-50 mx-auto max-w-md animate-slide-up overflow-y-auto border-l-2 border-r-2 border-t-2 border-[#1A1A1A] bg-[#F5F2ED]',
           className
         ].join(' ')}
+        style={{ maxHeight }}
       >
-        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-[#1A1A1A] bg-[#F5F2ED] px-6 py-4">
-          <h4 className="text-[17px] font-[600] leading-tight text-noria-text">{title}</h4>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1 text-noria-muted hover:text-noria-text focus:outline-none"
-            aria-label="Cerrar"
-          >
-            <X size={16} strokeWidth={1.6} />
-          </button>
+        <div className="sticky top-0 z-10 border-b border-[#1A1A1A] bg-[#F5F2ED] px-6 py-4">
+          {showHandle && (
+            <div className="mb-3 flex justify-center">
+              <div className="h-[3px] w-8 bg-[rgba(26,26,26,0.12)]" />
+            </div>
+          )}
+          <div className="flex items-center justify-between">
+            <h4 className="text-[17px] font-[600] leading-tight text-noria-text">{title}</h4>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1 text-noria-muted hover:text-noria-text focus:outline-none"
+              aria-label="Cerrar"
+            >
+              <X size={16} strokeWidth={1.6} />
+            </button>
+          </div>
         </div>
         <div className="px-6 py-5">{children}</div>
         {footer && (
@@ -100,7 +108,9 @@ export function SegmentedChoice({ label, value, onChange, options, disabledValue
   );
 }
 
-export function FormActions({ primaryLabel, secondaryLabel, onSecondary, danger = false, className = '' }) {
+export function FormActions({ primaryLabel, secondaryLabel, onSecondary, primaryDisabled = false, primaryColor, danger = false, className = '' }) {
+  const actionColor = danger ? '#9F2F2D' : (primaryColor || '#1A1A1A');
+
   return (
     <div className={['grid gap-2', secondaryLabel ? 'grid-cols-2' : 'grid-cols-1', className].join(' ')}>
       {secondaryLabel && (
@@ -114,10 +124,11 @@ export function FormActions({ primaryLabel, secondaryLabel, onSecondary, danger 
       )}
       <button
         type="submit"
-        className="border px-3 py-3 font-mono text-[11px] font-[700] uppercase tracking-[0.12em]"
+        disabled={primaryDisabled}
+        className="border px-3 py-3 font-mono text-[11px] font-[700] uppercase tracking-[0.12em] disabled:cursor-not-allowed disabled:opacity-30"
         style={{
-          borderColor: danger ? '#9F2F2D' : '#1A1A1A',
-          color: danger ? '#9F2F2D' : '#1A1A1A',
+          borderColor: actionColor,
+          color: actionColor,
           background: 'transparent'
         }}
       >

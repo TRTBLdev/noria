@@ -79,22 +79,68 @@ db.version(7).stores({
   transactions: '++id, date, type, amount, currency, accountId, tagId, anchorId, incomeSourceId, pillar, description, transferId',
   lots: '++id, transactionId, currency, status',
   anchors: '++id, name, type, amount, currency, accountId, nextDueDate, status, pillar, tagId, macetaId',
-}).upgrade(async tx => {
-  const currenciesTable = tx.table('currencies');
-  const count = await currenciesTable.count();
-  if (count === 0) {
-    await currenciesTable.bulkAdd([
-      { code: 'USD', name: 'Dólar', symbol: '$', isFiat: true, isActive: true, decimalPlaces: 2 },
-      { code: 'VES', name: 'Bolívar', symbol: 'Bs', isFiat: true, isActive: true, decimalPlaces: 2 },
-      { code: 'USDT', name: 'Tether', symbol: 'USDT', isFiat: false, isActive: true, decimalPlaces: 2 },
-      { code: 'EUR', name: 'Euro', symbol: '€', isFiat: true, isActive: false, decimalPlaces: 2 }
-    ]);
-  }
 });
 
 db.version(8).stores({
   tags: '++id, name, pillar, iconKey, kind, parentId',
   transactions: '++id, date, type, amount, currency, accountId, tagId, anchorId, incomeSourceId, pillar, description, transferId, thirdPartyId, splitGroupId',
+});
+
+db.version(9).stores({
+  anchors: '++id, name, type, amount, currency, accountId, nextDueDate, status, pillar, tagId, macetaId, debtId, installmentNumber',
+  debts: '++id, thirdPartyId, type, amount, totalAmount, currency, status, dueDate, isRecurring',
+});
+
+db.version(10).stores({
+  debt_payments: '++id, debtId, anchorId, date, amountPaid, currency, exchangeRateSource, note',
+});
+
+db.version(11).stores({
+  lots: '++id, transactionId, currency, costCurrency, status',
+}).upgrade(async tx => {
+  const baseConfig = await tx.table('app_config').get('baseCurrency');
+
+  await tx.table('currencies').toCollection().modify(currency => {
+    if (!currency.symbolPosition) {
+      currency.symbolPosition = currency.symbol === '$' || currency.symbol === '€' ? 'before' : 'after';
+    }
+  });
+
+  await tx.table('lots').toCollection().modify(lot => {
+    const legacyCost = Number.isFinite(lot.effectiveRate) && lot.effectiveRate > 0
+      ? Number(lot.amount) / lot.effectiveRate
+      : null;
+    if (!lot.costCurrency) lot.costCurrency = baseConfig?.value || 'USD';
+    if (!Number.isFinite(lot.costAmount)) lot.costAmount = legacyCost;
+    if (!Number.isFinite(lot.remainingCostAmount)) {
+      lot.remainingCostAmount = legacyCost == null ? null : Number(lot.remainingAmount) / lot.effectiveRate;
+    }
+  });
+
+  await tx.table('transactions').toCollection().modify(record => {
+    if (!Number.isFinite(record.baseAmount)) {
+      if (Number.isFinite(record.costUSD)) record.baseAmount = record.costUSD;
+      else if (Number.isFinite(record.amountUSD)) record.baseAmount = record.amountUSD;
+    }
+    if (Number.isFinite(record.baseAmount) && !record.baseCurrency) {
+      record.baseCurrency = Number.isFinite(record.costUSD) || Number.isFinite(record.amountUSD)
+        ? 'USD'
+        : (baseConfig?.value || record.currency);
+    }
+    delete record.costUSD;
+    delete record.amountUSD;
+  });
+});
+
+db.version(12).stores({}).upgrade(async tx => {
+  const baseCurrency = (await tx.table('app_config').get('baseCurrency'))?.value || null;
+  const lotCurrency = (await tx.table('app_config').get('lotCurrency'))?.value || null;
+  await tx.table('currencies').toCollection().modify(currency => {
+    if (currency.code === baseCurrency) currency.baseRelation = 'BASE';
+    else if (currency.code === lotCurrency) currency.baseRelation = 'LOTS';
+    else if (!currency.baseRelation) currency.baseRelation = 'UNTRACKED';
+    if (currency.baseRelation !== 'PARITY') delete currency.unitsPerBase;
+  });
 });
 
 
@@ -119,14 +165,4 @@ export async function seedDatabase() {
     await db.income_types.bulkAdd(DEFAULT_INCOME_TYPES.map(type => ({ ...type })));
   }
 
-  const currenciesCount = await db.currencies.count();
-  if (currenciesCount === 0) {
-    await db.currencies.bulkAdd([
-      { code: 'USD', name: 'Dólar', symbol: '$', isFiat: true, isActive: true, decimalPlaces: 2 },
-      { code: 'VES', name: 'Bolívar', symbol: 'Bs', isFiat: true, isActive: true, decimalPlaces: 2 },
-      { code: 'USDT', name: 'Tether', symbol: 'USDT', isFiat: false, isActive: true, decimalPlaces: 2 },
-      { code: 'EUR', name: 'Euro', symbol: '€', isFiat: true, isActive: false, decimalPlaces: 2 }
-    ]);
-  }
 }
-

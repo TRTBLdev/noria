@@ -6,7 +6,7 @@ export const formatNumber = (amount, decimals = 2) => {
   });
 };
 
-export const formatCurrency = (amount, currencyCode = 'USD', dbCurrencies = []) => {
+export const formatCurrency = (amount, currencyCode = '', dbCurrencies = []) => {
   let decimals = 2;
   if (dbCurrencies && dbCurrencies.length > 0) {
     const currency = dbCurrencies.find(c => c.code === currencyCode);
@@ -17,16 +17,19 @@ export const formatCurrency = (amount, currencyCode = 'USD', dbCurrencies = []) 
   return formatNumber(amount, decimals);
 };
 
-export const getCurrencySymbol = (code) => {
-  if (code === 'VES') return 'Bs';
-  if (code === 'EUR') return '€';
-  if (code === 'USDT' || code === 'USDC') return code;
-  return '$';
+export const getCurrencySymbol = (code, dbCurrencies = []) => {
+  if (dbCurrencies && dbCurrencies.length > 0) {
+    const currency = dbCurrencies.find(c => c.code === code);
+    if (currency && currency.symbol) return currency.symbol;
+  }
+  return code || '';
 };
 
 export const formatAmountWithSymbol = (amt, code, dbCurrencies = []) => {
-  const symbol = getCurrencySymbol(code);
+  const currency = dbCurrencies.find(item => item.code === code);
+  const symbol = getCurrencySymbol(code, dbCurrencies);
   const formatted = formatCurrency(amt, code, dbCurrencies);
-  if (code === 'VES') return `${formatted} ${symbol}`;
-  return `${symbol}${formatted}`;
+  return currency?.symbolPosition === 'after'
+    ? `${formatted} ${symbol}`
+    : `${symbol}${formatted}`;
 };

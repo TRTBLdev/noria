@@ -1,21 +1,74 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../db/db.js';
 import { sha256 } from '../config/access.private.js';
-import { Check, ArrowRight, ArrowLeft, Shield } from 'lucide-react';
+import { Check, ArrowRight, ArrowLeft, Shield, Plus, Trash2 } from 'lucide-react';
 
 export default function OnboardingScreen() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
-  const [baseCurrency, setBaseCurrency] = useState('USD');
+  const [currencies, setCurrencies] = useState([]);
+  const [baseCurrency, setBaseCurrency] = useState('');
+  const [lotCurrency, setLotCurrency] = useState('');
+  const [currencyRelations, setCurrencyRelations] = useState({});
   const [monthlyIncome, setMonthlyIncome] = useState('');
   const [usePin, setUsePin] = useState(true);
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [pinError, setPinError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [currencyError, setCurrencyError] = useState('');
+  const [newCurrency, setNewCurrency] = useState({
+    code: '', name: '', symbol: '', symbolPosition: 'before', decimalPlaces: 2, isFiat: true,
+  });
 
-  const stepsTotal = 4;
+  const stepsTotal = 5;
+
+  useEffect(() => {
+    if (baseCurrency && !currencies.some(currency => currency.code === baseCurrency)) setBaseCurrency('');
+    if (lotCurrency && (!currencies.some(currency => currency.code === lotCurrency) || lotCurrency === baseCurrency)) {
+      setLotCurrency('');
+    }
+  }, [currencies, baseCurrency, lotCurrency]);
+
+  const handleAddCurrency = (e) => {
+    e.preventDefault();
+    setCurrencyError('');
+    const code = newCurrency.code.trim().toUpperCase();
+    const name = newCurrency.name.trim();
+    const symbol = newCurrency.symbol.trim();
+    if (!/^[A-Z]{3,4}$/.test(code)) return setCurrencyError('El código debe tener entre 3 y 4 letras.');
+    if (!name || !symbol) return setCurrencyError('Completa nombre y símbolo.');
+    if (currencies.some(currency => currency.code === code)) return setCurrencyError('Esa divisa ya existe.');
+    setCurrencies(previous => [...previous, {
+      code, name, symbol,
+      symbolPosition: newCurrency.symbolPosition,
+      decimalPlaces: Number(newCurrency.decimalPlaces),
+      isFiat: newCurrency.isFiat,
+      isActive: true,
+    }].sort((a, b) => a.code.localeCompare(b.code)));
+    setCurrencyRelations(prev => ({ ...prev, [code]: { mode: 'UNTRACKED', unitsPerBase: '1' } }));
+    setNewCurrency({ code: '', name: '', symbol: '', symbolPosition: 'before', decimalPlaces: 2, isFiat: true });
+    if (!baseCurrency) setBaseCurrency(code);
+  };
+
+  const handleDeleteCurrency = (currency) => {
+    if (currency.code === baseCurrency) setBaseCurrency('');
+    if (currency.code === lotCurrency) setLotCurrency('');
+    setCurrencyRelations(prev => {
+      const next = { ...prev };
+      delete next[currency.code];
+      return next;
+    });
+    setCurrencies(previous => previous.filter(item => item.code !== currency.code));
+  };
+
+  const updateCurrencyRelation = (code, patch) => {
+    setCurrencyRelations(prev => ({
+      ...prev,
+      [code]: { mode: 'UNTRACKED', unitsPerBase: '1', ...prev[code], ...patch },
+    }));
+  };
 
   const handleNext = () => {
     if (step < stepsTotal - 1) {
@@ -33,6 +86,24 @@ export default function OnboardingScreen() {
     e.preventDefault();
     setPinError('');
 
+    if (!baseCurrency || !currencies.some(currency => currency.code === baseCurrency)) {
+      setPinError('Selecciona una moneda base válida.');
+      return;
+    }
+    if (lotCurrency === baseCurrency) {
+      setPinError('La divisa de lotes debe ser distinta de la moneda base.');
+      return;
+    }
+    const invalidParity = currencies.some(currency => {
+      if (currency.code === baseCurrency || currency.code === lotCurrency) return false;
+      const relation = currencyRelations[currency.code];
+      return relation?.mode === 'PARITY' && (!Number.isFinite(Number(relation.unitsPerBase)) || Number(relation.unitsPerBase) <= 0);
+    });
+    if (invalidParity) {
+      setPinError('Toda paridad debe ser mayor a cero.');
+      return;
+    }
+
     if (usePin) {
       if (pin.length < 4 || pin.length > 6) {
         setPinError('El PIN debe tener entre 4 y 6 dígitos');
@@ -48,30 +119,56 @@ export default function OnboardingScreen() {
     try {
       const hashedPin = usePin ? await sha256(pin) : null;
 
-      // Save onboarding config
-      await db.app_config.put({ key: 'baseCurrency', value: baseCurrency });
-      await db.app_config.put({ key: 'monthlyIncome', value: parseFloat(monthlyIncome) || 0 });
-      await db.app_config.put({ key: 'hashedPin', value: hashedPin });
-      await db.app_config.put({ key: 'onboardingComplete', value: true });
+      await db.transaction('rw', [db.app_config, db.institutions, db.accounts, db.currencies], async () => {
+        await db.currencies.clear();
+        await db.currencies.bulkAdd(currencies.map(currency => {
+          const relation = currency.code === baseCurrency
+            ? 'BASE'
+            : currency.code === lotCurrency
+              ? 'LOTS'
+              : currencyRelations[currency.code]?.mode || 'UNTRACKED';
+          return {
+            ...currency,
+            baseRelation: relation,
+            unitsPerBase: relation === 'PARITY' ? Number(currencyRelations[currency.code]?.unitsPerBase) : undefined,
+          };
+        }));
+        await db.app_config.put({ key: 'baseCurrency', value: baseCurrency });
+        await db.app_config.put({ key: 'lotCurrency', value: lotCurrency || null });
+        await db.app_config.put({ key: 'monthlyIncome', value: parseFloat(monthlyIncome) || 0 });
+        await db.app_config.put({ key: 'hashedPin', value: hashedPin });
+        await db.app_config.put({ key: 'accessGranted', value: true });
 
-      // Add standard cash account automatically matching base currency
-      const cashInstId = await db.institutions.add({
-        name: 'Efectivo',
-        type: 'CASH',
-        country: 'VE'
+        const cashInstId = await db.institutions.add({
+          name: 'Efectivo',
+          type: 'CASH',
+          country: 'VE'
+        });
+
+        await db.accounts.add({
+          institutionId: cashInstId,
+          name: `Efectivo (${baseCurrency})`,
+          type: 'CASH',
+          currency: baseCurrency,
+          balance: 0
+        });
+
+        await db.app_config.put({ key: 'onboardingComplete', value: true });
       });
 
-      await db.accounts.add({
-        institutionId: cashInstId,
-        name: `Efectivo (${baseCurrency})`,
-        type: 'CASH',
-        currency: baseCurrency,
-        balance: 0
-      });
+      const [completed, storedBase, storedCurrencies] = await Promise.all([
+        db.app_config.get('onboardingComplete'),
+        db.app_config.get('baseCurrency'),
+        db.currencies.count(),
+      ]);
+      if (completed?.value !== true || storedBase?.value !== baseCurrency || storedCurrencies !== currencies.length) {
+        throw new Error('La configuración final no quedó completamente persistida.');
+      }
 
-      navigate('/home');
+      navigate('/home', { replace: true });
     } catch (err) {
-      setPinError('Error al guardar configuración');
+      console.error('Error completing onboarding:', err);
+      setPinError(`No se pudo completar: ${err.message || 'error desconocido'}`);
     } finally {
       setLoading(false);
     }
@@ -121,33 +218,122 @@ export default function OnboardingScreen() {
         )}
 
         {step === 1 && (
-          // Step 2: Base Currency Selection
-          <div className="space-y-6 animate-fade-in" id="onboarding-step-currency">
-            <h2 className="text-xl font-light tracking-wide text-noria-text">
-              Moneda Base
-            </h2>
+          <div className="space-y-5 animate-fade-in" id="onboarding-step-currency">
+            <h2 className="text-xl font-light tracking-wide text-noria-text">Tus divisas</h2>
             <p className="text-sm font-light text-noria-text/60 leading-relaxed">
-              Elige la divisa en la que medirás tu homeostasis y tu Línea de Flotación agregada.
+              Crea las divisas que usarás. La moneda base será la unidad contable de Noria y quedará fija al terminar.
             </p>
 
-            <div className="space-y-2 pt-4">
-              <label htmlFor="currency-select" className="muji-header block mb-2">Seleccionar moneda</label>
+            <form onSubmit={handleAddCurrency} className="space-y-3 border border-noria-text/15 p-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="muji-header block">Código</label>
+                  <input value={newCurrency.code} maxLength={4} onChange={e => setNewCurrency(prev => ({ ...prev, code: e.target.value.toUpperCase().replace(/[^A-Z]/g, '') }))} placeholder="ABC" className="muji-input" />
+                </div>
+                <div>
+                  <label className="muji-header block">Nombre</label>
+                  <input value={newCurrency.name} onChange={e => setNewCurrency(prev => ({ ...prev, name: e.target.value }))} placeholder="Nombre" className="muji-input" />
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="muji-header block">Símbolo</label>
+                  <input value={newCurrency.symbol} onChange={e => setNewCurrency(prev => ({ ...prev, symbol: e.target.value }))} placeholder="¤" className="muji-input" />
+                </div>
+                <div>
+                  <label className="muji-header block">Posición</label>
+                  <select value={newCurrency.symbolPosition} onChange={e => setNewCurrency(prev => ({ ...prev, symbolPosition: e.target.value }))} className="muji-input">
+                    <option value="before">Antes</option>
+                    <option value="after">Después</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="muji-header block">Decimales</label>
+                  <input type="number" min="0" max="8" value={newCurrency.decimalPlaces} onChange={e => setNewCurrency(prev => ({ ...prev, decimalPlaces: e.target.value }))} className="muji-input" />
+                </div>
+              </div>
+              <div className="flex items-center justify-between">
+                <select value={newCurrency.isFiat ? 'fiat' : 'crypto'} onChange={e => setNewCurrency(prev => ({ ...prev, isFiat: e.target.value === 'fiat' }))} className="muji-input max-w-[140px]">
+                  <option value="fiat">Fiat</option>
+                  <option value="crypto">Cripto</option>
+                </select>
+                <button type="submit" className="flex items-center gap-1 text-[10px] font-mono font-bold uppercase tracking-wider text-noria-salvia"><Plus size={13} /> Añadir</button>
+              </div>
+              {currencyError && <p className="text-[10px] text-noria-amber">{currencyError}</p>}
+            </form>
+
+            <div className="space-y-2 max-h-32 overflow-y-auto">
+              {currencies.map(currency => (
+                <div key={currency.code} className="flex items-center justify-between border-b border-noria-text/10 py-2">
+                  <span className="text-xs"><strong>{currency.code}</strong> · {currency.name}</span>
+                  <button type="button" onClick={() => handleDeleteCurrency(currency)} className="text-noria-muted hover:text-[#9F2F2D]" aria-label={`Eliminar ${currency.code}`}><Trash2 size={13} /></button>
+                </div>
+              ))}
+              {currencies.length === 0 && <p className="text-[11px] text-noria-muted text-center py-2">Añade al menos una divisa.</p>}
+            </div>
+
+            <div className="space-y-2 pt-1">
+              <label htmlFor="currency-select" className="muji-header block">Moneda base</label>
               <select
                 id="currency-select"
                 value={baseCurrency}
                 onChange={e => setBaseCurrency(e.target.value)}
                 className="muji-input text-base"
               >
-                <option value="USD">USD — Dólar Americano</option>
-                <option value="USDT">USDT — Tether Stablecoin</option>
-                <option value="USDC">USDC — USD Coin Stablecoin</option>
+                <option value="" disabled>Selecciona...</option>
+                {currencies.map(currency => <option key={currency.code} value={currency.code}>{currency.code} — {currency.name}</option>)}
               </select>
             </div>
           </div>
         )}
 
         {step === 2 && (
-          // Step 3: Optional Monthly Income
+          <div className="space-y-6 animate-fade-in" id="onboarding-step-lots">
+            <h2 className="text-xl font-light tracking-wide text-noria-text">Seguimiento por lotes</h2>
+            <div className="space-y-3 text-sm font-light text-noria-text/60 leading-relaxed">
+              <p>Los lotes conservan el costo histórico de una divisa en tu moneda base y se consumen en orden FIFO.</p>
+              <p>Es útil cuando adquieres una moneda a tasas distintas. Puedes omitirlo y activarlo una sola vez más adelante.</p>
+            </div>
+            <div className="space-y-2 pt-3">
+              <label htmlFor="lot-currency-select" className="muji-header block">Divisa controlada por lotes</label>
+              <select id="lot-currency-select" value={lotCurrency} onChange={e => setLotCurrency(e.target.value)} className="muji-input text-base">
+                <option value="">No usar lotes por ahora</option>
+                {currencies.filter(currency => currency.code !== baseCurrency).map(currency => (
+                  <option key={currency.code} value={currency.code}>{currency.code} — {currency.name}</option>
+                ))}
+              </select>
+              {lotCurrency && <p className="text-[10px] text-noria-text/45">Las tasas se expresarán como {lotCurrency} por cada {baseCurrency}.</p>}
+            </div>
+            <div className="space-y-3 border-t border-noria-text/10 pt-4">
+              <div>
+                <p className="muji-header">Relación con la moneda base{baseCurrency ? ` (${baseCurrency})` : ''}</p>
+                <p className="mt-1 text-[10px] leading-relaxed text-noria-text/45">Declara paridad solo cuando su valor se trate como fijo frente a la base. Las demás quedarán fuera de consolidados.</p>
+              </div>
+              {currencies.filter(currency => currency.code !== baseCurrency && currency.code !== lotCurrency).map(currency => {
+                const relation = currencyRelations[currency.code] || { mode: 'UNTRACKED', unitsPerBase: '1' };
+                return (
+                  <div key={currency.code} className="grid grid-cols-[1fr_1.2fr] items-end gap-2 border-b border-noria-text/10 pb-3">
+                    <div>
+                      <label className="muji-header block">{currency.code}</label>
+                      <select value={relation.mode} onChange={event => updateCurrencyRelation(currency.code, { mode: event.target.value })} className="muji-input">
+                        <option value="UNTRACKED">Sin conversión</option>
+                        <option value="PARITY">Paridad fija</option>
+                      </select>
+                    </div>
+                    {relation.mode === 'PARITY' && (
+                      <div>
+                        <label className="muji-header block">{currency.code} por 1 {baseCurrency}</label>
+                        <input type="number" min="0" step="any" value={relation.unitsPerBase} onChange={event => updateCurrencyRelation(currency.code, { unitsPerBase: event.target.value })} className="muji-input" />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {step === 3 && (
           <div className="space-y-6 animate-fade-in" id="onboarding-step-income">
             <h2 className="text-xl font-light tracking-wide text-noria-text">
               Ingresos del Mes
@@ -174,14 +360,16 @@ export default function OnboardingScreen() {
           </div>
         )}
 
-        {step === 3 && (
-          // Step 4: Security PIN Setup
+        {step === 4 && (
           <div className="space-y-6 animate-fade-in" id="onboarding-step-pin">
             <h2 className="text-xl font-light tracking-wide text-noria-text">
               PIN de Seguridad
             </h2>
             <p className="text-sm font-light text-noria-text/60 leading-relaxed">
               Protege el acceso a tu información financiera en este dispositivo.
+            </p>
+            <p className="text-[11px] font-light text-noria-text/50 leading-relaxed border-l border-noria-text/20 pl-3">
+              Crea un PIN nuevo de 4 a 6 dígitos. No introduzcas aquí la clave beta con letras.
             </p>
 
             <div className="pt-2 space-y-4">
@@ -267,7 +455,8 @@ export default function OnboardingScreen() {
           <button
             id="onboarding-next-btn"
             onClick={handleNext}
-            className="flex items-center space-x-2 py-2 px-5 bg-noria-text text-noria-bg rounded-noria text-sm font-light uppercase tracking-wider hover:opacity-90 active:scale-[0.98] transition-all"
+            disabled={step === 1 && !baseCurrency}
+            className="flex items-center space-x-2 py-2 px-5 bg-noria-text text-noria-bg rounded-noria text-sm font-light uppercase tracking-wider hover:opacity-90 active:scale-[0.98] transition-all disabled:opacity-30"
           >
             <span>Continuar</span>
             <ArrowRight size={16} />

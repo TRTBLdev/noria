@@ -8,8 +8,12 @@ import AnchorFormModal from '../components/AnchorFormModal.jsx';
 import PillarTag from '../components/PillarTag.jsx';
 import CategoryTag from '../components/CategoryTag.jsx';
 import CategoryIcon from '../components/CategoryIcon.jsx';
+import { CurrencyAmount } from '../components/CurrencyAmount.jsx';
+import { convertAmountToBase } from '../utils/currency.js';
 import { useNavigate } from 'react-router-dom';
-import { formatNumber, formatCurrency } from '../utils/format';
+import { formatNumber, formatCurrency, formatAmountWithSymbol } from '../utils/format';
+import { consumeCurrencyLots, createCurrencyLot, stringifyLotConsumption } from '../db/currencyLots.js';
+import { addAnchorTemplateWithCurrentInstances, syncAnchorTemplateCurrentInstances } from '../db/anchorRecurrence.js';
 import { Plus, Pencil, Archive, ArchiveRestore, Trash2, Check, ChevronDown, ChevronUp, MoreHorizontal } from 'lucide-react';
 
 export default function BudgetScreen() {
@@ -39,6 +43,7 @@ export default function BudgetScreen() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [payingGeneralAnchor, setPayingGeneralAnchor] = useState(null);
   const [generalPayAccountId, setGeneralPayAccountId] = useState('');
+  const [generalPayDate, setGeneralPayDate] = useState('');
   const [payingSaveAnchor, setPayingSaveAnchor] = useState(null);
   const [savePayMode, setSavePayMode] = useState('ALLOC');
   const [allocAccountId, setAllocAccountId] = useState('');
@@ -59,38 +64,20 @@ export default function BudgetScreen() {
   const dbCurrencies = useLiveQuery(() => db.currencies.toArray()) || [];
   const lots = useLiveQuery(() => db.lots.toArray()) || [];
   const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
-  const baseCurrency = baseCurrencyObj?.value || 'USD';
+  const lotCurrencyObj = useLiveQuery(() => db.app_config.get('lotCurrency'));
+  const monthlyIncomeObj = useLiveQuery(() => db.app_config.get('monthlyIncome'));
+  const pillarPctObj = useLiveQuery(() => db.app_config.get('pillarPct'));
+  const baseCurrency = baseCurrencyObj?.value || '';
+  const lotCurrency = lotCurrencyObj?.value || '';
+  const monthlyIncome = monthlyIncomeObj?.value || 0;
+  const pillarPct = pillarPctObj?.value || { NEED: 50, WANT: 30, SAVE: 20 };
 
-  const getAccountBalanceInUSD = (acc) => {
-    if (acc.currency === 'USD' || acc.currency === 'USDT' || acc.currency === 'USDC') {
-      return acc.balance;
-    }
-    const currencyLots = lots.filter(l => l.currency === acc.currency && l.remainingAmount > 0);
-    const totalRemaining = currencyLots.reduce((sum, l) => sum + l.remainingAmount, 0);
-    const totalUSD = currencyLots.reduce((sum, l) => sum + (l.remainingAmount / l.effectiveRate), 0);
-    if (totalUSD > 0) {
-      const avgRate = totalRemaining / totalUSD;
-      return acc.balance / avgRate;
-    }
-    if (acc.currency === 'VES') return acc.balance / 40.0;
-    if (acc.currency === 'EUR') return acc.balance * 1.08;
-    return acc.balance;
+  const getAccountBalanceInBase = (acc) => {
+    return convertAmountToBase(acc.balance, acc.currency, baseCurrency, lots, dbCurrencies) ?? 0;
   };
-
-  const convertAmountToUSD = (amt, currency) => {
-    if (currency === 'USD' || currency === 'USDT' || currency === 'USDC' || !currency) {
-      return amt;
-    }
-    const currencyLots = lots.filter(l => l.currency === currency && l.remainingAmount > 0);
-    const totalRemaining = currencyLots.reduce((sum, l) => sum + l.remainingAmount, 0);
-    const totalUSD = currencyLots.reduce((sum, l) => sum + (l.remainingAmount / l.effectiveRate), 0);
-    if (totalUSD > 0) {
-      const avgRate = totalRemaining / totalUSD;
-      return amt / avgRate;
-    }
-    if (currency === 'VES') return amt / 40.0;
-    if (currency === 'EUR') return amt * 1.08;
-    return amt;
+  const transactionAmountInBase = (transaction) => {
+    if (transaction.baseCurrency === baseCurrency && Number.isFinite(transaction.baseAmount)) return transaction.baseAmount;
+    return convertAmountToBase(transaction.amount, transaction.currency, baseCurrency, lots, dbCurrencies) ?? 0;
   };
 
   // Migración retrospectiva en caliente de anclas heredadas
@@ -108,6 +95,9 @@ export default function BudgetScreen() {
   }, [anchors]);
 
   const activeAccounts = accounts.filter(a => !a.isArchived);
+  const excludedCurrencies = [...new Set(activeAccounts
+    .filter(account => Math.abs(account.balance) > 0.005 && convertAmountToBase(account.balance, account.currency, baseCurrency, lots, dbCurrencies) === null)
+    .map(account => account.currency))];
 
   // 1. Cálculos de Homeostasis Mensual (Mes Actual)
   const now = new Date();
@@ -119,9 +109,9 @@ export default function BudgetScreen() {
   // Ingresos reales de este mes
   const thisMonthIncomes = transactions.filter(t => {
     const d = new Date(t.date);
-    return d >= startOfMonth && d <= endOfMonth && t.type === 'IN';
+    return d >= startOfMonth && d <= endOfMonth && t.type === 'IN' && t.cashflowKind !== 'LOAN_PROCEEDS';
   });
-  const totalIngresosMes = thisMonthIncomes.reduce((sum, t) => sum + (t.amountUSD ?? t.amount), 0);
+  const totalIngresosMes = thisMonthIncomes.reduce((sum, t) => sum + transactionAmountInBase(t), 0);
 
   // Instancias de este mes
   const thisMonthInstances = anchors.filter(a => {
@@ -130,20 +120,20 @@ export default function BudgetScreen() {
     return d >= startOfMonth && d <= endOfMonth;
   });
 
-  const totalAggregatedBalance = activeAccounts.reduce((sum, a) => sum + getAccountBalanceInUSD(a), 0);
-  const totalAllocatedToMacetas = macetaAllocations.reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
+  const totalAggregatedBalance = activeAccounts.reduce((sum, a) => sum + getAccountBalanceInBase(a), 0);
+  const totalAllocatedToMacetas = macetaAllocations.reduce((sum, a) => sum + convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies), 0);
 
   // Gastos Recurrentes de este mes
   const thisMonthGastos = thisMonthInstances.filter(a => a.pillar === 'NEED' || a.pillar === 'WANT');
-  const planifiedGastos = thisMonthGastos.reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
-  const paidGastos = thisMonthGastos.filter(a => a.status === 'PAID').reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
-  const pendingGastos = thisMonthGastos.filter(a => a.status !== 'PAID').reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
+  const planifiedGastos = thisMonthGastos.reduce((sum, a) => sum + convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies), 0);
+  const paidGastos = thisMonthGastos.filter(a => a.status === 'PAID').reduce((sum, a) => sum + convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies), 0);
+  const pendingGastos = thisMonthGastos.filter(a => a.status !== 'PAID').reduce((sum, a) => sum + convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies), 0);
 
   // Aportes a Metas de este mes
   const thisMonthAhorros = thisMonthInstances.filter(a => a.pillar === 'SAVE');
-  const planifiedAhorros = thisMonthAhorros.reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
-  const paidAhorros = thisMonthAhorros.filter(a => a.status === 'PAID').reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
-  const pendingAhorros = thisMonthAhorros.filter(a => a.status !== 'PAID').reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
+  const planifiedAhorros = thisMonthAhorros.reduce((sum, a) => sum + convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies), 0);
+  const paidAhorros = thisMonthAhorros.filter(a => a.status === 'PAID').reduce((sum, a) => sum + convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies), 0);
+  const pendingAhorros = thisMonthAhorros.filter(a => a.status !== 'PAID').reduce((sum, a) => sum + convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies), 0);
 
   const totalComprometido = planifiedGastos + planifiedAhorros;
 
@@ -155,22 +145,8 @@ export default function BudgetScreen() {
   const templatesActive = templates.filter(a => !a.isArchived);
   const templatesPaused = templates.filter(a => a.isArchived);
 
-  const fmt = (n, currencyCode = 'USD') => {
+  const fmt = (n, currencyCode = baseCurrency) => {
     return formatCurrency(n, currencyCode, dbCurrencies);
-  };
-
-  const getCurrencySymbol = (code) => {
-    if (code === 'VES') return 'Bs';
-    if (code === 'EUR') return '€';
-    if (code === 'USDT' || code === 'USDC') return code;
-    return '$';
-  };
-
-  const formatAmountWithSymbol = (amt, code) => {
-    const symbol = getCurrencySymbol(code);
-    const formatted = fmt(amt);
-    if (code === 'VES') return `${formatted} ${symbol}`;
-    return `${symbol}${formatted}`;
   };
 
   const getAccountName = (id) => accounts.find(a => a.id === id)?.name || 'Ninguna';
@@ -178,7 +154,7 @@ export default function BudgetScreen() {
 
   const handleCreateAnchor = async (data) => {
     try {
-      let currency = 'USD';
+      let currency = baseCurrency;
       if (data.pillar === 'SAVE') {
         const targetMaceta = macetas.find(m => m.id === data.macetaId);
         if (targetMaceta) currency = targetMaceta.currency;
@@ -187,7 +163,7 @@ export default function BudgetScreen() {
         if (selectedAcc) currency = selectedAcc.currency;
       }
 
-      await db.anchors.add({
+      await addAnchorTemplateWithCurrentInstances(db, {
         name: data.name,
         type: 'FIXED',
         amount: data.amount,
@@ -198,8 +174,8 @@ export default function BudgetScreen() {
         status: 'PENDING',
         pillar: data.pillar,
         tagId: data.tagId || null,
-        isTemplate: true,
-        isArchived: false
+        frequencyInterval: data.frequencyInterval,
+        frequencyUnit: data.frequencyUnit,
       });
       setShowAddModal(false);
     } catch (err) {
@@ -227,6 +203,7 @@ export default function BudgetScreen() {
 
     setPayingGeneralAnchor(anchor);
     setGeneralPayAccountId(anchor.accountId ? anchor.accountId.toString() : (activeAccounts[0]?.id.toString() || ''));
+    setGeneralPayDate('');
   };
 
   const handleConfirmGeneralPay = async (e) => {
@@ -235,29 +212,49 @@ export default function BudgetScreen() {
     const resolvedAccountId = parseInt(generalPayAccountId);
     const account = accounts.find(a => a.id === resolvedAccountId);
     if (!account) { alert('Cuenta no encontrada'); return; }
+    if (!generalPayDate) { alert('Selecciona la fecha en que realizaste el pago.'); return; }
+    const paidAt = new Date(`${generalPayDate}T12:00:00`);
+    const paymentCurrency = payingGeneralAnchor.currency || account.currency;
+    if (paymentCurrency !== account.currency) { alert('El gasto y la cuenta usan monedas distintas. Registra primero la conversión.'); return; }
 
     try {
-      await db.transaction('rw', [db.accounts, db.transactions, db.anchors], async () => {
+      await db.transaction('rw', [db.accounts, db.transactions, db.anchors, db.lots], async () => {
+        let baseAmount = convertAmountToBase(payingGeneralAnchor.amount, paymentCurrency, baseCurrency, [], dbCurrencies);
+        let transactionBaseCurrency = baseAmount === null ? null : baseCurrency;
+        let lotConsumption = null;
+        if (account.currency === lotCurrency) {
+          const consumed = await consumeCurrencyLots(db, {
+            accountId: resolvedAccountId,
+            currency: lotCurrency,
+            amount: payingGeneralAnchor.amount,
+          });
+          baseAmount = consumed.baseAmount;
+          transactionBaseCurrency = consumed.baseCurrency;
+          lotConsumption = stringifyLotConsumption(consumed.consumptions);
+        }
         await db.transactions.add({
-          date: new Date(),
+          date: paidAt,
           type: 'OUT',
           amount: payingGeneralAnchor.amount,
-          currency: payingGeneralAnchor.currency || account.currency || 'USD',
+          currency: paymentCurrency,
           accountId: resolvedAccountId,
           tagId: payingGeneralAnchor.tagId || null,
           pillar: payingGeneralAnchor.pillar,
           incomeSourceId: null,
           anchorId: payingGeneralAnchor.id,
-          description: `Ancla: ${payingGeneralAnchor.name}`
+          description: `Ancla: ${payingGeneralAnchor.name}`,
+          baseAmount,
+          baseCurrency: transactionBaseCurrency,
+          lotConsumption,
         });
 
         await db.accounts.update(resolvedAccountId, { balance: account.balance - payingGeneralAnchor.amount });
-        await db.anchors.update(payingGeneralAnchor.id, { status: 'PAID' });
+        await db.anchors.update(payingGeneralAnchor.id, { status: 'PAID', paidAt });
       });
 
       setPayingGeneralAnchor(null);
-    } catch {
-      alert('Error al registrar el pago del gasto programado.');
+    } catch (err) {
+      alert(err.message || 'Error al registrar el pago del gasto programado.');
     }
   };
 
@@ -306,7 +303,7 @@ export default function BudgetScreen() {
           macetaId: maceta.id,
           accountId,
           amount,
-          currency: maceta.currency || 'USD',
+          currency: maceta.currency || baseCurrency,
           locked: false
         });
       }
@@ -387,16 +384,63 @@ export default function BudgetScreen() {
           macetaId: maceta.id,
           accountId: toId,
           amount: amountRec,
-          currency: maceta.currency || 'USD',
+          currency: maceta.currency || baseCurrency,
           locked: false
         });
       }
 
       const totalAllocated = updatedAllocations.reduce((sum, a) => sum + a.amount, 0);
 
-      await db.transaction('rw', [db.accounts, db.transactions, db.maceta_allocations, db.macetas, db.anchors], async () => {
+      await db.transaction('rw', [db.accounts, db.transactions, db.maceta_allocations, db.macetas, db.anchors, db.lots], async () => {
+        let transferConsumptions = [];
+        let transferBaseAmount = convertAmountToBase(amountSent, fromAccount.currency, baseCurrency, [], dbCurrencies);
+        let transferBaseCurrency = transferBaseAmount === null ? null : baseCurrency;
+        if (fromAccount.currency === lotCurrency) {
+          if (toAccount.currency === lotCurrency && Math.abs(amountSent - amountRec) > 0.005) {
+            throw new Error(`Una transferencia entre cuentas ${lotCurrency} debe conservar el mismo monto.`);
+          }
+          const consumed = await consumeCurrencyLots(db, { accountId: fromId, currency: lotCurrency, amount: amountSent });
+          transferConsumptions = consumed.consumptions;
+          transferBaseAmount = consumed.baseAmount;
+          transferBaseCurrency = consumed.baseCurrency;
+        }
+
+        if (toAccount.currency === lotCurrency) {
+          if (fromAccount.currency === lotCurrency) {
+            for (const consumption of transferConsumptions) {
+              await createCurrencyLot(db, {
+                transactionId: transferId,
+                accountId: toId,
+                currency: lotCurrency,
+                amount: consumption.amountConsumed,
+                costCurrency: consumption.costCurrency,
+                costAmount: consumption.costConsumed,
+                date: new Date(),
+                sourceType: 'SAVINGS_TRANSFER',
+              });
+            }
+          } else {
+            if (transferBaseAmount === null || transferBaseAmount <= 0) {
+              throw new Error(`La divisa ${fromAccount.currency} no tiene una conversión válida a ${baseCurrency}.`);
+            }
+            await createCurrencyLot(db, {
+              transactionId: transferId,
+              accountId: toId,
+              currency: lotCurrency,
+              amount: amountRec,
+              costCurrency: baseCurrency,
+              costAmount: transferBaseAmount,
+              date: new Date(),
+              sourceType: 'SAVINGS_TRANSFER',
+            });
+          }
+        }
+
         await db.accounts.update(fromId, { balance: fromAccount.balance - amountSent });
         await db.accounts.update(toId, { balance: toAccount.balance + amountRec });
+        const targetBaseAmount = toAccount.currency === lotCurrency
+          ? transferBaseAmount
+          : convertAmountToBase(amountRec, toAccount.currency, baseCurrency, [], dbCurrencies);
         await db.transactions.add({
           date: new Date(),
           type: 'TRANSFER_OUT',
@@ -404,7 +448,10 @@ export default function BudgetScreen() {
           currency: fromAccount.currency,
           accountId: fromId,
           description: `Transferencia ahorro meta: ${maceta.name}`,
-          transferId
+          transferId,
+          baseAmount: transferBaseAmount,
+          baseCurrency: transferBaseCurrency,
+          lotConsumption: stringifyLotConsumption(transferConsumptions),
         });
         await db.transactions.add({
           date: new Date(),
@@ -413,7 +460,9 @@ export default function BudgetScreen() {
           currency: toAccount.currency,
           accountId: toId,
           description: `Ahorro asignado meta: ${maceta.name}`,
-          transferId
+          transferId,
+          baseAmount: targetBaseAmount,
+          baseCurrency: targetBaseAmount === null ? null : baseCurrency,
         });
         await db.maceta_allocations.where('macetaId').equals(maceta.id).delete();
         for (const alloc of updatedAllocations) {
@@ -430,8 +479,8 @@ export default function BudgetScreen() {
       });
 
       setPayingSaveAnchor(null);
-    } catch {
-      setSavePayError('Error al procesar la transferencia del ahorro.');
+    } catch (err) {
+      setSavePayError(err.message || 'Error al procesar la transferencia del ahorro.');
     }
   };
 
@@ -443,7 +492,7 @@ export default function BudgetScreen() {
   const handleUpdateAnchor = async (data) => {
     if (!editingAnchor) return;
     try {
-      let currency = 'USD';
+      let currency = baseCurrency;
       if (data.pillar === 'SAVE') {
         const targetMaceta = macetas.find(m => m.id === data.macetaId);
         if (targetMaceta) currency = targetMaceta.currency;
@@ -462,7 +511,9 @@ export default function BudgetScreen() {
         accountId: data.accountId || null,
         macetaId: data.macetaId || null,
         tagId: normalizedTagId,
-        nextDueDate: data.nextDueDate || null
+        nextDueDate: data.nextDueDate || null,
+        frequencyInterval: data.frequencyInterval,
+        frequencyUnit: data.frequencyUnit,
       });
 
       // 2. Propagar a instancias activas del mes
@@ -503,8 +554,9 @@ export default function BudgetScreen() {
       const relatedAnchorIds = [editingAnchor.id, ...childInstances.map(inst => inst.id)];
       const relatedTransactions = await db.transactions.where('anchorId').anyOf(relatedAnchorIds).toArray();
       for (const tx of relatedTransactions) {
-        if (tx.type === 'OUT') await db.transactions.update(tx.id, { tagId: normalizedTagId });
+        if (tx.type === 'OUT') await db.transactions.update(tx.id, { tagId: normalizedTagId, pillar: data.pillar });
       }
+      await syncAnchorTemplateCurrentInstances(db, editingAnchor.id);
 
       setShowEditModal(false);
       setEditingAnchor(null);
@@ -603,7 +655,7 @@ export default function BudgetScreen() {
               <CategoryTag name={category?.name} size="xs" />
             </div>
             <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.09em] text-noria-muted leading-relaxed">
-              <span>{formatAmountWithSymbol(src.amount, src.currency)}</span>
+              <span>{formatAmountWithSymbol(src.amount, src.currency, dbCurrencies)}</span>
               <span> · {getFrequencyLabel(src.frequencyInterval, src.frequencyUnit)}</span>
               {src.accountId && <span> · De: {getAccountName(src.accountId)}</span>}
               <span> · Inicio/Prox: {nextDate}</span>
@@ -773,15 +825,13 @@ export default function BudgetScreen() {
 
   const totalExpensesThisMonth = thisMonthTransactions
     .filter(t => t.type === 'OUT')
-    .reduce((sum, t) => sum + (t.amountUSD ?? t.amount), 0);
+    .reduce((sum, t) => sum + transactionAmountInBase(t), 0);
 
   const totalEjecutadoReal = totalExpensesThisMonth + paidAhorros;
 
   const porcentajeEjecutado = totalPresupuestoGeneral > 0
     ? Math.round((totalEjecutadoReal / totalPresupuestoGeneral) * 100)
     : 0;
-
-  const ejecutadoSegments = Math.round((porcentajeEjecutado / 100) * 14);
 
   const getTransactionPillar = (tx) => {
     if (tx.pillar) return tx.pillar;
@@ -794,73 +844,75 @@ export default function BudgetScreen() {
 
   const spentNeeds = thisMonthTransactions
     .filter(t => t.type === 'OUT' && getTransactionPillar(t) === 'NEED')
-    .reduce((sum, t) => sum + (t.amountUSD ?? t.amount), 0);
+    .reduce((sum, t) => sum + transactionAmountInBase(t), 0);
 
   const spentWants = thisMonthTransactions
     .filter(t => t.type === 'OUT' && getTransactionPillar(t) === 'WANT')
-    .reduce((sum, t) => sum + (t.amountUSD ?? t.amount), 0);
+    .reduce((sum, t) => sum + transactionAmountInBase(t), 0);
 
   const spentSavings = paidAhorros;
 
   const budgetNeeds = templatesActive
     .filter(a => a.pillar === 'NEED')
-    .reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0) +
+    .reduce((sum, a) => sum + convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies), 0) +
     tags.filter(t => t.kind === 'EXPENSE' && t.pillar === 'NEED' && t.monthlyBudget > 0)
     .reduce((sum, t) => sum + t.monthlyBudget, 0);
 
   const budgetWants = templatesActive
     .filter(a => a.pillar === 'WANT')
-    .reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0) +
+    .reduce((sum, a) => sum + convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies), 0) +
     tags.filter(t => t.kind === 'EXPENSE' && t.pillar === 'WANT' && t.monthlyBudget > 0)
     .reduce((sum, t) => sum + t.monthlyBudget, 0);
 
   const budgetSavings = templatesActive
     .filter(a => a.pillar === 'SAVE')
-    .reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
+    .reduce((sum, a) => sum + convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies), 0);
 
   const pctNeeds = budgetNeeds > 0 ? Math.round((spentNeeds / budgetNeeds) * 100) : 0;
   const pctWants = budgetWants > 0 ? Math.round((spentWants / budgetWants) * 100) : 0;
   const pctSavings = budgetSavings > 0 ? Math.round((spentSavings / budgetSavings) * 100) : 0;
 
-  const totalPillarsBudget = budgetNeeds + budgetWants + budgetSavings;
+  const spentByPillar = spentNeeds + spentWants + spentSavings;
+  const goalNeeds = monthlyIncome * (pillarPct.NEED / 100);
+  const goalWants = monthlyIncome * (pillarPct.WANT / 100);
+  const goalSavings = monthlyIncome * (pillarPct.SAVE / 100);
+  const homePct = (spent, goal) => goal > 0 ? Math.round((spent / goal) * 100) : null;
 
-  const pctNeedsGoal = totalPillarsBudget > 0 ? (budgetNeeds / totalPillarsBudget) : 0;
-  const pctWantsGoal = totalPillarsBudget > 0 ? (budgetWants / totalPillarsBudget) : 0;
-
-  const countNeedsGoal = Math.round(pctNeedsGoal * 100);
-  const countWantsGoal = Math.round(pctWantsGoal * 100);
+  const countNeedsGoal = Math.max(0, Math.min(100, Math.round(Number(pillarPct.NEED) || 0)));
+  const countWantsGoal = Math.max(0, Math.min(100 - countNeedsGoal, Math.round(Number(pillarPct.WANT) || 0)));
   const countSavingsGoal = Math.max(0, 100 - countNeedsGoal - countWantsGoal);
+  const filledCells = (count, spent, goal) => {
+    if (count <= 0 || spent <= 0) return 0;
+    if (goal <= 0) return count;
+    return Math.min(count, Math.round((spent / goal) * count));
+  };
+  const spentNeedsLimit = filledCells(countNeedsGoal, spentNeeds, goalNeeds);
+  const spentWantsLimit = filledCells(countWantsGoal, spentWants, goalWants);
+  const spentSavingsLimit = filledCells(countSavingsGoal, spentSavings, goalSavings);
 
-  const spentNeedsPct = budgetNeeds > 0 ? Math.min(1.0, spentNeeds / budgetNeeds) : 0;
-  const spentWantsPct = budgetWants > 0 ? Math.min(1.0, spentWants / budgetWants) : 0;
-  const spentSavingsPct = budgetSavings > 0 ? Math.min(1.0, spentSavings / budgetSavings) : 0;
-
-  const spentNeedsLimit = Math.round(countNeedsGoal * spentNeedsPct);
-  const spentWantsLimit = Math.round(countWantsGoal * spentWantsPct);
-  const spentSavingsLimit = Math.round(countSavingsGoal * spentSavingsPct);
+  const liquidityBase = totalEjecutadoReal + disponibleLibreReal;
+  const liquiditySpentPct = liquidityBase > 0 ? (totalEjecutadoReal / liquidityBase) * 100 : 0;
+  const budgetExceededAmount = Math.max(0, totalEjecutadoReal - totalPresupuestoGeneral);
+  const homeostasisMeta = (spent, goal) => {
+    const percentage = homePct(spent, goal);
+    if (percentage === null) return spent > 0 ? 'HOME: SIN INGRESO PROMEDIO' : 'HOME: —';
+    return `HOME: ${percentage}% DE ${fmt(goal)}`;
+  };
+  const budgetMeta = (spent, budget, percentage) => {
+    if (budget <= 0) return spent > 0 ? 'PRESUP.: SIN PRESUPUESTO' : 'PRESUP.: —';
+    return `PRESUP.: ${percentage}% DE ${fmt(budget)}`;
+  };
 
   const gridElements = useMemo(() => {
     const list = [];
     for (let i = 0; i < countNeedsGoal; i++) {
-      list.push({
-        color: '#4F8F58',
-        bg: 'rgba(79,143,88,0.18)',
-        isActive: i < spentNeedsLimit
-      });
+      list.push({ color: '#4F8F58', bg: 'rgba(79,143,88,0.14)', isActive: i < spentNeedsLimit });
     }
     for (let i = 0; i < countWantsGoal; i++) {
-      list.push({
-        color: '#3F7F9C',
-        bg: 'rgba(63,127,156,0.18)',
-        isActive: i < spentWantsLimit
-      });
+      list.push({ color: '#3F7F9C', bg: 'rgba(63,127,156,0.14)', isActive: i < spentWantsLimit });
     }
     for (let i = 0; i < countSavingsGoal; i++) {
-      list.push({
-        color: '#C58A14',
-        bg: 'rgba(197,138,20,0.18)',
-        isActive: i < spentSavingsLimit
-      });
+      list.push({ color: '#C58A14', bg: 'rgba(197,138,20,0.14)', isActive: i < spentSavingsLimit });
     }
     return list;
   }, [countNeedsGoal, countWantsGoal, countSavingsGoal, spentNeedsLimit, spentWantsLimit, spentSavingsLimit]);
@@ -893,6 +945,12 @@ export default function BudgetScreen() {
       <div className="w-full max-w-md mx-auto px-6">
         <Header title="Línea de Flotación" />
 
+        {excludedCurrencies.length > 0 && (
+          <p className="mt-4 border border-[#B8860B] p-3 text-[10px] leading-relaxed text-[#8A6508]">
+            No incluidos en los totales de {baseCurrency}: {excludedCurrencies.join(', ')}. Se muestran por separado porque no tienen paridad ni seguimiento por lotes.
+          </p>
+        )}
+
         <section className="py-4" id="homeostasis-summary-section">
           <div className="border-2 border-[#1A1A1A] p-4 bg-transparent text-noria-text font-mono text-[11px] leading-relaxed uppercase tracking-wider space-y-3">
             {/* Header Row */}
@@ -904,7 +962,21 @@ export default function BudgetScreen() {
               <div className="border-l border-[#1A1A1A]/20 pl-4">
                 <span className="text-[9px] font-mono font-bold tracking-[0.14em] text-noria-muted block">PRESUPUESTO TOTAL</span>
                 <p className="text-[17px] font-sans font-bold leading-tight mt-0.5">{fmt(totalPresupuestoGeneral)} {baseCurrency}</p>
+                <p className={`mt-1 text-[8px] font-mono font-bold leading-tight ${budgetExceededAmount > 0 ? 'text-[#9F2F2D]' : 'text-noria-muted'}`}>
+                  {totalPresupuestoGeneral > 0
+                    ? budgetExceededAmount > 0
+                      ? `EXCEDIDO ${fmt(budgetExceededAmount)} · ${porcentajeEjecutado}%`
+                      : `EJECUTADO ${porcentajeEjecutado}%`
+                    : totalEjecutadoReal > 0 ? 'SIN PRESUPUESTO' : 'SIN PRESUPUESTO REGISTRADO'}
+                </p>
               </div>
+            </div>
+
+            <div>
+              <p className="text-[8px] font-mono font-bold tracking-[0.12em] text-noria-muted">HOMEOSTASIS · INGRESO PROMEDIO {fmt(monthlyIncome)} {baseCurrency}</p>
+              {monthlyIncome <= 0 && spentByPillar > 0 && (
+                <p className="mt-1 border-l-2 border-[#B8860B] pl-2 text-[8px] normal-case tracking-normal text-[#8A6508]">Configura un ingreso promedio para medir el avance; el bloque con gasto se muestra completo.</p>
+              )}
             </div>
 
             {/* Matrix & Side Stats */}
@@ -915,12 +987,10 @@ export default function BudgetScreen() {
                   {gridElements.map((el, idx) => (
                     <span
                       key={idx}
-                      className={`w-full aspect-square transition-all duration-300 ${
-                        el.isActive
-                          ? 'border'
-                          : 'border border-[#1A1A1A]/15 bg-transparent'
-                      }`}
-                      style={el.isActive ? { background: el.color, borderColor: el.color } : {}}
+                      className="w-full aspect-square border transition-all duration-300"
+                      style={el.isActive
+                        ? { background: el.color, borderColor: el.color }
+                        : { background: el.bg, borderColor: `${el.color}55` }}
                     />
                   ))}
                 </div>
@@ -931,17 +1001,20 @@ export default function BudgetScreen() {
                 <div>
                   <span className="text-[9px] font-mono font-bold tracking-[0.12em] text-noria-muted block leading-none">NECESIDADES</span>
                   <p className="text-[13px] font-sans font-bold leading-tight mt-0.5">{fmt(spentNeeds)} {baseCurrency}</p>
-                  <p className="text-[8px] font-mono text-noria-muted leading-none mt-0.5">({pctNeeds}% de {fmt(budgetNeeds)})</p>
+                  <p className="text-[7px] font-mono text-noria-muted leading-tight mt-0.5">{homeostasisMeta(spentNeeds, goalNeeds)}</p>
+                  <p className="text-[7px] font-mono text-noria-muted leading-tight">{budgetMeta(spentNeeds, budgetNeeds, pctNeeds)}</p>
                 </div>
                 <div>
                   <span className="text-[9px] font-mono font-bold tracking-[0.12em] text-noria-muted block leading-none">DESEOS</span>
                   <p className="text-[13px] font-sans font-bold leading-tight mt-0.5">{fmt(spentWants)} {baseCurrency}</p>
-                  <p className="text-[8px] font-mono text-noria-muted leading-none mt-0.5">({pctWants}% de {fmt(budgetWants)})</p>
+                  <p className="text-[7px] font-mono text-noria-muted leading-tight mt-0.5">{homeostasisMeta(spentWants, goalWants)}</p>
+                  <p className="text-[7px] font-mono text-noria-muted leading-tight">{budgetMeta(spentWants, budgetWants, pctWants)}</p>
                 </div>
                 <div>
                   <span className="text-[9px] font-mono font-bold tracking-[0.12em] text-noria-muted block leading-none">AHORRO</span>
                   <p className="text-[13px] font-sans font-bold leading-tight mt-0.5">{fmt(spentSavings)} {baseCurrency}</p>
-                  <p className="text-[8px] font-mono text-noria-muted leading-none mt-0.5">({pctSavings}% de {fmt(budgetSavings)})</p>
+                  <p className="text-[7px] font-mono text-noria-muted leading-tight mt-0.5">{homeostasisMeta(spentSavings, goalSavings)}</p>
+                  <p className="text-[7px] font-mono text-noria-muted leading-tight">{budgetMeta(spentSavings, budgetSavings, pctSavings)}</p>
                 </div>
               </div>
             </div>
@@ -950,10 +1023,10 @@ export default function BudgetScreen() {
             <div className="border-t-2 border-[#1A1A1A] pt-3 grid grid-cols-12 gap-4 items-center">
               <div className="col-span-7">
                 <span className="text-[9px] font-mono font-bold tracking-[0.12em] text-noria-muted block leading-none">GASTADO</span>
-                <p className="text-[12px] font-sans font-bold leading-tight mt-0.5">{fmt(totalEjecutadoReal)} {baseCurrency} ({porcentajeEjecutado}%)</p>
+                <p className="text-[12px] font-sans font-bold leading-tight mt-0.5">{fmt(totalEjecutadoReal)} {baseCurrency} ({liquiditySpentPct.toLocaleString('es-VE', { maximumFractionDigits: 2 })}%)</p>
                 <div className="grid grid-cols-10 gap-0.5 w-full h-2.5 mt-1.5 bg-transparent">
                   {Array.from({ length: 10 }).map((_, idx) => {
-                    const isActive = idx < Math.round((porcentajeEjecutado / 100) * 10);
+                    const isActive = idx < Math.round((Math.min(100, liquiditySpentPct) / 100) * 10);
                     return (
                       <span
                         key={idx}
@@ -1066,7 +1139,7 @@ export default function BudgetScreen() {
                             </span>
                           </div>
                           <div className="flex items-center space-x-2 pl-2 shrink-0">
-                            <span className="text-[11px]">{formatAmountWithSymbol(inst.amount, inst.currency)}</span>
+                            <span className="text-[11px]">{formatAmountWithSymbol(inst.amount, inst.currency, dbCurrencies)}</span>
                             <span className="text-[8px] font-[700] px-1.5 py-0.5 tracking-wide border border-[#1A1A1A]" style={{ background: statusBg, color: statusTextCol }}>
                               {statusLabel}
                             </span>
@@ -1209,7 +1282,7 @@ export default function BudgetScreen() {
             onClick={() => navigate('/budget/full')}
             className="w-full py-2 flex justify-between items-center hover:bg-black/5 transition-colors focus:outline-none text-left"
           >
-            <span>>>> Ver Presupuesto Detallado</span>
+            <span>{">>> Ver Presupuesto Detallado"}</span>
             <span className="text-noria-muted">[DETALLE]</span>
           </button>
           <button
@@ -1217,7 +1290,7 @@ export default function BudgetScreen() {
             onClick={() => navigate('/transactions')}
             className="w-full py-2 flex justify-between items-center hover:bg-black/5 transition-colors focus:outline-none text-left"
           >
-            <span>>>> Ver Historial Transacciones</span>
+            <span>{">>> Ver Historial Transacciones"}</span>
             <span className="text-noria-muted">[HISTORIAL]</span>
           </button>
         </div>
@@ -1253,6 +1326,10 @@ export default function BudgetScreen() {
                     return <option key={acc.id} value={acc.id}>{label} (${fmt(acc.balance, acc.currency)})</option>;
                   })}
                 </select>
+              </div>
+              <div>
+                <label className="muji-header block mb-1">Fecha del pago</label>
+                <input type="date" value={generalPayDate} onChange={e => setGeneralPayDate(e.target.value)} className="muji-input" required />
               </div>
               <button type="submit" className="w-full py-3 text-[12px] font-[600] uppercase tracking-wider border transition-colors" style={{ background: 'transparent', color: '#1A1A1A', borderColor: '#1A1A1A' }}>
                 Confirmar pago
@@ -1315,13 +1392,13 @@ export default function BudgetScreen() {
                     <div>
                       <label className="muji-header block mb-1">Origen</label>
                       <select value={transFromAccountId} onChange={e => setTransFromAccountId(e.target.value)} className="muji-input" required>
-                        {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} (${fmt(acc.balance, acc.currency)})</option>)}
+                        {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} ({acc.currency}) · ${fmt(acc.balance, acc.currency)}</option>)}
                       </select>
                     </div>
                     <div>
                       <label className="muji-header block mb-1">Destino</label>
                       <select value={transToAccountId} onChange={e => setTransToAccountId(e.target.value)} className="muji-input" required>
-                        {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} (${fmt(acc.balance, acc.currency)})</option>)}
+                        {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} ({acc.currency}) · ${fmt(acc.balance, acc.currency)}</option>)}
                       </select>
                     </div>
                   </div>
@@ -1354,6 +1431,7 @@ export default function BudgetScreen() {
         institutions={institutions}
         macetas={macetas}
         tags={tags}
+        baseCurrency={baseCurrency}
         allowedPillars={addAllowedPillars}
       />
 
@@ -1367,6 +1445,7 @@ export default function BudgetScreen() {
         institutions={institutions}
         macetas={macetas}
         tags={tags}
+        baseCurrency={baseCurrency}
         allowedPillars={editingAnchor?.pillar === 'SAVE' ? ['SAVE'] : ['NEED', 'WANT']}
       />
 

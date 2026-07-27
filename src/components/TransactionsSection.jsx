@@ -8,6 +8,7 @@ import CategoryIcon from './CategoryIcon.jsx';
 import CategorySelect from './CategorySelect.jsx';
 import IncomeTypeIcon from './IncomeTypeIcon.jsx';
 import { DateInput, FormActions, FormField, FormSheet, NumberInput, SegmentedChoice, TextInput } from './FormSystem.jsx';
+import { formatAmountWithSymbol, formatCurrency } from '../utils/format.js';
 
 export default function TransactionsSection({
   transactions,
@@ -29,6 +30,9 @@ export default function TransactionsSection({
   
   const thirdParties = useLiveQuery(() => db.third_parties.toArray()) || [];
   const instruments  = useLiveQuery(() => db.instruments.toArray())  || [];
+  const dbCurrencies = useLiveQuery(() => db.currencies.toArray()) || [];
+  const lotCurrencyObj = useLiveQuery(() => db.app_config.get('lotCurrency'));
+  const lotCurrency = lotCurrencyObj?.value || '';
 
   const INSTRUMENT_TYPES = [
     { value: 'DEBIT_CARD', label: 'Tarjeta de Débito' },
@@ -53,9 +57,12 @@ export default function TransactionsSection({
     ['CUSTOM', 'CUSTOM']
   ];
 
-  const fmt = (n) => {
-    if (typeof n !== 'number') return '0.00';
-    return n.toLocaleString('en-US', { minimumFractionDigits: 2 });
+  const formatTransactionAmount = (amount, currency) => {
+    const currencyExists = dbCurrencies.some(item => item.code === currency);
+    if (currencyExists) return formatAmountWithSymbol(amount, currency, dbCurrencies);
+
+    const formatted = formatCurrency(amount, currency, dbCurrencies);
+    return currency ? `${formatted} ${currency}` : formatted;
   };
 
   const getAccountName = (id) => accounts.find(a => a.id === id)?.name || 'Cuenta desconocida';
@@ -87,6 +94,7 @@ export default function TransactionsSection({
       if (filterType === 'IN' && t.type !== 'IN') return false;
       if (filterType === 'OUT' && t.type !== 'OUT') return false;
       if (filterType === 'TRANSFER' && !t.type.startsWith('TRANSFER_')) return false;
+      if (filterType === 'ADJUSTMENT' && t.type !== 'BALANCE_ADJUSTMENT') return false;
     }
 
     const tDate = new Date(t.date);
@@ -154,25 +162,26 @@ export default function TransactionsSection({
   };
 
   const renderRow = (t) => {
-    const isIncome = t.type === 'IN' || t.type === 'TRANSFER_IN';
+    const isAdjustment = t.type === 'BALANCE_ADJUSTMENT';
+    const isIncome = t.type === 'IN' || t.type === 'TRANSFER_IN' || (isAdjustment && t.adjustmentAmount > 0);
     const isTransfer = t.type.startsWith('TRANSFER_');
     const accountName = getAccountName(t.accountId);
     const category = getTransactionTag(t);
     const source = t.incomeSourceId ? incomeSources.find(item => item.id === t.incomeSourceId) : null;
     const amountSign = isIncome ? '+' : '-';
-    const amountColor = isTransfer ? '#1A1A1A' : isIncome ? '#4F8F58' : '#1A1A1A';
+    const amountColor = isAdjustment ? '#647C78' : isTransfer ? '#1A1A1A' : isIncome ? '#4F8F58' : '#1A1A1A';
 
     const tp = t.thirdPartyId ? thirdParties.find(item => item.id === t.thirdPartyId) : null;
     const displayName = tp 
       ? (t.description ? `${tp.name} · ${t.description}` : tp.name)
-      : (t.description || (isIncome ? 'Ingreso' : 'Gasto'));
+      : (t.description || (isAdjustment ? 'Conciliación de saldo' : isIncome ? 'Ingreso' : 'Gasto'));
 
     return (
       <div key={t.id} className="py-3 flex items-center gap-3">
         <div className="pt-0.5 flex-shrink-0">
           {category ? (
             <CategoryIcon iconKey={category.iconKey} size={14} />
-          ) : isTransfer ? (
+          ) : isTransfer || isAdjustment ? (
             <ArrowLeftRight size={14} className="text-noria-muted" strokeWidth={1.6} />
           ) : isIncome ? (
             <IncomeTypeIcon incomeTypes={incomeTypes} incomeTypeId={source?.incomeTypeId} legacyType={source?.type} size={14} />
@@ -191,6 +200,11 @@ export default function TransactionsSection({
                 Split
               </span>
             )}
+            {isAdjustment && (
+              <span className="font-mono text-[8px] uppercase tracking-[0.05em] px-1 border border-[#647C78] text-[#647C78] select-none">
+                Conciliación
+              </span>
+            )}
             <PillarTag pillar={t.pillar} size="xs" />
             <CategoryTag name={category?.name} size="xs" />
           </div>
@@ -201,7 +215,9 @@ export default function TransactionsSection({
                 ? (inst.alias || (INSTRUMENT_TYPES.find(it => it.value === inst.type)?.label || inst.type)) 
                 : null;
               const accountDisplay = instLabel ? `${accountName} (${instLabel})` : accountName;
-              const feeDisplay = t.fee > 0 ? ` · Fee: ${amountSign}$${fmt(t.fee)}` : '';
+              const feeDisplay = t.fee > 0
+                ? ` · Fee: ${amountSign}${formatTransactionAmount(t.fee, t.currency)}`
+                : '';
               return accountDisplay + feeDisplay;
             })()}
           </p>
@@ -212,13 +228,13 @@ export default function TransactionsSection({
             className="text-[13px] font-mono font-[700] whitespace-nowrap"
             style={{ color: amountColor }}
           >
-            {amountSign}${fmt(t.amount)}
+            {amountSign}{formatTransactionAmount(t.amount, t.currency)}
           </p>
           <p className="text-[9px] text-noria-muted font-mono uppercase">{t.currency}</p>
         </div>
 
         <div className="flex items-center gap-1 flex-shrink-0">
-          {!isTransfer && (
+          {!isTransfer && !isAdjustment && (
             <button
               type="button"
               onClick={() => handleStartEdit(t)}
@@ -308,7 +324,7 @@ export default function TransactionsSection({
             >
               <option value="ALL">Todas</option>
               {accounts.map(acc => (
-                <option key={acc.id} value={acc.id}>{acc.name}</option>
+                <option key={acc.id} value={acc.id}>{acc.name} ({acc.currency})</option>
               ))}
             </select>
           </div>
@@ -324,6 +340,7 @@ export default function TransactionsSection({
               <option value="IN">Ingresos</option>
               <option value="OUT">Gastos</option>
               <option value="TRANSFER">Transferencias</option>
+              <option value="ADJUSTMENT">Conciliaciones</option>
             </select>
           </div>
 
@@ -415,16 +432,20 @@ export default function TransactionsSection({
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="muji-header block mb-1">Monto (USD)</label>
+                  <label className="muji-header block mb-1">Monto ({editingTx.currency})</label>
                   <input
                     type="number"
                     step="0.01"
                     inputMode="decimal"
                     value={editAmount}
                     onChange={e => setEditAmount(e.target.value)}
-                    className="muji-input"
+                    disabled={editingTx.currency === lotCurrency}
+                    className="muji-input disabled:opacity-60"
                     required
                   />
+                  {editingTx.currency === lotCurrency && (
+                    <p className="mt-1 text-[9px] text-noria-muted">Para cambiar el monto {lotCurrency}, elimina y registra nuevamente.</p>
+                  )}
                 </div>
                 <div>
                   <label className="muji-header block mb-1">Fecha</label>

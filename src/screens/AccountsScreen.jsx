@@ -12,6 +12,12 @@ import { Plus, Landmark, CreditCard, Target, Trash2, Pencil, Wallet, TrendingUp,
 import CuentasFuentesTab from '../components/CuentasFuentesTab.jsx';
 import MetasTab from '../components/MetasTab.jsx';
 import FuentesIngresoSection from '../components/FuentesIngresoSection.jsx';
+import { createCurrencyLot } from '../db/currencyLots.js';
+import { reconcileAccountBalance } from '../db/accountReconciliation.js';
+import { addAnchorTemplateWithCurrentInstances, syncAnchorTemplateCurrentInstances } from '../db/anchorRecurrence.js';
+import { deleteTransactionSafely, updateTransactionSafely } from '../db/transactionSafety.js';
+import { convertAmountToBase } from '../utils/currency.js';
+import { formatAmountWithSymbol } from '../utils/format.js';
 
 // Map parameters for readable instrument types
 const INSTRUMENT_TYPES = [
@@ -24,18 +30,9 @@ const INSTRUMENT_TYPES = [
 
 const fmt = (n, d = 2) => n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 
-const getCurrencySymbol = (code) => {
-  if (code === 'VES') return 'Bs';
-  if (code === 'EUR') return '€';
-  if (code === 'USDT' || code === 'USDC') return code;
-  return '$';
-};
-
-const formatAmountWithSymbol = (amt, code, d = 2) => {
-  const symbol = getCurrencySymbol(code);
-  const formatted = fmt(amt, d);
-  if (code === 'VES') return `${formatted} ${symbol}`;
-  return `${symbol}${formatted}`;
+const getTodayInputValue = () => {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 };
 
 /* ── SUB-COMPONENTE: Listado / Editor de Instrumentos (Reutilizable) ── */
@@ -133,18 +130,18 @@ function InstrumentListEditor({ instrumentsList, setInstrumentsList }) {
 
 /* ── SUB-COMPONENTE: Formulario Modal para CREAR Cuenta ── */
 function AddAccountModal({ onClose, institutions, onCreated }) {
+  const [accName, setAccName] = useState('');
   const [accBalance, setAccBalance] = useState('');
-  const [accCurrency, setAccCurrency] = useState('USD');
+  const [accCurrency, setAccCurrency] = useState('');
   const [accType, setAccType] = useState('CHECKING');
+  const [lotRate, setLotRate] = useState('');
 
   const dbCurrencies = useLiveQuery(() => db.currencies.toArray()) || [];
-  const activeCurrencies = dbCurrencies.length > 0
-    ? dbCurrencies.filter(c => c.isActive)
-    : [
-        { code: 'USD', name: 'Dólar' },
-        { code: 'VES', name: 'Bolívar' },
-        { code: 'USDT', name: 'Tether' }
-      ];
+  const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
+  const lotCurrencyObj = useLiveQuery(() => db.app_config.get('lotCurrency'));
+  const baseCurrency = baseCurrencyObj?.value || '';
+  const lotCurrency = lotCurrencyObj?.value || '';
+  const activeCurrencies = dbCurrencies.filter(c => c.isActive);
 
   useEffect(() => {
     if (activeCurrencies.length > 0 && !activeCurrencies.some(c => c.code === accCurrency)) {
@@ -173,52 +170,85 @@ function AddAccountModal({ onClose, institutions, onCreated }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    if (!accName.trim()) { setError('Escribe un nombre o alias para la cuenta'); return; }
     const bal = parseFloat(accBalance);
     if (isNaN(bal)) { setError('Balance inicial inválido'); return; }
+    if (accCurrency === lotCurrency && bal > 0) {
+      const rate = parseFloat(lotRate);
+      if (!Number.isFinite(rate) || rate <= 0) {
+        setError(`Ingresa la tasa ${lotCurrency}/${baseCurrency} del saldo inicial.`);
+        return;
+      }
+    }
+    if (accCurrency === lotCurrency && bal < 0) {
+      setError(`Una cuenta nueva en ${lotCurrency} no puede comenzar con saldo negativo.`);
+      return;
+    }
 
     try {
-      let finalInstId;
-      let instNameValue = '';
-      if (selectedInstOption === 'new') {
-        if (!newInstName.trim()) { setError('Escribe el nombre de la nueva institución'); return; }
-        // Create new institution
-        instNameValue = newInstName.trim();
-        finalInstId = await db.institutions.add({
-          name: instNameValue,
-          type: instType,
-          country: 'VE'
-        });
-      } else {
-        if (!selectedInstOption) { setError('Selecciona una institución'); return; }
-        finalInstId = parseInt(selectedInstOption);
-        const existingInst = institutions.find(i => i.id === finalInstId);
-        instNameValue = existingInst ? existingInst.name : 'Cuenta';
-      }
+      await db.transaction('rw', [db.institutions, db.accounts, db.instruments, db.transactions, db.lots], async () => {
+        let finalInstId;
+        if (selectedInstOption === 'new') {
+          if (!newInstName.trim()) throw new Error('Escribe el nombre de la nueva institución');
+          finalInstId = await db.institutions.add({ name: newInstName.trim(), type: instType, country: 'VE' });
+        } else {
+          if (!selectedInstOption) throw new Error('Selecciona una institución');
+          finalInstId = parseInt(selectedInstOption);
+        }
 
-      const accountId = await db.accounts.add({
-        institutionId: finalInstId,
-        name: instNameValue,
-        type: accType,
-        currency: accCurrency,
-        balance: bal,
-        isArchived: false
+        const accountId = await db.accounts.add({
+          institutionId: finalInstId,
+          name: accName.trim(),
+          type: accType,
+          currency: accCurrency,
+          balance: bal,
+          isArchived: false
+        });
+
+        if (Math.abs(bal) > 0.005) {
+          const costAmount = accCurrency === lotCurrency
+            ? bal / parseFloat(lotRate)
+            : convertAmountToBase(bal, accCurrency, baseCurrency, [], dbCurrencies);
+          const txId = await db.transactions.add({
+            date: new Date(),
+            type: 'OPENING_BALANCE',
+            amount: bal,
+            currency: accCurrency,
+            baseAmount: costAmount,
+            baseCurrency: costAmount === null ? null : baseCurrency,
+            accountId,
+            description: 'Saldo inicial',
+            cashflowKind: 'OPENING_BALANCE',
+          });
+          if (accCurrency === lotCurrency) {
+            await createCurrencyLot(db, {
+              transactionId: txId,
+              accountId,
+              currency: accCurrency,
+              amount: bal,
+              costCurrency: baseCurrency,
+              costAmount,
+              date: new Date(),
+              sourceType: 'OPENING_BALANCE',
+            });
+          }
+        }
+
+        for (const inst of instrumentsList) {
+          await db.instruments.add({
+            accountId,
+            type: inst.type,
+            alias: inst.alias.trim(),
+            feePercentage: inst.feePercentage || 0,
+            feeFixed: inst.feeFixed || 0,
+            status: 'ACTIVE'
+          });
+        }
       });
 
-      // Guardar instrumentos asociados
-      for (const inst of instrumentsList) {
-        await db.instruments.add({
-          accountId,
-          type: inst.type,
-          alias: inst.alias.trim(),
-          feePercentage: inst.feePercentage || 0,
-          feeFixed: inst.feeFixed || 0,
-          status: 'ACTIVE'
-        });
-      }
-
       onCreated();
-    } catch {
-      setError('Error al crear la cuenta');
+    } catch (err) {
+      setError(err.message || 'Error al crear la cuenta');
     }
   };
 
@@ -267,34 +297,42 @@ function AddAccountModal({ onClose, institutions, onCreated }) {
                   required
                 />
               </div>
+              <div>
+                <label className="muji-header block mb-1">Tipo de Institución</label>
+                <select value={instType} onChange={e => setInstType(e.target.value)} className="muji-input bg-transparent">
+                  <option value="BANK">Banco</option>
+                  <option value="NEOBANK">Banco Digital</option>
+                  <option value="EXCHANGE">Exchange</option>
+                  <option value="HOT_WALLET">Hot Wallet</option>
+                  <option value="COLD_WALLET">Cold Wallet</option>
+                  <option value="CASH">Efectivo</option>
+                </select>
+              </div>
             </div>
           )}
 
-          {/* Tipo de Institución (Siempre visible, genérico) */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="muji-header block mb-1">Tipo de Institución</label>
-              <select value={instType} onChange={e => setInstType(e.target.value)} className="muji-input">
-                <option value="BANK">Banco</option>
-                <option value="NEOBANK">Banco Digital</option>
-                <option value="EXCHANGE">Exchange</option>
-                <option value="HOT_WALLET">Hot Wallet</option>
-                <option value="COLD_WALLET">Cold Wallet</option>
-                <option value="CASH">Efectivo</option>
-              </select>
-            </div>
+          <div>
+            <label className="muji-header block mb-1">Nombre de cuenta / Alias</label>
+            <input
+              type="text"
+              value={accName}
+              onChange={e => setAccName(e.target.value)}
+              placeholder="Ej. Principal, Trading"
+              className="muji-input"
+              required
+            />
+          </div>
 
-            <div>
-              <label className="muji-header block mb-1">Tipo de Cuenta</label>
-              <select value={accType} onChange={e => setAccType(e.target.value)} className="muji-input">
-                <option value="CHECKING">Corriente</option>
-                <option value="SAVINGS">Ahorro</option>
-                <option value="WALLET">Wallet Digital</option>
-                <option value="CRYPTO_SPOT">Spot / Exchange</option>
-                <option value="CRYPTO_FUND">Funding / Exchange</option>
-                <option value="CASH">Efectivo</option>
-              </select>
-            </div>
+          <div>
+            <label className="muji-header block mb-1">Tipo de Cuenta</label>
+            <select value={accType} onChange={e => setAccType(e.target.value)} className="muji-input">
+              <option value="CHECKING">Corriente</option>
+              <option value="SAVINGS">Ahorro</option>
+              <option value="WALLET">Wallet Digital</option>
+              <option value="CRYPTO_SPOT">Spot / Exchange</option>
+              <option value="CRYPTO_FUND">Funding / Exchange</option>
+              <option value="CASH">Efectivo</option>
+            </select>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
@@ -314,6 +352,15 @@ function AddAccountModal({ onClose, institutions, onCreated }) {
                 placeholder="0.00" className="muji-input" required />
             </div>
           </div>
+
+          {accCurrency === lotCurrency && parseFloat(accBalance) > 0 && (
+            <div>
+              <label className="muji-header block mb-1">Tasa {lotCurrency}/{baseCurrency} del saldo inicial</label>
+              <input type="number" step="any" inputMode="decimal"
+                value={lotRate} onChange={e => setLotRate(e.target.value)}
+                placeholder="0.00" className="muji-input" required />
+            </div>
+          )}
 
           {/* Instrumentos Asociados */}
           <InstrumentListEditor
@@ -336,24 +383,32 @@ function AddAccountModal({ onClose, institutions, onCreated }) {
 
 /* ── SUB-COMPONENTE: Formulario para EDITAR Cuenta ── */
 function EditAccountForm({ account, institutions, onUpdated, onCancel }) {
-  const [accBalance, setAccBalance] = useState(account.balance.toString());
+  const [accName, setAccName] = useState(account.name || '');
+  const [accBalance] = useState(account.balance.toString());
   const [accCurrency, setAccCurrency] = useState(account.currency);
   const [accType, setAccType] = useState(account.type);
 
   const dbCurrencies = useLiveQuery(() => db.currencies.toArray()) || [];
-  const activeCurrencies = dbCurrencies.length > 0
-    ? dbCurrencies.filter(c => c.isActive || c.code === account.currency)
-    : [
-        { code: 'USD', name: 'Dólar' },
-        { code: 'VES', name: 'Bolívar' },
-        { code: 'USDT', name: 'Tether' }
-      ];
+  const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
+  const lotCurrencyObj = useLiveQuery(() => db.app_config.get('lotCurrency'));
+  const baseCurrency = baseCurrencyObj?.value || '';
+  const lotCurrency = lotCurrencyObj?.value || '';
+  const activeCurrencies = dbCurrencies.filter(c => c.isActive || c.code === account.currency);
 
   const [selectedInstOption, setSelectedInstOption] = useState(account.institutionId.toString());
   const [newInstName, setNewInstName] = useState('');
   const [instType, setInstType] = useState('BANK');
   const [instrumentsList, setInstrumentsList] = useState([]);
   const [error, setError] = useState('');
+  const [showReconciliation, setShowReconciliation] = useState(false);
+  const [actualBalance, setActualBalance] = useState('');
+  const [reconciliationDate, setReconciliationDate] = useState(getTodayInputValue);
+  const [reconciliationDescription, setReconciliationDescription] = useState('');
+  const [positiveLotCost, setPositiveLotCost] = useState('');
+  const [reconciliationError, setReconciliationError] = useState('');
+
+  const parsedActualBalance = parseFloat(actualBalance);
+  const reconciliationDifference = Number.isFinite(parsedActualBalance) ? parsedActualBalance - account.balance : null;
 
   // Fetch associated instruments on load
   useEffect(() => {
@@ -379,34 +434,27 @@ function EditAccountForm({ account, institutions, onUpdated, onCancel }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    if (!accName.trim()) { setError('Escribe un nombre o alias para la cuenta'); return; }
     const bal = parseFloat(accBalance);
     if (isNaN(bal)) { setError('Balance inválido'); return; }
 
     try {
       let finalInstId;
-      let instNameValue = '';
       if (selectedInstOption === 'new') {
         if (!newInstName.trim()) { setError('Escribe el nombre de la nueva institución'); return; }
-        instNameValue = newInstName.trim();
         finalInstId = await db.institutions.add({
-          name: instNameValue,
+          name: newInstName.trim(),
           type: instType,
           country: 'VE'
         });
       } else {
         finalInstId = parseInt(selectedInstOption);
-        const existingInst = institutions.find(i => i.id === finalInstId);
-        instNameValue = existingInst ? existingInst.name : 'Cuenta';
-        // También podemos actualizar el tipo de la institución existente si cambió
-        await db.institutions.update(finalInstId, { type: instType });
       }
 
       await db.accounts.update(account.id, {
         institutionId: finalInstId,
-        name: instNameValue,
-        type: accType,
-        currency: accCurrency,
-        balance: bal
+        name: accName.trim(),
+        type: accType
       });
 
       // Actualizar instrumentos (borrado e inserción limpia)
@@ -425,6 +473,32 @@ function EditAccountForm({ account, institutions, onUpdated, onCancel }) {
       onUpdated();
     } catch {
       setError('Error al actualizar la cuenta');
+    }
+  };
+
+  const handleReconcile = async () => {
+    setReconciliationError('');
+    if (!Number.isFinite(parsedActualBalance)) {
+      setReconciliationError('Ingresa el saldo real observado.');
+      return;
+    }
+    if (!reconciliationDate) {
+      setReconciliationError('Selecciona la fecha de conciliación.');
+      return;
+    }
+
+    try {
+      await reconcileAccountBalance(db, {
+        accountId: account.id,
+        actualBalance: parsedActualBalance,
+        date: new Date(`${reconciliationDate}T12:00:00`),
+        description: reconciliationDescription,
+        positiveLotCostAmount: positiveLotCost ? parseFloat(positiveLotCost) : null,
+      });
+      setShowReconciliation(false);
+      onUpdated();
+    } catch (err) {
+      setReconciliationError(err.message || 'No se pudo conciliar la cuenta.');
     }
   };
 
@@ -460,39 +534,48 @@ function EditAccountForm({ account, institutions, onUpdated, onCancel }) {
               required
             />
           </div>
+          <div>
+            <label className="muji-header block mb-1">Tipo de Institución</label>
+            <select value={instType} onChange={e => setInstType(e.target.value)} className="muji-input bg-transparent">
+              <option value="BANK">Banco</option>
+              <option value="NEOBANK">Banco Digital</option>
+              <option value="EXCHANGE">Exchange</option>
+              <option value="HOT_WALLET">Hot Wallet</option>
+              <option value="COLD_WALLET">Cold Wallet</option>
+              <option value="CASH">Efectivo</option>
+            </select>
+          </div>
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label className="muji-header block mb-1">Tipo de Institución</label>
-          <select value={instType} onChange={e => setInstType(e.target.value)} className="muji-input">
-            <option value="BANK">Banco</option>
-            <option value="NEOBANK">Banco Digital</option>
-            <option value="EXCHANGE">Exchange</option>
-            <option value="HOT_WALLET">Hot Wallet</option>
-            <option value="COLD_WALLET">Cold Wallet</option>
-            <option value="CASH">Efectivo</option>
-          </select>
-        </div>
+      <div>
+        <label className="muji-header block mb-1">Nombre de cuenta / Alias</label>
+        <input
+          type="text"
+          value={accName}
+          onChange={e => setAccName(e.target.value)}
+          placeholder="Ej. Principal, Trading"
+          className="muji-input"
+          required
+        />
+      </div>
 
-        <div>
-          <label className="muji-header block mb-1">Tipo Cuenta</label>
-          <select value={accType} onChange={e => setAccType(e.target.value)} className="muji-input">
-            <option value="CHECKING">Corriente</option>
-            <option value="SAVINGS">Ahorro</option>
-            <option value="WALLET">Wallet Digital</option>
-            <option value="CRYPTO_SPOT">Spot / Exchange</option>
-            <option value="CRYPTO_FUND">Funding / Exchange</option>
-            <option value="CASH">Efectivo</option>
-          </select>
-        </div>
+      <div>
+        <label className="muji-header block mb-1">Tipo Cuenta</label>
+        <select value={accType} onChange={e => setAccType(e.target.value)} className="muji-input">
+          <option value="CHECKING">Corriente</option>
+          <option value="SAVINGS">Ahorro</option>
+          <option value="WALLET">Wallet Digital</option>
+          <option value="CRYPTO_SPOT">Spot / Exchange</option>
+          <option value="CRYPTO_FUND">Funding / Exchange</option>
+          <option value="CASH">Efectivo</option>
+        </select>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="muji-header block mb-1">Divisa</label>
-          <select value={accCurrency} onChange={e => setAccCurrency(e.target.value)} className="muji-input">
+          <select value={accCurrency} disabled className="muji-input opacity-60">
             {activeCurrencies.map(c => (
               <option key={c.code} value={c.code}>{c.code}</option>
             ))}
@@ -502,10 +585,64 @@ function EditAccountForm({ account, institutions, onUpdated, onCancel }) {
         <div>
           <label className="muji-header block mb-1">Saldo</label>
           <input type="number" step="0.01" inputMode="decimal"
-            value={accBalance} onChange={e => setAccBalance(e.target.value)}
-            className="muji-input" required />
+            value={accBalance} disabled
+            className="muji-input opacity-60" required />
+          <p className="mt-1 text-[9px] text-noria-muted">El saldo se modifica mediante movimientos, no desde la cuenta.</p>
         </div>
       </div>
+
+      <button
+        type="button"
+        onClick={() => {
+          setShowReconciliation(prev => !prev);
+          setActualBalance('');
+          setPositiveLotCost('');
+          setReconciliationError('');
+        }}
+        className="w-full border border-[#647C78] px-3 py-2.5 font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-[#647C78]"
+      >
+        {showReconciliation ? 'Cancelar conciliación' : 'Conciliar saldo'}
+      </button>
+
+      {showReconciliation && (
+        <div className="space-y-3 border border-[#647C78] p-3">
+          <p className="text-[11px] text-noria-muted">
+            Registra el saldo real. La diferencia quedará como un movimiento neutral y reversible.
+          </p>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="muji-header block mb-1">Saldo real ({account.currency})</label>
+              <input type="number" step="0.01" inputMode="decimal" value={actualBalance} onChange={e => setActualBalance(e.target.value)} className="muji-input" />
+            </div>
+            <div>
+              <label className="muji-header block mb-1">Fecha</label>
+              <input type="date" value={reconciliationDate} onChange={e => setReconciliationDate(e.target.value)} className="muji-input" />
+            </div>
+          </div>
+          {reconciliationDifference !== null && Math.abs(reconciliationDifference) > 0.005 && (
+            <div className="flex justify-between border-y border-[#1A1A1A]/15 py-2 font-mono text-[11px]">
+              <span>Diferencia</span>
+              <span style={{ color: reconciliationDifference > 0 ? '#4F8F58' : '#9F2F2D' }}>
+                {reconciliationDifference > 0 ? '+' : ''}{formatAmountWithSymbol(reconciliationDifference, account.currency, dbCurrencies)}
+              </span>
+            </div>
+          )}
+          {account.currency === lotCurrency && reconciliationDifference > 0 && (
+            <div>
+              <label className="muji-header block mb-1">Costo total de la diferencia ({baseCurrency})</label>
+              <input type="number" min="0" step="0.01" inputMode="decimal" value={positiveLotCost} onChange={e => setPositiveLotCost(e.target.value)} className="muji-input" />
+            </div>
+          )}
+          <div>
+            <label className="muji-header block mb-1">Descripción</label>
+            <input type="text" value={reconciliationDescription} onChange={e => setReconciliationDescription(e.target.value)} placeholder="Ej. Corrección de saldo inicial estimado" className="muji-input" />
+          </div>
+          {reconciliationError && <p className="text-[11px] text-[#9F2F2D]">{reconciliationError}</p>}
+          <button type="button" onClick={handleReconcile} className="w-full border border-[#1A1A1A] py-2.5 font-mono text-[10px] font-[700] uppercase tracking-[0.12em]">
+            Confirmar conciliación
+          </button>
+        </div>
+      )}
 
       {/* Instrumentos Asociados */}
       <InstrumentListEditor
@@ -552,7 +689,7 @@ function AccordionSection({ id, title, open, onToggle, action, children }) {
   );
 }
 
-function PatrimonioSummary({ summary }) {
+function PatrimonioSummary({ summary, baseCurrency, currencies }) {
   const pct = (value) => summary.netWorth > 0 ? Math.round((value / summary.netWorth) * 100) : 0;
   const rows = [
     ['Efectivo', summary.cash],
@@ -565,17 +702,17 @@ function PatrimonioSummary({ summary }) {
     <div className="border-2 border-[#1A1A1A] p-5 font-mono text-noria-text bg-transparent">
       <div className="flex items-start justify-between gap-3 mb-6">
         <p className="text-[10px] font-[700] tracking-[0.16em] uppercase opacity-55">RESUMEN GLOBAL</p>
-        <span className="border border-[#1A1A1A] px-2 py-1 text-[9px] font-[700] tracking-[0.12em] uppercase leading-none">USD BASE</span>
+        <span className="border border-[#1A1A1A] px-2 py-1 text-[9px] font-[700] tracking-[0.12em] uppercase leading-none">{baseCurrency} BASE</span>
       </div>
       <p className="text-[11px] font-[700] uppercase tracking-[0.12em] opacity-70">Patrimonio Neto</p>
-      <p className="font-sans text-[38px] font-[600] tracking-normal leading-none mt-1 mb-6">${fmt(summary.netWorth)}</p>
+      <p className="font-sans text-[38px] font-[600] tracking-normal leading-none mt-1 mb-6">{formatAmountWithSymbol(summary.netWorth, baseCurrency, currencies)}</p>
       <div className="border-t border-[#1A1A1A] pt-4">
       <p className="text-[10px] font-[700] uppercase tracking-[0.12em] opacity-60 mb-2">Distribucion</p>
       <div className="space-y-1.5 text-[12px]">
         {rows.map(([label, value]) => (
           <div key={label} className="flex justify-between gap-3">
             <span>{label}:</span>
-            <span>${fmt(value)} ({pct(value)}%)</span>
+            <span>{formatAmountWithSymbol(value, baseCurrency, currencies)} ({pct(value)}%)</span>
           </div>
         ))}
       </div>
@@ -631,7 +768,6 @@ export default function AccountsScreen() {
   const [editingAnchor, setEditingAnchor] = useState(null);
   const [editAnchorName, setEditAnchorName] = useState('');
   const [editAnchorAmount, setEditAnchorAmount] = useState('');
-  const [editAnchorPillar, setEditAnchorPillar] = useState('NEED');
   const [editAnchorDueDate, setEditAnchorDueDate] = useState('');
   const [editAnchorAccountId, setEditAnchorAccountId] = useState('');
   const [editAnchorTagId, setEditAnchorTagId] = useState('');
@@ -641,7 +777,6 @@ export default function AccountsScreen() {
   const [showAddAnchorMasterModal, setShowAddAnchorMasterModal] = useState(false);
   const [anchorName, setAnchorName] = useState('');
   const [anchorAmount, setAnchorAmount] = useState('');
-  const [anchorPillar, setAnchorPillar] = useState('NEED');
   const [anchorAccountId, setAnchorAccountId] = useState('');
   const [anchorDueDate, setAnchorDueDate] = useState('');
   const [anchorTagId, setAnchorTagId] = useState('');
@@ -658,25 +793,17 @@ export default function AccountsScreen() {
   const transactions = useLiveQuery(() => db.transactions.toArray()) || [];
   const tags = useLiveQuery(() => db.tags.orderBy('name').toArray()) || [];
   const lots = useLiveQuery(() => db.lots.toArray()) || [];
+  const dbCurrencies = useLiveQuery(() => db.currencies.toArray()) || [];
+  const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
+  const baseCurrency = baseCurrencyObj?.value || '';
 
   const activeAccounts = accounts.filter(a => !a.isArchived);
   const archivedAccounts = accounts.filter(a => a.isArchived);
+  const excludedCurrencies = [...new Set(activeAccounts
+    .filter(account => Math.abs(account.balance) > 0.005 && convertAmountToBase(account.balance, account.currency, baseCurrency, lots, dbCurrencies) === null)
+    .map(account => account.currency))];
 
-  const getAccountBalanceInUSD = (acc) => {
-    if (acc.currency === 'USD' || acc.currency === 'USDT' || acc.currency === 'USDC') {
-      return acc.balance;
-    }
-    const currencyLots = lots.filter(l => l.currency === acc.currency && l.remainingAmount > 0);
-    const totalRemaining = currencyLots.reduce((sum, l) => sum + l.remainingAmount, 0);
-    const totalUSD = currencyLots.reduce((sum, l) => sum + (l.remainingAmount / l.effectiveRate), 0);
-    if (totalUSD > 0) {
-      const avgRate = totalRemaining / totalUSD;
-      return acc.balance / avgRate;
-    }
-    if (acc.currency === 'VES') return acc.balance / 40.0;
-    if (acc.currency === 'EUR') return acc.balance * 1.08;
-    return acc.balance;
-  };
+  const getAccountBalanceInBase = (acc) => convertAmountToBase(acc.balance, acc.currency, baseCurrency, lots, dbCurrencies) ?? 0;
   const toggleSection = (key) => setOpenSections(prev => ({ ...prev, [key]: !prev[key] }));
   const defaultIncomeType = incomeTypes.find(type => type.legacyKey === 'OTHER') || incomeTypes[0] || null;
   const resolveIncomeTypeId = (source) => {
@@ -717,10 +844,10 @@ export default function AccountsScreen() {
     const category = accountCategory(account);
     const allocated = allocationsByAccount[account.id] || 0;
     const availableBalance = Math.max(0, account.balance - allocated);
-    const availableBalanceUSD = getAccountBalanceInUSD({ ...account, balance: availableBalance });
-    const balanceUSD = getAccountBalanceInUSD(account);
-    summary.netWorth += balanceUSD;
-    summary[category] += availableBalanceUSD;
+    const availableBalanceBase = getAccountBalanceInBase({ ...account, balance: availableBalance });
+    const balanceBase = getAccountBalanceInBase(account);
+    summary.netWorth += balanceBase;
+    summary[category] += availableBalanceBase;
     return summary;
   }, { netWorth: 0, cash: 0, banks: 0, wallets: 0, goals: goalsDistribution });
 
@@ -796,7 +923,7 @@ export default function AccountsScreen() {
         name: macetaName.trim(),
         targetAmount: target,
         currentAmount: 0,
-        currency: 'USD',
+        currency: baseCurrency,
         targetDate: macetaTargetDate || null,
         monthlyContribution: 0,
         priority: 1,
@@ -892,7 +1019,7 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
         return;
       }
 
-      await db.anchors.add({
+      await addAnchorTemplateWithCurrentInstances(db, {
         name: anchorName,
         type: 'SAVE',
         amount: amt,
@@ -901,7 +1028,9 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
         macetaId: maceta.id,
         nextDueDate: new Date().toISOString().slice(0, 7) + '-01',
         status: 'PENDING',
-        pillar: 'SAVE'
+        pillar: 'SAVE',
+        frequencyInterval: 1,
+        frequencyUnit: 'MONTHS'
       });
 
       alert(`Gasto fijo de ahorro "${anchorName}" programado correctamente con un aporte mensual de $${fmt(amt)}.`);
@@ -953,7 +1082,6 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
     setEditingAnchor(anchor);
     setEditAnchorName(anchor.name);
     setEditAnchorAmount(anchor.amount.toString());
-    setEditAnchorPillar(anchor.pillar);
     let formattedDate = '';
     if (anchor.nextDueDate) {
       const d = anchor.nextDueDate instanceof Date ? anchor.nextDueDate : new Date(anchor.nextDueDate);
@@ -974,13 +1102,17 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
     try {
       const parsedAccountId = editAnchorAccountId ? parseInt(editAnchorAccountId) : null;
       const parsedDueDate = editAnchorDueDate ? new Date(editAnchorDueDate + 'T12:00:00') : null;
-      const normalizedTagId = editAnchorPillar === 'SAVE' ? null : (editAnchorTagId ? parseInt(editAnchorTagId) : null);
+      const isSavingsAnchor = editingAnchor.pillar === 'SAVE';
+      const selectedTag = tags.find(tag => tag.id === parseInt(editAnchorTagId));
+      if (!isSavingsAnchor && !selectedTag?.pillar) { alert('Selecciona una categoría con pilar'); return; }
+      const resolvedPillar = isSavingsAnchor ? 'SAVE' : selectedTag.pillar;
+      const normalizedTagId = isSavingsAnchor ? null : selectedTag.id;
 
       // 1. Actualizar la plantilla
       await db.anchors.update(editingAnchor.id, {
         name: editAnchorName.trim(),
         amount: amt,
-        pillar: editAnchorPillar,
+        pillar: resolvedPillar,
         accountId: parsedAccountId,
         tagId: normalizedTagId,
         nextDueDate: parsedDueDate
@@ -1007,7 +1139,7 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
           await db.anchors.update(inst.id, {
             name: editAnchorName.trim(),
             amount: amt,
-            pillar: editAnchorPillar,
+            pillar: resolvedPillar,
             accountId: parsedAccountId,
             tagId: normalizedTagId
           });
@@ -1021,8 +1153,9 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
       const relatedAnchorIds = [editingAnchor.id, ...childInstances.map(inst => inst.id)];
       const relatedTransactions = await db.transactions.where('anchorId').anyOf(relatedAnchorIds).toArray();
       for (const tx of relatedTransactions) {
-        if (tx.type === 'OUT') await db.transactions.update(tx.id, { tagId: normalizedTagId });
+        if (tx.type === 'OUT') await db.transactions.update(tx.id, { tagId: normalizedTagId, pillar: resolvedPillar });
       }
+      await syncAnchorTemplateCurrentInstances(db, editingAnchor.id);
 
       setShowEditAnchorModal(false);
       setEditingAnchor(null);
@@ -1085,21 +1218,21 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
     const amt = parseFloat(anchorAmount);
     if (isNaN(amt) || amt <= 0) { alert('Monto inválido'); return; }
     if (!anchorAccountId) { alert('Selecciona una cuenta'); return; }
+    const selectedTag = tags.find(tag => tag.id === parseInt(anchorTagId));
+    if (!selectedTag?.pillar) { alert('Selecciona una categoría con pilar'); return; }
     const selectedAcc = accounts.find(a => a.id.toString() === anchorAccountId);
     
     try {
-      await db.anchors.add({
+      await addAnchorTemplateWithCurrentInstances(db, {
         name: anchorName.trim(),
         type: 'FIXED',
         amount: amt,
         currency: selectedAcc.currency,
         accountId: parseInt(anchorAccountId),
-        tagId: anchorTagId ? parseInt(anchorTagId) : null,
+        tagId: selectedTag.id,
         nextDueDate: anchorDueDate ? new Date(anchorDueDate + 'T12:00:00') : new Date(),
         status: 'PENDING',
-        pillar: anchorPillar,
-        isTemplate: true,
-        isArchived: false
+        pillar: selectedTag.pillar
       });
       setShowAddAnchorMasterModal(false);
       setAnchorName(''); setAnchorAmount(''); setAnchorDueDate(''); setAnchorAccountId(''); setAnchorTagId('');
@@ -1111,62 +1244,17 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
   const handleDeleteTransaction = async (tx) => {
     if (!confirm('¿Seguro que deseas eliminar esta transacción permanentemente? Se revertirá su impacto en los balances.')) return;
     try {
-      await db.transaction('rw', [db.accounts, db.transactions, db.anchors], async () => {
-        if (tx.type === 'IN') {
-          const acc = await db.accounts.get(tx.accountId);
-          if (acc) await db.accounts.update(tx.accountId, { balance: acc.balance - tx.amount });
-        } else if (tx.type === 'OUT') {
-          const acc = await db.accounts.get(tx.accountId);
-          if (acc) await db.accounts.update(tx.accountId, { balance: acc.balance + tx.amount });
-        } else if (tx.type === 'TRANSFER_OUT' || tx.type === 'TRANSFER_IN') {
-          const linkedTxs = await db.transactions.where('transferId').equals(tx.transferId).toArray();
-          for (const ltx of linkedTxs) {
-            const acc = await db.accounts.get(ltx.accountId);
-            if (acc) {
-              const delta = ltx.type === 'TRANSFER_OUT' ? ltx.amount : -ltx.amount;
-              await db.accounts.update(ltx.accountId, { balance: acc.balance + delta });
-            }
-            await db.transactions.delete(ltx.id);
-          }
-          return;
-        }
-
-        if (tx.anchorId) {
-          await db.anchors.update(tx.anchorId, { status: 'PENDING' });
-        } else if (tx.description && tx.description.startsWith('Ancla: ')) {
-          const anchorName = tx.description.replace('Ancla: ', '');
-          const matchingAnchor = await db.anchors.where('name').equals(anchorName).first();
-          if (matchingAnchor) {
-            await db.anchors.update(matchingAnchor.id, { status: 'PENDING' });
-          }
-        }
-
-        await db.transactions.delete(tx.id);
-      });
+      await deleteTransactionSafely(db, tx);
     } catch (err) {
-      alert('Error al revertir la transacción');
+      alert(err.message || 'Error al revertir la transacción');
     }
   };
 
   const handleUpdateTransaction = async (txId, updatedFields) => {
     try {
-      await db.transaction('rw', [db.accounts, db.transactions], async () => {
-        const originalTx = await db.transactions.get(txId);
-        if (!originalTx) return;
-
-        if (updatedFields.amount !== undefined && updatedFields.amount !== originalTx.amount) {
-          const acc = await db.accounts.get(originalTx.accountId);
-          if (acc) {
-            const diff = updatedFields.amount - originalTx.amount;
-            const delta = originalTx.type === 'OUT' ? -diff : diff;
-            await db.accounts.update(originalTx.accountId, { balance: acc.balance + delta });
-          }
-        }
-
-        await db.transactions.update(txId, updatedFields);
-      });
+      await updateTransactionSafely(db, txId, updatedFields);
     } catch (err) {
-      alert('Error al actualizar la transacción');
+      alert(err.message || 'Error al actualizar la transacción');
     }
   };
 
@@ -1179,13 +1267,19 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
 
         <div className="mt-4">
 
+          {excludedCurrencies.length > 0 && (
+            <p className="mb-4 border border-[#B8860B] p-3 text-[10px] leading-relaxed text-[#8A6508]">
+              No incluidos en el patrimonio consolidado de {baseCurrency}: {excludedCurrencies.join(', ')}.
+            </p>
+          )}
+
           <AccordionSection
             id="patrimonio-summary-section"
             title="Resumen"
             open={openSections.summary}
             onToggle={() => toggleSection('summary')}
           >
-            <PatrimonioSummary summary={patrimonioSummary} />
+            <PatrimonioSummary summary={patrimonioSummary} baseCurrency={baseCurrency} currencies={dbCurrencies} />
           </AccordionSection>
 
           <AccordionSection
@@ -1340,7 +1434,7 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
                     <p className="label-section mb-1">{selectedAccountInstitution?.name || 'Institución'}</p>
                     <h3 className="text-title text-noria-text font-[400] leading-tight">{selectedAccount.name}</h3>
                     <p className="text-[28px] font-[300] text-noria-text mt-3">
-                      {formatAmountWithSymbol(selectedAccount.balance, selectedAccount.currency)}
+                      {formatAmountWithSymbol(selectedAccount.balance, selectedAccount.currency, dbCurrencies)}
                     </p>
                     {(() => {
                       const committedInMacetas = macetaAllocations
@@ -1353,11 +1447,11 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
                         <div className="mt-2 pt-2 border-t border-[rgba(0,0,0,0.05)] text-[12px] space-y-0.5 text-noria-text/60">
                           <div className="flex justify-between font-mono">
                             <span>Comprometido:</span>
-                             <span className="text-noria-amber font-[500]">{formatAmountWithSymbol(committedInMacetas, selectedAccount.currency)}</span>
+                             <span className="text-noria-amber font-[500]">{formatAmountWithSymbol(committedInMacetas, selectedAccount.currency, dbCurrencies)}</span>
                           </div>
                           <div className="flex justify-between font-mono">
                             <span>Disponible real:</span>
-                             <span className="text-[#5C7A52] font-[500]">{formatAmountWithSymbol(availableBalance, selectedAccount.currency)}</span>
+                             <span className="text-[#5C7A52] font-[500]">{formatAmountWithSymbol(availableBalance, selectedAccount.currency, dbCurrencies)}</span>
                           </div>
                         </div>
                       );
@@ -1365,6 +1459,9 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
                     <div className="mt-4 flex space-x-2">
                       <span className="noria-pill" style={{ background: 'rgba(26,26,26,0.05)', color: 'rgba(26,26,26,0.6)' }}>
                         {selectedAccount.type}
+                      </span>
+                      <span className="noria-pill" style={{ background: 'rgba(26,26,26,0.05)', color: 'rgba(26,26,26,0.6)' }}>
+                        {selectedAccount.currency}
                       </span>
                       {selectedAccount.isArchived && (
                         <span className="noria-pill bg-noria-amber/10 text-noria-amber">
@@ -1443,7 +1540,8 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
                                 {t.description || (
                                   t.type === 'IN' ? 'Ingreso' :
                                   t.type === 'TRANSFER_IN' ? 'Transferencia (Entrada)' :
-                                  t.type === 'TRANSFER_OUT' ? 'Transferencia (Salida)' : 'Gasto'
+                                  t.type === 'TRANSFER_OUT' ? 'Transferencia (Salida)' :
+                                  t.type === 'BALANCE_ADJUSTMENT' ? 'Conciliación de saldo' : 'Gasto'
                                 )}
                               </p>
                               <p className="text-[9px] text-noria-muted uppercase tracking-wider mt-0.5">
@@ -1452,11 +1550,12 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
                               </p>
                             </div>
                             {(() => {
-                              const isIncome = t.type === 'IN' || t.type === 'TRANSFER_IN';
+                              const isAdjustment = t.type === 'BALANCE_ADJUSTMENT';
+                              const isIncome = t.type === 'IN' || t.type === 'TRANSFER_IN' || (isAdjustment && t.adjustmentAmount > 0);
                               return (
                                 <span
                                   className="font-[500] text-[13px] flex items-center space-x-1"
-                                  style={{ color: isIncome ? '#5C7A52' : '#1A1A1A' }}
+                                  style={{ color: isAdjustment ? '#647C78' : isIncome ? '#5C7A52' : '#1A1A1A' }}
                                 >
                                   {isIncome ? '+' : '-'}${fmt(t.amount)}
                                 </span>
@@ -1509,7 +1608,7 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="muji-header block mb-1">Objetivo (USD)</label>
+                  <label className="muji-header block mb-1">Objetivo ({baseCurrency})</label>
                   <input id="maceta-target" type="number" step="1" value={macetaTarget}
                     onChange={e => setMacetaTarget(e.target.value)} placeholder="1000" className="muji-input" required />
                 </div>
@@ -1596,7 +1695,7 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="muji-header block mb-1">Objetivo (USD)</label>
+                  <label className="muji-header block mb-1">Objetivo ({baseCurrency})</label>
                   <input type="number" step="1" value={editMacetaTarget}
                     onChange={e => setEditMacetaTarget(e.target.value)} className="muji-input" required />
                 </div>
@@ -1733,7 +1832,7 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="muji-header block mb-1">Monto (USD)</label>
+                  <label className="muji-header block mb-1">Monto ({baseCurrency})</label>
                   <input type="number" step="0.01" inputMode="decimal"
                     value={anchorAmount} onChange={e => setAnchorAmount(e.target.value)}
                     placeholder="0.00" className="muji-input" required />
@@ -1745,42 +1844,25 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="muji-header block mb-1">Cuenta Asociada</label>
-                  <select value={anchorAccountId} onChange={e => setAnchorAccountId(e.target.value)}
-                    className="muji-input" required>
-                    <option value="" disabled>Selecciona...</option>
-                    {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="muji-header block mb-2">Pilar</label>
-                  <div className="flex space-x-1">
-                    {[['NEED','N','#5C7A52'],['WANT','W','#4A6475'],['SAVE','S','#B8860B']].map(([val, short, col]) => (
-                      <button key={val} type="button" onClick={() => setAnchorPillar(val)}
-                        className="flex-1 py-1 text-[10px] font-[500] uppercase rounded border transition-all"
-                        style={{
-                          borderColor: anchorPillar === val ? col : 'rgba(26,26,26,0.10)',
-                          color: anchorPillar === val ? col : 'rgba(26,26,26,0.35)',
-                        }}>
-                        {short}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+              <div>
+                <label className="muji-header block mb-1">Cuenta Asociada</label>
+                <select value={anchorAccountId} onChange={e => setAnchorAccountId(e.target.value)}
+                  className="muji-input" required>
+                  <option value="" disabled>Selecciona...</option>
+                  {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} ({acc.currency})</option>)}
+                </select>
               </div>
 
-              {anchorPillar !== 'SAVE' && (
-                <CategorySelect
-                  id="accounts-anchor-category"
-                  value={anchorTagId}
-                  onChange={setAnchorTagId}
-                  tags={tags}
-                  kind="EXPENSE"
-                  className="max-w-[320px]"
-                />
-              )}
+              <CategorySelect
+                id="accounts-anchor-category"
+                value={anchorTagId}
+                onChange={setAnchorTagId}
+                tags={tags}
+                kind="EXPENSE"
+                className="max-w-[320px]"
+                required
+                allowCreate={false}
+              />
 
               <button type="submit"
                 className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider border mt-2 transition-colors"
@@ -1817,7 +1899,7 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="muji-header block mb-1">Monto Mensual (USD)</label>
+                  <label className="muji-header block mb-1">Monto Mensual ({baseCurrency})</label>
                   <input type="number" step="0.01" inputMode="decimal"
                     value={editAnchorAmount} onChange={e => setEditAnchorAmount(e.target.value)}
                     className="muji-input" required />
@@ -1829,34 +1911,16 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="muji-header block mb-1">Cuenta Asociada</label>
-                  <select value={editAnchorAccountId} onChange={e => setEditAnchorAccountId(e.target.value)}
-                    className="muji-input" required={editingAnchor.pillar !== 'SAVE'}>
-                    <option value="">Ninguna...</option>
-                    {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="muji-header block mb-2">Pilar</label>
-                  <div className="flex space-x-1">
-                    {[['NEED','N','#5C7A52'],['WANT','W','#4A6475'],['SAVE','S','#B8860B']].map(([val, short, col]) => (
-                      <button key={val} type="button" onClick={() => setEditAnchorPillar(val)}
-                        disabled={editingAnchor.pillar === 'SAVE'}
-                        className="flex-1 py-1 text-[10px] font-[500] uppercase rounded border transition-all disabled:opacity-50"
-                        style={{
-                          borderColor: editAnchorPillar === val ? col : 'rgba(26,26,26,0.10)',
-                          color: editAnchorPillar === val ? col : 'rgba(26,26,26,0.35)',
-                        }}>
-                        {short}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+              <div>
+                <label className="muji-header block mb-1">Cuenta Asociada</label>
+                <select value={editAnchorAccountId} onChange={e => setEditAnchorAccountId(e.target.value)}
+                  className="muji-input" required={editingAnchor.pillar !== 'SAVE'}>
+                  <option value="">Ninguna...</option>
+                  {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} ({acc.currency})</option>)}
+                </select>
               </div>
 
-              {editAnchorPillar !== 'SAVE' && (
+              {editingAnchor.pillar !== 'SAVE' && (
                 <CategorySelect
                   id="accounts-edit-anchor-category"
                   value={editAnchorTagId}
@@ -1864,6 +1928,8 @@ Esta acción eliminará todas las aportaciones mensuales programadas (ahorros) v
                   tags={tags}
                   kind="EXPENSE"
                   className="max-w-[320px]"
+                  required
+                  allowCreate={false}
                 />
               )}
 
@@ -2011,7 +2077,7 @@ function AssignFundsModal({ maceta, onClose, accounts, macetaAllocations, onSave
                   <div className="flex-1 min-w-0 pr-2">
                     <p className="text-[13px] font-[400] text-noria-text truncate">{acc.name}</p>
                     <p className="text-[10px] text-noria-muted uppercase tracking-wider mt-0.5">
-                      Total: {formatAmountWithSymbol(acc.balance, acc.currency)} · <span className="font-[500]" style={{ color: disponible > 0 ? '#5C7A52' : 'inherit' }}>Disp: {formatAmountWithSymbol(disponible, acc.currency)}</span>
+                      Total: {formatAmountWithSymbol(acc.balance, acc.currency, dbCurrencies)} · <span className="font-[500]" style={{ color: disponible > 0 ? '#5C7A52' : 'inherit' }}>Disp: {formatAmountWithSymbol(disponible, acc.currency, dbCurrencies)}</span>
                     </p>
                   </div>
                   <div className="w-28 flex items-center space-x-1">

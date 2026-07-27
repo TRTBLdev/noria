@@ -7,6 +7,8 @@ import BottomNav from '../components/BottomNav';
 import FAB from '../components/FAB';
 import { ChevronDown, ChevronRight, Search, AlertCircle, ArrowLeft } from 'lucide-react';
 import { formatCurrency } from '../utils/format';
+import { CurrencyAmount } from '../components/CurrencyAmount.jsx';
+import { convertAmountToBase } from '../utils/currency.js';
 
 export default function BudgetFull() {
   const navigate = useNavigate();
@@ -20,6 +22,8 @@ export default function BudgetFull() {
   const tags = useLiveQuery(() => db.tags.toArray()) || [];
   const dbCurrencies = useLiveQuery(() => db.currencies.toArray()) || [];
   const lots = useLiveQuery(() => db.lots.toArray()) || [];
+  const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
+  const baseCurrency = baseCurrencyObj?.value || '';
 
   // 2. States
   const [period, setPeriod] = useState('MES'); // SEMANA, MES, TRIMESTRE, AÑO
@@ -27,24 +31,12 @@ export default function BudgetFull() {
   const [expandedParentIds, setExpandedParentIds] = useState({});
 
   // 3. Helper conversion & formatting functions
-  const convertAmountToUSD = (amt, currency) => {
-    if (currency === 'USD' || currency === 'USDT' || currency === 'USDC' || !currency) {
-      return amt;
-    }
-    const currencyLots = lots.filter(l => l.currency === currency && l.remainingAmount > 0);
-    const totalRemaining = currencyLots.reduce((sum, l) => sum + l.remainingAmount, 0);
-    const totalUSD = currencyLots.reduce((sum, l) => sum + (l.remainingAmount / l.effectiveRate), 0);
-    if (totalUSD > 0) {
-      const avgRate = totalRemaining / totalUSD;
-      return amt / avgRate;
-    }
-    if (currency === 'VES') return amt / 40.0;
-    if (currency === 'EUR') return amt * 1.08;
-    return amt;
-  };
-
   const fmt = (n) => {
-    return formatCurrency(n, 'USD', dbCurrencies);
+    return formatCurrency(n, baseCurrency, dbCurrencies);
+  };
+  const transactionAmountInBase = (transaction) => {
+    if (transaction.baseCurrency === baseCurrency && Number.isFinite(transaction.baseAmount)) return transaction.baseAmount;
+    return convertAmountToBase(transaction.amount, transaction.currency, baseCurrency, lots, dbCurrencies) ?? 0;
   };
 
   // 4. Period scaling calculation
@@ -130,12 +122,12 @@ export default function BudgetFull() {
       // 1. Current spent
       const currentSpent = currTx
         .filter(t => t.tagId && tagIds.includes(t.tagId))
-        .reduce((sum, t) => sum + (t.amountUSD ?? t.amount), 0);
+        .reduce((sum, t) => sum + transactionAmountInBase(t), 0);
 
       // 2. 3-month average
       const totalHist = histTx
         .filter(t => t.tagId && tagIds.includes(t.tagId))
-        .reduce((sum, t) => sum + (t.amountUSD ?? t.amount), 0);
+        .reduce((sum, t) => sum + transactionAmountInBase(t), 0);
       const averageHist = (totalHist / 3) * scaling;
 
       // 3. Target (Fixed anchors + Variable manual budget)
@@ -147,7 +139,7 @@ export default function BudgetFull() {
         tagIds.includes(a.tagId) && 
         a.pillar !== 'SAVE'
       );
-      const fixedMonthly = fixedAnchors.reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
+      const fixedMonthly = fixedAnchors.reduce((sum, a) => sum + (convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies) ?? 0), 0);
 
       // Manual budgets (variables)
       const variableMonthly = (tag.monthlyBudget || 0) + childTags.reduce((sum, c) => sum + (c.monthlyBudget || 0), 0);
@@ -221,7 +213,7 @@ export default function BudgetFull() {
           const d = a.nextDueDate instanceof Date ? a.nextDueDate : new Date(a.nextDueDate + 'T12:00:00');
           return d >= currStart && d <= currEnd;
         })
-        .reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
+        .reduce((sum, a) => sum + (convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies) ?? 0), 0);
 
       // Promedio Real: paid saving instances in 3 months
       const histSpent = anchors
@@ -230,10 +222,10 @@ export default function BudgetFull() {
           const d = a.nextDueDate instanceof Date ? a.nextDueDate : new Date(a.nextDueDate + 'T12:00:00');
           return d >= histStart && d <= histEnd;
         })
-        .reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
+        .reduce((sum, a) => sum + (convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies) ?? 0), 0);
 
       const averageHist = (histSpent / 3) * scaling;
-      const scaledTarget = convertAmountToUSD(template.amount, template.currency) * scaling;
+      const scaledTarget = (convertAmountToBase(template.amount, template.currency, baseCurrency, lots, dbCurrencies) ?? 0) * scaling;
 
       return {
         id: template.id,

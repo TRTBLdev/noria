@@ -1,10 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
-import { Plus, X, ArrowDownLeft, ArrowUpRight, ArrowLeftRight, Calculator, Coins } from 'lucide-react';
+import { Plus, X, ArrowDownLeft, ArrowUpRight, ArrowLeftRight, Calculator, Coins, Users } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import CategorySelect from './CategorySelect.jsx';
 import IncomeTypeSelect from './IncomeTypeSelect.jsx';
 import { getIncomeType } from './IncomeTypeIcon.jsx';
+import { consumeCurrencyLots, createCurrencyLot, stringifyLotConsumption } from '../db/currencyLots.js';
+import { formatAmountWithSymbol } from '../utils/format.js';
+import { convertAmountToBase } from '../utils/currency.js';
 
 const fmt = (n, d = 2) => {
   if (typeof n !== 'number') return '0.00';
@@ -37,6 +41,8 @@ const getAccountLabel = (acc, inst) => {
 };
 
 export default function FAB() {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [isOpen, setIsOpen] = useState(false);
   const [activeForm, setActiveForm] = useState(null); // 'GASTO' | 'INGRESO' | 'TRANSFERENCIA'
   const sheetRef = useRef(null);
@@ -48,7 +54,9 @@ export default function FAB() {
   const incomeSources = useLiveQuery(() => db.income_sources.toArray()) || [];
   const incomeTypes = useLiveQuery(() => db.income_types.orderBy('name').toArray()) || [];
   const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
-  const baseCurrency = baseCurrencyObj?.value || 'USD';
+  const lotCurrencyObj = useLiveQuery(() => db.app_config.get('lotCurrency'));
+  const baseCurrency = baseCurrencyObj?.value || '';
+  const lotCurrency = lotCurrencyObj?.value || '';
   const thirdParties = useLiveQuery(() => db.third_parties.toArray()) || [];
 
   const instruments = useLiveQuery(() => db.instruments.toArray()) || [];
@@ -75,22 +83,29 @@ export default function FAB() {
   const [isSplit, setIsSplit] = useState(false);
   const [splits, setSplits] = useState([{ amount: '', tagId: '', pillar: 'NEED', description: '' }]);
 
+  const [isPersonSplit, setIsPersonSplit] = useState(false);
+  const [personSplitMode, setPersonSplitMode] = useState('EQUITATIVO'); // 'EQUITATIVO' | 'MANUAL'
+  const [personSplits, setPersonSplits] = useState([{ thirdPartyInput: '', selectedThirdPartyId: '', amount: '' }]);
+  const [focusedParticipantIndex, setFocusedParticipantIndex] = useState(null);
+
   // Calculator states
   const [isCalcOpen, setIsCalcOpen] = useState(false);
   const dbCurrencies = useLiveQuery(() => db.currencies.toArray()) || [];
-  const activeCurrencies = dbCurrencies.length > 0
-    ? dbCurrencies.filter(c => c.isActive)
-    : [
-      { code: 'USD', name: 'Dólar' },
-      { code: 'VES', name: 'Bolívar' },
-      { code: 'USDT', name: 'Tether' }
-    ];
+  const activeCurrencies = dbCurrencies.filter(c => c.isActive);
 
-  const [calcCurrencyA, setCalcCurrencyA] = useState('USD');
-  const [calcCurrencyB, setCalcCurrencyB] = useState('VES');
+  const [calcCurrencyA, setCalcCurrencyA] = useState('');
+  const [calcCurrencyB, setCalcCurrencyB] = useState('');
   const [rate, setRate] = useState('');
   const [amountA, setAmountA] = useState('');
   const [amountB, setAmountB] = useState('');
+
+  useEffect(() => {
+    if (!activeCurrencies.length) return;
+    if (!activeCurrencies.some(currency => currency.code === calcCurrencyA)) setCalcCurrencyA(baseCurrency || activeCurrencies[0].code);
+    if (!activeCurrencies.some(currency => currency.code === calcCurrencyB)) {
+      setCalcCurrencyB(lotCurrency || activeCurrencies.find(currency => currency.code !== baseCurrency)?.code || baseCurrency);
+    }
+  }, [activeCurrencies, baseCurrency, lotCurrency, calcCurrencyA, calcCurrencyB]);
 
   // Calculator logic
   const handleAmountAChange = (val, currentRate = rate) => {
@@ -225,6 +240,10 @@ export default function FAB() {
     setSelectedThirdPartyId('');
     setIsSplit(false);
     setSplits([{ amount: '', tagId: '', pillar: 'NEED', description: '' }]);
+    setIsPersonSplit(false);
+    setPersonSplitMode('EQUITATIVO');
+    setPersonSplits([{ thirdPartyInput: '', selectedThirdPartyId: '', amount: '' }]);
+    setFocusedParticipantIndex(null);
     if (activeAccounts.length > 0) {
       const defaultAccId = activeAccounts[0].id.toString();
       setAccountId(defaultAccId);
@@ -318,6 +337,10 @@ export default function FAB() {
       setIsCalcOpen(true);
       return;
     }
+    if (type === 'SPLIT_CALC') {
+      navigate('/calculator/split', { state: { backgroundLocation: location } });
+      return;
+    }
     resetForm();
     setActiveForm(type);
   };
@@ -350,41 +373,27 @@ export default function FAB() {
         const isMultiCurrency = sourceAccount.currency !== targetAccount.currency;
 
         let lotConsumptions = [];
-        let costUSD = null;
+        let transferBaseAmount = convertAmountToBase(parsedAmount, sourceAccount.currency, baseCurrency, [], dbCurrencies);
+        let transferBaseCurrency = transferBaseAmount === null ? null : baseCurrency;
 
-        if (isMultiCurrency && sourceAccount.currency === 'VES') {
-          // Consultar lotes activos de VES
-          const activeVESLots = await db.lots
-            .where('currency').equals('VES')
-            .filter(l => l.remainingAmount > 0)
-            .toArray();
-
-          // Ordenar por fecha (FIFO)
-          activeVESLots.sort((a, b) => new Date(a.date) - new Date(b.date) || a.id - b.id);
-
-          const totalActiveVES = activeVESLots.reduce((sum, l) => sum + l.remainingAmount, 0);
-
-          if (totalActiveVES < parsedAmount) {
-            setError(`Saldo de lotes insuficiente en VES para realizar esta transferencia. Disponible: Bs. ${totalActiveVES.toLocaleString('es-VE', { minimumFractionDigits: 2 })}. Por favor registra una transferencia multimoneda de entrada primero.`);
-            return;
-          }
-
-          let remainingToConsume = parsedAmount;
-          for (const lot of activeVESLots) {
-            if (remainingToConsume <= 0) break;
-            const toConsume = Math.min(lot.remainingAmount, remainingToConsume);
-            lotConsumptions.push({
-              lotId: lot.id,
-              amountConsumed: toConsume,
-              rate: lot.effectiveRate
-            });
-            remainingToConsume -= toConsume;
-          }
-          costUSD = parsedReceived; // Recibimos USD, por ende, es el valor real
+        if (!isMultiCurrency && sourceAccount.currency === lotCurrency && Math.abs(parsedAmount - parsedReceived) > 0.005) {
+          setError(`Una transferencia entre cuentas ${lotCurrency} debe conservar el mismo monto.`);
+          return;
         }
 
         await db.transaction('rw', [db.accounts, db.transactions, db.lots], async () => {
+          if (sourceAccount.currency === lotCurrency) {
+            const consumed = await consumeCurrencyLots(db, { accountId: sourceAccount.id, currency: lotCurrency, amount: parsedAmount });
+            lotConsumptions = consumed.consumptions;
+            transferBaseAmount = consumed.baseAmount;
+            transferBaseCurrency = consumed.baseCurrency;
+          }
+
           // 1. Registrar salida
+          const targetBaseAmount = targetAccount.currency === lotCurrency
+            ? transferBaseAmount
+            : convertAmountToBase(parsedReceived, targetAccount.currency, baseCurrency, [], dbCurrencies);
+
           await db.transactions.add({
             date: new Date(date + 'T12:00:00'),
             type: 'TRANSFER_OUT',
@@ -393,8 +402,9 @@ export default function FAB() {
             accountId: sourceAccount.id,
             description: description.trim() || `Transferencia a ${targetAccount.name}`,
             transferId,
-            amountUSD: sourceAccount.currency === 'USD' ? parsedAmount : (sourceAccount.currency === 'VES' ? costUSD : null),
-            lotConsumption: lotConsumptions.length > 0 ? JSON.stringify(lotConsumptions) : null,
+            baseAmount: transferBaseAmount,
+            baseCurrency: transferBaseCurrency,
+            lotConsumption: stringifyLotConsumption(lotConsumptions),
             targetAmount: parsedReceived,
             targetCurrency: targetAccount.currency,
             targetAccountId: targetAccount.id,
@@ -410,43 +420,46 @@ export default function FAB() {
             accountId: targetAccount.id,
             description: description.trim() || `Transferencia desde ${sourceAccount.name}`,
             transferId,
-            amountUSD: targetAccount.currency === 'USD' ? parsedReceived : null,
+            baseAmount: targetBaseAmount,
+            baseCurrency: targetBaseAmount === null ? null : baseCurrency,
             targetAmount: parsedAmount,
             targetCurrency: sourceAccount.currency,
             targetAccountId: sourceAccount.id,
             exchangeRate: isMultiCurrency ? parsedReceived / parsedAmount : 1
           });
 
-          // 3. Crear Lote si compramos VES (USD -> VES)
-          if (isMultiCurrency && targetAccount.currency === 'VES') {
-            const effectiveRate = parsedReceived / parsedAmount;
-            await db.lots.add({
-              transactionId: transferId,
-              accountId: targetAccount.id,
-              currency: 'VES',
-              amount: parsedReceived,
-              remainingAmount: parsedReceived,
-              effectiveRate,
-              status: 'ACTIVE',
-              date: new Date(date + 'T12:00:00')
-            });
-          }
-
-          // 4. Consumir Lotes de VES si vendimos VES (VES -> USD)
-          if (isMultiCurrency && sourceAccount.currency === 'VES' && lotConsumptions.length > 0) {
-            for (const consumption of lotConsumptions) {
-              const lot = await db.lots.get(consumption.lotId);
-              if (lot) {
-                const newRemaining = Math.max(0, lot.remainingAmount - consumption.amountConsumed);
-                await db.lots.update(consumption.lotId, {
-                  remainingAmount: newRemaining,
-                  status: newRemaining === 0 ? 'EXHAUSTED' : 'ACTIVE'
+          if (targetAccount.currency === lotCurrency) {
+            if (sourceAccount.currency === lotCurrency) {
+              for (const consumption of lotConsumptions) {
+                await createCurrencyLot(db, {
+                  transactionId: transferId,
+                  accountId: targetAccount.id,
+                  currency: lotCurrency,
+                  amount: consumption.amountConsumed,
+                  costCurrency: consumption.costCurrency,
+                  costAmount: consumption.costConsumed,
+                  date: new Date(date + 'T12:00:00'),
+                  sourceType: 'TRANSFER',
                 });
               }
+            } else {
+              if (transferBaseAmount === null || transferBaseAmount <= 0) {
+                throw new Error(`La divisa ${sourceAccount.currency} no tiene una conversión válida a ${baseCurrency}.`);
+              }
+              await createCurrencyLot(db, {
+                transactionId: transferId,
+                accountId: targetAccount.id,
+                currency: lotCurrency,
+                amount: parsedReceived,
+                costCurrency: baseCurrency,
+                costAmount: transferBaseAmount,
+                date: new Date(date + 'T12:00:00'),
+                sourceType: 'TRANSFER',
+              });
             }
           }
 
-          // 5. Actualizar balances
+          // 4. Actualizar balances
           await db.accounts.update(sourceAccount.id, { balance: sourceAccount.balance - parsedAmount });
           await db.accounts.update(targetAccount.id, { balance: targetAccount.balance + parsedReceived });
         });
@@ -484,53 +497,20 @@ export default function FAB() {
         }
 
         let lotConsumptions = [];
-        let costUSD = null;
+        const amountWithFee = activeForm === 'GASTO' ? parsedAmount + feeAmountVal : parsedAmount;
+        let baseAmount = convertAmountToBase(amountWithFee, selectedAccount.currency, baseCurrency, [], dbCurrencies);
+        let transactionBaseCurrency = baseAmount === null ? null : baseCurrency;
         const transactionId = 'TX-' + Date.now();
 
-        // GASTO EN VES (Consumo FIFO)
-        if (activeForm === 'GASTO' && selectedAccount.currency === 'VES') {
-          // Consultar lotes activos de VES
-          const activeVESLots = await db.lots
-            .where('currency').equals('VES')
-            .filter(l => l.remainingAmount > 0)
-            .toArray();
-
-          // Ordenar por fecha (FIFO)
-          activeVESLots.sort((a, b) => new Date(a.date) - new Date(b.date) || a.id - b.id);
-
-          const totalActiveVES = activeVESLots.reduce((sum, l) => sum + l.remainingAmount, 0);
-
-          const totalGastoConFee = parsedAmount + feeAmountVal;
-          if (totalActiveVES < totalGastoConFee) {
-            setError(`Saldo de lotes insuficiente en VES para registrar este gasto con comisión. Requerido: Bs. ${totalGastoConFee.toLocaleString('es-VE', { minimumFractionDigits: 2 })} (Disponible: Bs. ${totalActiveVES.toLocaleString('es-VE', { minimumFractionDigits: 2 })}).`);
-            return;
-          }
-
-          let remainingToConsume = totalGastoConFee;
-          let calculatedUSD = 0;
-          for (const lot of activeVESLots) {
-            if (remainingToConsume <= 0) break;
-            const toConsume = Math.min(lot.remainingAmount, remainingToConsume);
-            lotConsumptions.push({
-              lotId: lot.id,
-              amountConsumed: toConsume,
-              rate: lot.effectiveRate
-            });
-            calculatedUSD += (toConsume / lot.effectiveRate);
-            remainingToConsume -= toConsume;
-          }
-          costUSD = parseFloat(calculatedUSD.toFixed(2));
-        }
-
-        // INGRESO EN VES (Creación de Lote)
         let parsedRate = null;
-        if (activeForm === 'INGRESO' && selectedAccount.currency === 'VES') {
+        if (activeForm === 'INGRESO' && selectedAccount.currency === lotCurrency) {
           parsedRate = parseFloat(exchangeRate);
           if (isNaN(parsedRate) || parsedRate <= 0) {
-            setError('Por favor ingresa una tasa de cambio válida para el ingreso en VES.');
+            setError(`Ingresa una tasa ${lotCurrency}/${baseCurrency} válida.`);
             return;
           }
-          costUSD = parseFloat((parsedAmount / parsedRate).toFixed(2));
+          baseAmount = parseFloat((parsedAmount / parsedRate).toFixed(6));
+          transactionBaseCurrency = baseCurrency;
         }
 
         // Validación de splits
@@ -555,7 +535,72 @@ export default function FAB() {
           }
         }
 
-        await db.transaction('rw', [db.accounts, db.transactions, db.lots, db.third_parties], async () => {
+        // Validación de splits por personas
+        let totalSplitAmount = 0;
+        let participantDeeds = [];
+        if (activeForm === 'GASTO' && isPersonSplit) {
+          if (personSplits.length === 0) {
+            setError('Debes añadir al menos un participante para dividir la cuenta.');
+            return;
+          }
+
+          const namesSeen = new Set();
+          for (let i = 0; i < personSplits.length; i++) {
+            const p = personSplits[i];
+            const pName = p.thirdPartyInput.trim();
+            if (!pName) {
+              setError(`Ingresa el nombre del participante #${i + 1}`);
+              return;
+            }
+            if (namesSeen.has(pName.toLowerCase())) {
+              setError(`El participante "${pName}" está duplicado.`);
+              return;
+            }
+            namesSeen.add(pName.toLowerCase());
+
+            let pAmount = 0;
+            if (personSplitMode === 'EQUITATIVO') {
+              pAmount = parsedAmount / (personSplits.length + 1);
+            } else {
+              pAmount = parseFloat(p.amount);
+              if (isNaN(pAmount) || pAmount <= 0) {
+                setError(`Monto inválido para el participante "${pName}"`);
+                return;
+              }
+            }
+
+            totalSplitAmount += pAmount;
+            participantDeeds.push({
+              name: pName,
+              selectedThirdPartyId: p.selectedThirdPartyId,
+              amount: pAmount
+            });
+          }
+
+          if (totalSplitAmount > parsedAmount + 0.01) {
+            setError(`La suma de las deudas (${fmt(totalSplitAmount)}) excede el monto total del gasto (${fmt(parsedAmount)})`);
+            return;
+          }
+
+          const yourPart = parsedAmount - totalSplitAmount;
+          if (yourPart < 0) {
+            setError('Tu parte no puede ser negativa.');
+            return;
+          }
+        }
+
+        await db.transaction('rw', [db.accounts, db.transactions, db.lots, db.third_parties, db.debts, db.debt_payments], async () => {
+          if (activeForm === 'GASTO' && selectedAccount.currency === lotCurrency) {
+            const consumed = await consumeCurrencyLots(db, {
+              accountId: selectedAccount.id,
+              currency: lotCurrency,
+              amount: parsedAmount + feeAmountVal,
+            });
+            lotConsumptions = consumed.consumptions;
+            baseAmount = consumed.baseAmount;
+            transactionBaseCurrency = consumed.baseCurrency;
+          }
+
           // Resolviendo el Tercero (Comercio)
           let resolvedThirdPartyId = selectedThirdPartyId ? parseInt(selectedThirdPartyId) : null;
           if (thirdPartyInput.trim()) {
@@ -584,10 +629,11 @@ export default function FAB() {
               const splitLotConsumptions = lotConsumptions.map(c => ({
                 lotId: c.lotId,
                 amountConsumed: c.amountConsumed * splitTotalProportion,
-                rate: c.rate
+                costConsumed: c.costConsumed * splitTotalProportion,
+                costCurrency: c.costCurrency,
               }));
 
-              const splitCostUSD = costUSD !== null ? costUSD * splitTotalProportion : null;
+              const splitBaseAmount = baseAmount !== null ? baseAmount * splitTotalProportion : null;
 
               const splitTag = tags.find(t => t.id === parseInt(split.tagId));
               const splitPillar = splitTag?.pillar || 'NEED';
@@ -602,11 +648,77 @@ export default function FAB() {
                 tagId: parseInt(split.tagId),
                 pillar: splitPillar,
                 description: split.description.trim() || description.trim(),
-                amountUSD: selectedAccount.currency === 'USD' ? splitTotalAmount : splitCostUSD,
+                baseAmount: splitBaseAmount,
+                baseCurrency: transactionBaseCurrency,
                 lotConsumption: splitLotConsumptions.length > 0 ? JSON.stringify(splitLotConsumptions) : null,
                 thirdPartyId: resolvedThirdPartyId,
                 instrumentId: selectedInstrumentId,
                 splitGroupId
+              });
+            }
+          } else if (activeForm === 'GASTO' && isPersonSplit) {
+            const splitGroupId = 'SPLIT-' + Date.now();
+            const yourPart = parsedAmount - totalSplitAmount;
+            const proportion = yourPart / parsedAmount;
+
+            const yourPartFee = feeAmountVal * proportion;
+            const yourPartTotalAmount = yourPart + yourPartFee;
+            const yourPartTotalProportion = yourPartTotalAmount / (parsedAmount + feeAmountVal);
+
+            // Proporción de lotes consumidos para tu parte
+            const yourLotConsumptions = lotConsumptions.map(c => ({
+              lotId: c.lotId,
+              amountConsumed: c.amountConsumed * yourPartTotalProportion,
+              costConsumed: c.costConsumed * yourPartTotalProportion,
+              costCurrency: c.costCurrency,
+            }));
+
+            const yourBaseAmount = baseAmount !== null ? baseAmount * yourPartTotalProportion : null;
+            const selectedTag = tags.find(t => t.id === parseInt(tagId));
+            const resolvedPillar = selectedTag?.pillar || 'NEED';
+
+            await db.transactions.add({
+              date: new Date(date + 'T12:00:00'),
+              type: 'OUT',
+              amount: yourPartTotalAmount,
+              fee: yourPartFee,
+              currency: selectedAccount.currency,
+              accountId: parseInt(accountId),
+              tagId: tagId ? parseInt(tagId) : null,
+              pillar: resolvedPillar,
+              description: `${description.trim()} (Tu parte)`,
+              baseAmount: yourBaseAmount,
+              baseCurrency: transactionBaseCurrency,
+              lotConsumption: yourLotConsumptions.length > 0 ? JSON.stringify(yourLotConsumptions) : null,
+              thirdPartyId: resolvedThirdPartyId,
+              instrumentId: selectedInstrumentId,
+              splitGroupId
+            });
+
+            // Registrar deudas por cobrar para cada participante
+            for (const participant of participantDeeds) {
+              let pThirdPartyId = participant.selectedThirdPartyId ? parseInt(participant.selectedThirdPartyId) : null;
+              if (!pThirdPartyId) {
+                const match = thirdParties.find(tp => tp.name.toLowerCase() === participant.name.toLowerCase());
+                if (match) {
+                  pThirdPartyId = match.id;
+                } else {
+                  pThirdPartyId = await db.third_parties.add({ name: participant.name });
+                }
+              }
+
+              await db.debts.add({
+                description: `${description.trim()} (Split)`,
+                thirdPartyId: pThirdPartyId,
+                type: 'COBRAR',
+                amount: participant.amount,
+                totalAmount: participant.amount,
+                paidAmount: 0,
+                currency: selectedAccount.currency,
+                status: 'ACTIVE',
+                dueDate: null,
+                splitGroupId,
+                createdAt: new Date()
               });
             }
           } else {
@@ -625,42 +737,28 @@ export default function FAB() {
               pillar: activeForm === 'GASTO' ? resolvedPillar : null,
               incomeSourceId: activeForm === 'INGRESO' ? resolvedSourceId : null,
               description: description.trim(),
-              amountUSD: selectedAccount.currency === 'USD' ? totalAmountToSave : costUSD,
+              baseAmount,
+              baseCurrency: transactionBaseCurrency,
               lotConsumption: lotConsumptions.length > 0 ? JSON.stringify(lotConsumptions) : null,
               thirdPartyId: resolvedThirdPartyId,
               instrumentId: selectedInstrumentId
             });
           }
 
-          // 2. Crear lote si es ingreso en VES
-          if (activeForm === 'INGRESO' && selectedAccount.currency === 'VES' && parsedRate) {
-            await db.lots.add({
+          if (activeForm === 'INGRESO' && selectedAccount.currency === lotCurrency && parsedRate) {
+            await createCurrencyLot(db, {
               transactionId,
               accountId: selectedAccount.id,
-              currency: 'VES',
+              currency: lotCurrency,
               amount: parsedAmount,
-              remainingAmount: parsedAmount,
-              effectiveRate: parsedRate,
-              status: 'ACTIVE',
-              date: new Date(date + 'T12:00:00')
+              costCurrency: baseCurrency,
+              costAmount: baseAmount,
+              date: new Date(date + 'T12:00:00'),
+              sourceType: 'INCOME',
             });
           }
 
-          // 3. Consumir lotes si es gasto en VES
-          if (activeForm === 'GASTO' && selectedAccount.currency === 'VES' && lotConsumptions.length > 0) {
-            for (const consumption of lotConsumptions) {
-              const lot = await db.lots.get(consumption.lotId);
-              if (lot) {
-                const newRemaining = Math.max(0, lot.remainingAmount - consumption.amountConsumed);
-                await db.lots.update(consumption.lotId, {
-                  remainingAmount: newRemaining,
-                  status: newRemaining === 0 ? 'EXHAUSTED' : 'ACTIVE'
-                });
-              }
-            }
-          }
-
-          // 4. Actualizar balance de la cuenta
+          // 3. Actualizar balance de la cuenta
           const delta = activeForm === 'GASTO' ? -(parsedAmount + feeAmountVal) : parsedAmount;
           await db.accounts.update(parseInt(accountId), { balance: selectedAccount.balance + delta });
         });
@@ -669,8 +767,9 @@ export default function FAB() {
 
       setSuccess(true);
       setTimeout(() => closeSheet(), 900);
-    } catch {
-      setError('Error al registrar la operación');
+    } catch (err) {
+      console.error('Error registering operation:', err);
+      setError(err.message || 'Error al registrar la operación');
     }
   };
 
@@ -692,6 +791,12 @@ export default function FAB() {
       icon: <ArrowDownLeft size={17} strokeWidth={1.6} />,
       label: 'Gasto',
       color: '#C58A14',
+    },
+    {
+      type: 'SPLIT_CALC',
+      icon: <Users size={17} strokeWidth={1.6} />,
+      label: 'Split Grupal',
+      color: '#647C78',
     },
     {
       type: 'CALCULADORA',
@@ -896,14 +1001,14 @@ export default function FAB() {
                         })()
                       )}
 
-                      {activeForm === 'INGRESO' && selectedAccountCurrency === 'VES' && (
+                      {activeForm === 'INGRESO' && selectedAccountCurrency === lotCurrency && (
                         <div className="py-2 border-b border-[rgba(0,0,0,0.07)] animate-fade-in">
-                          <p className="label-section mb-1">Tasa de Cambio (Bs/$)</p>
+                          <p className="label-section mb-1">Tasa de cambio ({lotCurrency}/{baseCurrency})</p>
                           <input
                             id="tx-rate"
                             type="number" step="0.0001" inputMode="decimal"
                             value={exchangeRate} onChange={e => setExchangeRate(e.target.value)}
-                            placeholder="Ej. 40.00"
+                            placeholder="0.00"
                             className="w-full text-[18px] font-mono text-noria-text bg-transparent outline-none placeholder:text-[rgba(26,26,26,0.15)]"
                             required
                           />
@@ -911,17 +1016,42 @@ export default function FAB() {
                       )}
 
                       {activeForm === 'GASTO' && (
-                        <div className="flex items-center space-x-2 pt-1 animate-fade-in">
-                          <input
-                            type="checkbox"
-                            id="is-split-checkbox"
-                            checked={isSplit}
-                            onChange={e => setIsSplit(e.target.checked)}
-                            className="h-4 w-4 border-[#1A1A1A] accent-[#4F8F58]"
-                          />
-                          <label htmlFor="is-split-checkbox" className="text-[12px] font-mono uppercase tracking-[0.05em] text-noria-text font-[500] cursor-pointer select-none">
-                            Dividir Gasto (Ticket Mixto)
-                          </label>
+                        <div className="flex flex-col gap-2 pt-1">
+                          {!isPersonSplit && (
+                            <div className="flex items-center space-x-2 animate-fade-in">
+                              <input
+                                type="checkbox"
+                                id="is-split-checkbox"
+                                checked={isSplit}
+                                onChange={e => setIsSplit(e.target.checked)}
+                                className="h-4 w-4 border-[#1A1A1A] accent-[#4F8F58]"
+                              />
+                              <label htmlFor="is-split-checkbox" className="text-[12px] font-mono uppercase tracking-[0.05em] text-noria-text font-[500] cursor-pointer select-none">
+                                Dividir Gasto (Ticket Mixto)
+                              </label>
+                            </div>
+                          )}
+                          {!isSplit && (
+                            <div className="flex items-center space-x-2 animate-fade-in">
+                              <input
+                                type="checkbox"
+                                id="is-person-split-checkbox"
+                                checked={isPersonSplit}
+                                onChange={e => {
+                                  setIsPersonSplit(e.target.checked);
+                                  if (e.target.checked) {
+                                    if (personSplits.length === 0 || (personSplits.length === 1 && !personSplits[0].thirdPartyInput)) {
+                                      setPersonSplits([{ thirdPartyInput: '', selectedThirdPartyId: '', amount: '' }]);
+                                    }
+                                  }
+                                }}
+                                className="h-4 w-4 border-[#1A1A1A] accent-[#4F8F58]"
+                              />
+                              <label htmlFor="is-person-split-checkbox" className="text-[12px] font-mono uppercase tracking-[0.05em] text-noria-text font-[500] cursor-pointer select-none">
+                                Dividir Cuenta (Con personas)
+                              </label>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1091,7 +1221,6 @@ export default function FAB() {
                           </div>
                         </div>
                       ))}
-
                       <button
                         type="button"
                         onClick={() => setSplits([...splits, { amount: '', tagId: '', pillar: 'NEED', description: '' }])}
@@ -1099,6 +1228,166 @@ export default function FAB() {
                       >
                         + Añadir línea
                       </button>
+                    </div>
+                  )}
+
+                  {/* Person Splits Breakdown */}
+                  {activeForm === 'GASTO' && isPersonSplit && (
+                    <div className="space-y-4 p-3 border border-[#1A1A1A]/30 rounded bg-[#F5F2ED] animate-fade-in">
+                      <div className="flex justify-between items-center">
+                        <p className="font-mono text-[10px] font-[700] uppercase tracking-[0.12em] text-noria-muted">Dividir con personas</p>
+                        
+                        {/* Mode Choice: EQUITATIVO / MANUAL */}
+                        <div className="flex border border-[#1A1A1A] font-mono text-[9px] uppercase tracking-wider">
+                          <button
+                            type="button"
+                            onClick={() => setPersonSplitMode('EQUITATIVO')}
+                            className={`px-2 py-1 ${personSplitMode === 'EQUITATIVO' ? 'bg-[#1A1A1A] text-[#F5F2ED]' : 'bg-transparent text-noria-text'}`}
+                          >
+                            Equitativo
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPersonSplitMode('MANUAL')}
+                            className={`px-2 py-1 border-l border-[#1A1A1A] ${personSplitMode === 'MANUAL' ? 'bg-[#1A1A1A] text-[#F5F2ED]' : 'bg-transparent text-noria-text'}`}
+                          >
+                            Manual
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Participants list */}
+                      {personSplits.map((p, index) => {
+                        const parsedTotal = parseFloat(amount) || 0;
+                        const autoAmount = personSplitMode === 'EQUITATIVO' 
+                          ? (parsedTotal / (personSplits.length + 1)) 
+                          : null;
+                        
+                        const displayAmount = personSplitMode === 'EQUITATIVO'
+                          ? autoAmount.toFixed(2)
+                          : p.amount;
+
+                        return (
+                          <div key={index} className="space-y-3 border-b border-[#1A1A1A]/10 pb-3 last:border-b-0 last:pb-0">
+                            <div className="flex justify-between items-center">
+                              <span className="text-[11px] font-mono font-[700] text-noria-muted uppercase">Participante #{index + 1}</span>
+                              {personSplits.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setPersonSplits(personSplits.filter((_, i) => i !== index))}
+                                  className="text-[10px] font-mono uppercase text-[#9F2F2D] font-bold"
+                                >
+                                  Eliminar
+                                </button>
+                              )}
+                            </div>
+
+                            {/* Autocomplete Name */}
+                            <div className="relative">
+                              <label className="text-[10px] font-mono uppercase text-noria-muted block mb-0.5">Nombre</label>
+                              <input
+                                type="text"
+                                value={p.thirdPartyInput}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  setPersonSplits(personSplits.map((item, i) => 
+                                    i === index ? { ...item, thirdPartyInput: val, selectedThirdPartyId: '' } : item
+                                  ));
+                                  setFocusedParticipantIndex(index);
+                                }}
+                                onFocus={() => setFocusedParticipantIndex(index)}
+                                onBlur={() => setTimeout(() => setFocusedParticipantIndex(null), 200)}
+                                placeholder="Ej. María, Carlos"
+                                className="muji-input text-[12px]"
+                                required
+                              />
+                              {focusedParticipantIndex === index && p.thirdPartyInput.trim() && (
+                                (() => {
+                                  const filtered = thirdParties.filter(tp => 
+                                    tp.name.toLowerCase().includes(p.thirdPartyInput.toLowerCase())
+                                  );
+                                  if (filtered.length === 0) return null;
+                                  return (
+                                    <div className="absolute left-0 right-0 z-50 mt-1 max-h-30 overflow-y-auto border border-[#1A1A1A] bg-[#F5F2ED] py-1 shadow-md">
+                                      {filtered.map(tp => (
+                                        <button
+                                          key={tp.id}
+                                          type="button"
+                                          onMouseDown={(e) => {
+                                            e.preventDefault();
+                                            setPersonSplits(personSplits.map((item, i) => 
+                                              i === index ? { ...item, thirdPartyInput: tp.name, selectedThirdPartyId: tp.id.toString() } : item
+                                            ));
+                                            setFocusedParticipantIndex(null);
+                                          }}
+                                          className="block w-full px-3 py-1 text-left text-[11px] hover:bg-[#1A1A1A]/10 text-noria-text font-mono"
+                                        >
+                                          {tp.name}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  );
+                                })()
+                              )}
+                            </div>
+
+                            {/* Amount input */}
+                            <div>
+                              <label className="text-[10px] font-mono uppercase text-noria-muted block mb-0.5">Monto ({selectedAccountCurrency})</label>
+                              <input
+                                type="number" step="0.01" placeholder="0.00"
+                                value={displayAmount}
+                                disabled={personSplitMode === 'EQUITATIVO'}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  setPersonSplits(personSplits.map((item, i) => 
+                                    i === index ? { ...item, amount: val } : item
+                                  ));
+                                }}
+                                className="muji-input text-[12px] disabled:bg-transparent disabled:text-noria-muted disabled:border-[rgba(26,26,26,0.16)]"
+                                required
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      {/* Add participant */}
+                      <button
+                        type="button"
+                        onClick={() => setPersonSplits([...personSplits, { thirdPartyInput: '', selectedThirdPartyId: '', amount: '' }])}
+                        className="w-full py-2 border border-dashed border-[#1A1A1A]/40 text-[11px] font-mono font-[700] uppercase tracking-wide text-[#647C78] hover:bg-[#1A1A1A]/5"
+                      >
+                        + Añadir persona
+                      </button>
+
+                      {/* Summary */}
+                      {(() => {
+                        const parsedTotal = parseFloat(amount) || 0;
+                        let totalShared = 0;
+                        if (personSplitMode === 'EQUITATIVO') {
+                          totalShared = (parsedTotal / (personSplits.length + 1)) * personSplits.length;
+                        } else {
+                          totalShared = personSplits.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+                        }
+                        const yourPart = Math.max(0, parsedTotal - totalShared);
+                        return (
+                          <div className="pt-2 border-t border-[#1A1A1A]/20 font-mono text-[11px] text-noria-text space-y-1">
+                            <div className="flex justify-between">
+                              <span>Total a dividir:</span>
+                              <span className="font-semibold">{formatAmountWithSymbol(parsedTotal, selectedAccountCurrency, dbCurrencies)}</span>
+                            </div>
+                            <div className="flex justify-between text-[#4F8F58]">
+                              <span>Deudas a cobrar:</span>
+                              <span>+{formatAmountWithSymbol(totalShared, selectedAccountCurrency, dbCurrencies)}</span>
+                            </div>
+                            <div className="flex justify-between font-bold border-t border-[#1A1A1A]/10 pt-1">
+                              <span>Tu parte real (Gasto):</span>
+                              <span>{formatAmountWithSymbol(yourPart, selectedAccountCurrency, dbCurrencies)}</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
 
@@ -1161,7 +1450,7 @@ export default function FAB() {
                                 if (accInstruments.length === 0) {
                                   return (
                                     <option key={`acc-${acc.id}`} value={`acc-${acc.id}`}>
-                                      {accLabel}
+                                      {accLabel} ({acc.currency})
                                     </option>
                                   );
                                 }
@@ -1190,7 +1479,7 @@ export default function FAB() {
                           </>
                         ) : (
                           <>
-                            <label className="muji-header block mb-1">Cuenta</label>
+                            <label className="muji-header block mb-1">Cuenta de destino</label>
                             <select id="tx-account" value={accountId} onChange={e => setAccountId(e.target.value)}
                               className="muji-input" required>
                               {activeAccounts.map(acc => {

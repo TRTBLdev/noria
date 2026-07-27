@@ -12,9 +12,14 @@ import CategoryIcon from '../components/CategoryIcon.jsx';
 import IncomeTypeIcon, { getIncomeType } from '../components/IncomeTypeIcon.jsx';
 import IncomeTypeTag from '../components/IncomeTypeTag.jsx';
 import { Plus, Check, ChevronDown, ChevronUp } from 'lucide-react';
+import CurrencyAmount from '../components/CurrencyAmount.jsx';
+import { convertAmountToBase } from '../utils/currency.js';
 
 import { useNavigate } from 'react-router-dom';
-import { formatNumber, formatCurrency } from '../utils/format';
+import { formatNumber, formatCurrency, formatAmountWithSymbol } from '../utils/format';
+import DebtPaymentSheet from '../components/DebtPaymentSheet.jsx';
+import { consumeCurrencyLots, createCurrencyLot, stringifyLotConsumption } from '../db/currencyLots.js';
+import { addAnchorTemplateWithCurrentInstances } from '../db/anchorRecurrence.js';
 
 export default function HomeScreen() {
   const navigate = useNavigate();
@@ -24,7 +29,6 @@ export default function HomeScreen() {
 
   const [anchorName, setAnchorName] = useState('');
   const [anchorAmount, setAnchorAmount] = useState('');
-  const [anchorPillar, setAnchorPillar] = useState('NEED');
   const [anchorTagId, setAnchorTagId] = useState('');
   const [anchorAccountId, setAnchorAccountId] = useState('');
   const [anchorDueDate, setAnchorDueDate] = useState('');
@@ -43,9 +47,14 @@ export default function HomeScreen() {
   // Estados para el Modal de Ejecución de Gastos (NEED/WANT Anchor)
   const [payingGeneralAnchor, setPayingGeneralAnchor] = useState(null);
   const [generalPayAccountId, setGeneralPayAccountId] = useState('');
+  const [generalPayDate, setGeneralPayDate] = useState('');
+
+  const [payingDebtAnchor, setPayingDebtAnchor] = useState(null); // { debt, defaultSettle }
 
   const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
-  const baseCurrency = baseCurrencyObj?.value || 'USD';
+  const lotCurrencyObj = useLiveQuery(() => db.app_config.get('lotCurrency'));
+  const baseCurrency = baseCurrencyObj?.value || '';
+  const lotCurrency = lotCurrencyObj?.value || '';
 
   const accounts = useLiveQuery(() => db.accounts.toArray()) || [];
   const institutions = useLiveQuery(() => db.institutions.toArray()) || [];
@@ -58,45 +67,24 @@ export default function HomeScreen() {
   const tags = useLiveQuery(() => db.tags.toArray()) || [];
   const lots = useLiveQuery(() => db.lots.toArray()) || [];
   const dbCurrencies = useLiveQuery(() => db.currencies.toArray()) || [];
+  const debts = useLiveQuery(() => db.debts.toArray()) || [];
+  const instruments = useLiveQuery(() => db.instruments.toArray()) || [];
 
   const startOfMonth = new Date(); startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0);
-  const thisMonthIncomes = transactions.filter(t => new Date(t.date) >= startOfMonth && t.type === 'IN');
+  const thisMonthIncomes = transactions.filter(t =>
+    new Date(t.date) >= startOfMonth && t.type === 'IN' && t.cashflowKind !== 'LOAN_PROCEEDS'
+  );
 
   const activeAccounts = accounts.filter(a => !a.isArchived);
+  const excludedCurrencies = [...new Set(activeAccounts
+    .filter(account => Math.abs(account.balance) > 0.005 && convertAmountToBase(account.balance, account.currency, baseCurrency, lots, dbCurrencies) === null)
+    .map(account => account.currency))];
 
-  const getAccountBalanceInUSD = (acc) => {
-    if (acc.currency === 'USD' || acc.currency === 'USDT' || acc.currency === 'USDC') {
-      return acc.balance;
-    }
-    const currencyLots = lots.filter(l => l.currency === acc.currency && l.remainingAmount > 0);
-    const totalRemaining = currencyLots.reduce((sum, l) => sum + l.remainingAmount, 0);
-    const totalUSD = currencyLots.reduce((sum, l) => sum + (l.remainingAmount / l.effectiveRate), 0);
-    if (totalUSD > 0) {
-      const avgRate = totalRemaining / totalUSD;
-      return acc.balance / avgRate;
-    }
-    if (acc.currency === 'VES') return acc.balance / 40.0;
-    if (acc.currency === 'EUR') return acc.balance * 1.08;
-    return acc.balance;
+  const getAccountBalanceInBase = (acc) => {
+    return convertAmountToBase(acc.balance, acc.currency, baseCurrency, lots, dbCurrencies) ?? 0;
   };
 
-  const convertAmountToUSD = (amt, currency) => {
-    if (currency === 'USD' || currency === 'USDT' || currency === 'USDC' || !currency) {
-      return amt;
-    }
-    const currencyLots = lots.filter(l => l.currency === currency && l.remainingAmount > 0);
-    const totalRemaining = currencyLots.reduce((sum, l) => sum + l.remainingAmount, 0);
-    const totalUSD = currencyLots.reduce((sum, l) => sum + (l.remainingAmount / l.effectiveRate), 0);
-    if (totalUSD > 0) {
-      const avgRate = totalRemaining / totalUSD;
-      return amt / avgRate;
-    }
-    if (currency === 'VES') return amt / 40.0;
-    if (currency === 'EUR') return amt * 1.08;
-    return amt;
-  };
-
-  const aggregatedBalance = activeAccounts.reduce((sum, acc) => sum + getAccountBalanceInUSD(acc), 0);
+  const aggregatedBalance = activeAccounts.reduce((sum, acc) => sum + getAccountBalanceInBase(acc), 0);
 
   // Estado para la burbuja del día seleccionado en la Línea de Flotación Semanal
   const [selectedDate, setSelectedDate] = useState(null);
@@ -125,8 +113,12 @@ export default function HomeScreen() {
   const endOfWeek = new Date(weekDays[6]);
   endOfWeek.setHours(23, 59, 59, 999);
 
-  const incomeSum = thisMonthIncomes.reduce((sum, inc) => sum + (inc.amountUSD ?? inc.amount), 0);
-
+  const incomeSum = thisMonthIncomes.reduce((sum, inc) => {
+    const value = inc.baseCurrency === baseCurrency && Number.isFinite(inc.baseAmount)
+      ? inc.baseAmount
+      : convertAmountToBase(inc.amount, inc.currency, baseCurrency, lots, dbCurrencies);
+    return sum + (value ?? 0);
+  }, 0);
   // Lógica de auto-renovación mensual de plantillas e instancias de cobro
   useEffect(() => {
     if (anchors.length === 0) return;
@@ -288,7 +280,7 @@ export default function HomeScreen() {
                   name: temp.name,
                   type: temp.type || 'FIXED',
                   amount: temp.amount,
-                  currency: temp.currency || 'USD',
+                  currency: temp.currency || baseCurrency,
                   accountId: temp.accountId || null,
                   macetaId: temp.macetaId || null,
                   nextDueDate: projDate,
@@ -366,15 +358,15 @@ export default function HomeScreen() {
     return d >= startM && d <= endM;
   });
 
-  const totalAllocatedToMacetas = macetaAllocations.reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
+  const totalAllocatedToMacetas = macetaAllocations.reduce((sum, a) => sum + convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies), 0);
 
   const pendingGastos = thisMonthInstances
     .filter(a => a.status !== 'PAID' && (a.pillar === 'NEED' || a.pillar === 'WANT'))
-    .reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
+    .reduce((sum, a) => sum + convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies), 0);
 
   const pendingAhorros = thisMonthInstances
     .filter(a => a.status !== 'PAID' && a.pillar === 'SAVE')
-    .reduce((sum, a) => sum + convertAmountToUSD(a.amount, a.currency), 0);
+    .reduce((sum, a) => sum + convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies), 0);
 
   const disponibleDelMes = Math.max(0, aggregatedBalance - totalAllocatedToMacetas - pendingGastos - pendingAhorros);
 
@@ -385,6 +377,22 @@ export default function HomeScreen() {
   const getTag = (id, kind = 'EXPENSE') => tags.find(t => t.id === id && (t.kind || 'EXPENSE') === kind) || null;
 
   const handlePayAnchor = async (anchor) => {
+    // Debt installment anchor → open DebtPaymentSheet
+    if (anchor.debtId) {
+      let debt = debts.find(d => d.id === anchor.debtId);
+      if (!debt) {
+        debt = await db.debts.get(anchor.debtId);
+      }
+      if (debt) {
+        // Enrich debt with debtAnchors so the sheet can detect the pending one
+        const debtAnchors = anchors
+          .filter(a => a.debtId === debt.id)
+          .sort((a, b) => (a.installmentNumber ?? 0) - (b.installmentNumber ?? 0));
+        setPayingDebtAnchor({ debt: { ...debt, debtAnchors }, defaultSettle: false });
+      }
+      return;
+    }
+
     if (anchor.pillar === 'SAVE' || anchor.type === 'SAVE') {
       setPayingSaveAnchor(anchor);
       setSavePayMode('ALLOC');
@@ -402,6 +410,7 @@ export default function HomeScreen() {
 
     setPayingGeneralAnchor(anchor);
     setGeneralPayAccountId(anchor.accountId ? anchor.accountId.toString() : (activeAccounts[0]?.id.toString() || ''));
+    setGeneralPayDate('');
   };
 
   const handleConfirmGeneralPay = async (e) => {
@@ -410,29 +419,50 @@ export default function HomeScreen() {
     const resolvedAccountId = parseInt(generalPayAccountId);
     const account = accounts.find(a => a.id === resolvedAccountId);
     if (!account) { alert('Cuenta no encontrada'); return; }
+    if (!generalPayDate) { alert('Selecciona la fecha en que realizaste el pago.'); return; }
+    const paidAt = new Date(`${generalPayDate}T12:00:00`);
+    const paymentCurrency = payingGeneralAnchor.currency || account.currency;
+    if (paymentCurrency !== account.currency) { alert('El gasto y la cuenta usan monedas distintas. Registra primero la conversión.'); return; }
 
     try {
-      await db.transaction('rw', [db.accounts, db.transactions, db.anchors], async () => {
+      await db.transaction('rw', [db.accounts, db.transactions, db.anchors, db.lots], async () => {
+        let baseAmount = convertAmountToBase(payingGeneralAnchor.amount, paymentCurrency, baseCurrency, [], dbCurrencies);
+        let transactionBaseCurrency = baseAmount === null ? null : baseCurrency;
+        let lotConsumption = null;
+        if (account.currency === lotCurrency) {
+          const consumed = await consumeCurrencyLots(db, {
+            accountId: resolvedAccountId,
+            currency: lotCurrency,
+            amount: payingGeneralAnchor.amount,
+          });
+          baseAmount = consumed.baseAmount;
+          transactionBaseCurrency = consumed.baseCurrency;
+          lotConsumption = stringifyLotConsumption(consumed.consumptions);
+        }
+
         await db.transactions.add({
-          date: new Date(),
+          date: paidAt,
           type: 'OUT',
           amount: payingGeneralAnchor.amount,
-          currency: payingGeneralAnchor.currency || 'USD',
+          currency: paymentCurrency,
           accountId: resolvedAccountId,
           tagId: payingGeneralAnchor.tagId || null,
           pillar: payingGeneralAnchor.pillar,
           incomeSourceId: null,
           anchorId: payingGeneralAnchor.id,
-          description: `Ancla: ${payingGeneralAnchor.name}`
+          description: `Ancla: ${payingGeneralAnchor.name}`,
+          baseAmount,
+          baseCurrency: transactionBaseCurrency,
+          lotConsumption,
         });
 
         await db.accounts.update(resolvedAccountId, { balance: account.balance - payingGeneralAnchor.amount });
-        await db.anchors.update(payingGeneralAnchor.id, { status: 'PAID' });
+        await db.anchors.update(payingGeneralAnchor.id, { status: 'PAID', paidAt });
       });
 
       setPayingGeneralAnchor(null);
-    } catch {
-      alert('Error al registrar el pago del gasto programado.');
+    } catch (err) {
+      alert(err.message || 'Error al registrar el pago del gasto programado.');
     }
   };
 
@@ -484,7 +514,7 @@ export default function HomeScreen() {
           macetaId: maceta.id,
           accountId,
           amount,
-          currency: maceta.currency || 'USD',
+          currency: maceta.currency || baseCurrency,
           locked: false
         });
       }
@@ -580,20 +610,67 @@ export default function HomeScreen() {
           macetaId: maceta.id,
           accountId: toId,
           amount: amountRec,
-          currency: maceta.currency || 'USD',
+          currency: maceta.currency || baseCurrency,
           locked: false
         });
       }
 
       const totalAllocated = updatedAllocations.reduce((sum, a) => sum + a.amount, 0);
 
-      await db.transaction('rw', [db.accounts, db.transactions, db.maceta_allocations, db.macetas, db.anchors], async () => {
+      await db.transaction('rw', [db.accounts, db.transactions, db.maceta_allocations, db.macetas, db.anchors, db.lots], async () => {
+        let transferConsumptions = [];
+        let transferBaseAmount = convertAmountToBase(amountSent, fromAccount.currency, baseCurrency, [], dbCurrencies);
+        let transferBaseCurrency = transferBaseAmount === null ? null : baseCurrency;
+        if (fromAccount.currency === lotCurrency) {
+          if (toAccount.currency === lotCurrency && Math.abs(amountSent - amountRec) > 0.005) {
+            throw new Error(`Una transferencia entre cuentas ${lotCurrency} debe conservar el mismo monto.`);
+          }
+          const consumed = await consumeCurrencyLots(db, { accountId: fromId, currency: lotCurrency, amount: amountSent });
+          transferConsumptions = consumed.consumptions;
+          transferBaseAmount = consumed.baseAmount;
+          transferBaseCurrency = consumed.baseCurrency;
+        }
+
+        if (toAccount.currency === lotCurrency) {
+          if (fromAccount.currency === lotCurrency) {
+            for (const consumption of transferConsumptions) {
+              await createCurrencyLot(db, {
+                transactionId: transferId,
+                accountId: toId,
+                currency: lotCurrency,
+                amount: consumption.amountConsumed,
+                costCurrency: consumption.costCurrency,
+                costAmount: consumption.costConsumed,
+                date: new Date(),
+                sourceType: 'SAVINGS_TRANSFER',
+              });
+            }
+          } else {
+            if (transferBaseAmount === null || transferBaseAmount <= 0) {
+              throw new Error(`La divisa ${fromAccount.currency} no tiene una conversión válida a ${baseCurrency}.`);
+            }
+            await createCurrencyLot(db, {
+              transactionId: transferId,
+              accountId: toId,
+              currency: lotCurrency,
+              amount: amountRec,
+              costCurrency: baseCurrency,
+              costAmount: transferBaseAmount,
+              date: new Date(),
+              sourceType: 'SAVINGS_TRANSFER',
+            });
+          }
+        }
+
         // 1. Debitar origen
         await db.accounts.update(fromId, { balance: fromAccount.balance - amountSent });
         // 2. Acreditar destino
         await db.accounts.update(toId, { balance: toAccount.balance + amountRec });
 
         // 3. Registrar salidas/entradas de transferencia
+        const targetBaseAmount = toAccount.currency === lotCurrency
+          ? transferBaseAmount
+          : convertAmountToBase(amountRec, toAccount.currency, baseCurrency, [], dbCurrencies);
         await db.transactions.add({
           date: new Date(),
           type: 'TRANSFER_OUT',
@@ -601,7 +678,10 @@ export default function HomeScreen() {
           currency: fromAccount.currency,
           accountId: fromId,
           description: `Transferencia ahorro meta: ${maceta.name}`,
-          transferId
+          transferId,
+          baseAmount: transferBaseAmount,
+          baseCurrency: transferBaseCurrency,
+          lotConsumption: stringifyLotConsumption(transferConsumptions),
         });
 
         await db.transactions.add({
@@ -611,7 +691,9 @@ export default function HomeScreen() {
           currency: toAccount.currency,
           accountId: toId,
           description: `Ahorro asignado meta: ${maceta.name}`,
-          transferId
+          transferId,
+          baseAmount: targetBaseAmount,
+          baseCurrency: targetBaseAmount === null ? null : baseCurrency,
         });
 
         // 4. Actualizar allocations de maceta
@@ -635,7 +717,7 @@ export default function HomeScreen() {
 
       setPayingSaveAnchor(null);
     } catch (err) {
-      setSavePayError('Error al procesar la transferencia del ahorro.');
+      setSavePayError(err.message || 'Error al procesar la transferencia del ahorro.');
     }
   };
 
@@ -644,34 +726,21 @@ export default function HomeScreen() {
     const amt = parseFloat(anchorAmount);
     if (isNaN(amt) || amt <= 0) { setAnchorError('Monto inválido'); return; }
     if (!anchorAccountId) { setAnchorError('Selecciona una cuenta'); return; }
+    const selectedTag = tags.find(tag => tag.id === parseInt(anchorTagId));
+    if (!selectedTag?.pillar) { setAnchorError('Selecciona una categoría con pilar'); return; }
     const selectedAcc = accounts.find(a => a.id.toString() === anchorAccountId);
-    await db.anchors.add({
+    await addAnchorTemplateWithCurrentInstances(db, {
       name: anchorName.trim(), type: 'FIXED', amount: amt, currency: selectedAcc.currency,
       accountId: parseInt(anchorAccountId),
-      tagId: anchorTagId ? parseInt(anchorTagId) : null,
+      tagId: selectedTag.id,
       nextDueDate: anchorDueDate ? new Date(anchorDueDate + 'T12:00:00') : null,
-      status: 'PENDING', pillar: anchorPillar,
-      isTemplate: true, isArchived: false
+      status: 'PENDING', pillar: selectedTag.pillar
     });
     setShowAddAnchorModal(false);
     setAnchorName(''); setAnchorAmount(''); setAnchorDueDate(''); setAnchorAccountId(''); setAnchorTagId('');
   };
 
-  const fmt = (n, currencyCode = 'USD') => formatCurrency(n, currencyCode, dbCurrencies);
-
-  const getCurrencySymbol = (code) => {
-    if (code === 'VES') return 'Bs';
-    if (code === 'EUR') return '€';
-    if (code === 'USDT' || code === 'USDC') return code;
-    return '$';
-  };
-
-  const formatAmountWithSymbol = (amt, code) => {
-    const symbol = getCurrencySymbol(code);
-    const formatted = fmt(amt);
-    if (code === 'VES') return `${formatted} ${symbol}`;
-    return `${symbol}${formatted}`;
-  };
+  const fmt = (n) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const isAnchorOverdue = (anchor) => {
     if (!anchor.nextDueDate) return false;
@@ -681,7 +750,7 @@ export default function HomeScreen() {
     const startOfCurrentMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     return dateObj < startOfCurrentMonth;
   };
-  const heroAmount = `$${fmt(disponibleDelMes)}`;
+  const heroAmount = <CurrencyAmount amount={disponibleDelMes} currencyCode={baseCurrency} />;
   const heroFontSize = heroAmount.length > 11 ? '50px' : heroAmount.length > 9 ? '58px' : '66px';
 
   return (
@@ -689,6 +758,12 @@ export default function HomeScreen() {
       <Header title="Noria" />
 
       <main className="px-6 max-w-md mx-auto">
+
+        {excludedCurrencies.length > 0 && (
+          <p className="mt-4 border border-[#B8860B] p-3 text-[10px] leading-relaxed text-[#8A6508]">
+            No incluidos en los totales de {baseCurrency}: {excludedCurrencies.join(', ')}. Se muestran por separado porque no tienen paridad ni seguimiento por lotes.
+          </p>
+        )}
 
         {/* ── Balance hero — Disponible del Mes Brutalista ── */}
         <section className="py-7 cursor-pointer" id="balance-hero" onClick={() => setShowHeroDetail(!showHeroDetail)}>
@@ -714,24 +789,24 @@ export default function HomeScreen() {
               <div className="space-y-1.5 text-[11px]">
                 <div className="flex justify-between gap-3">
                   <span>Patrimonio Total:</span>
-                  <span>${fmt(aggregatedBalance)}</span>
+                  <CurrencyAmount amount={aggregatedBalance} currencyCode={baseCurrency} />
                 </div>
                 <div className="flex justify-between gap-3">
                   <span>(-) Asignado a Metas:</span>
-                  <span>-${fmt(totalAllocatedToMacetas)}</span>
+                  <CurrencyAmount amount={totalAllocatedToMacetas} currencyCode={baseCurrency} prefix="-" />
                 </div>
                 <div className="flex justify-between gap-3">
                   <span>(-) Gastos Pendientes:</span>
-                  <span>-${fmt(pendingGastos)}</span>
+                  <CurrencyAmount amount={pendingGastos} currencyCode={baseCurrency} prefix="-" />
                 </div>
                 <div className="flex justify-between gap-3">
                   <span>(-) Ahorros Pend.:</span>
-                  <span>-${fmt(pendingAhorros)}</span>
+                  <CurrencyAmount amount={pendingAhorros} currencyCode={baseCurrency} prefix="-" />
                 </div>
               </div>
               <div className="border-t border-[#1A1A1A] mt-4 pt-3 flex justify-between gap-3 text-[12px] font-[700]">
                 <span>Disponible Neto:</span>
-                <span>${fmt(disponibleDelMes)}</span>
+                <CurrencyAmount amount={disponibleDelMes} currencyCode={baseCurrency} />
               </div>
             </div>
           )}
@@ -876,13 +951,29 @@ export default function HomeScreen() {
                         ) : (
                           <PillarTag pillar={anchor.pillar} size="xs" />
                         )}
+                        {(() => {
+                          if (anchor.debtId) {
+                            const debt = debts.find(d => d.id === anchor.debtId);
+                            if (debt) {
+                              const isPagar = debt.type === 'PAGAR';
+                              const label = isPagar ? 'PAGO PRÉSTAMO' : 'COBRO DEUDA';
+                              const color = isPagar ? '#9F2F2D' : '#4F8F58';
+                              return (
+                                <span className="border px-1.5 py-0.5 text-[8px] font-mono font-[700] uppercase tracking-wider leading-none" style={{ borderColor: color, color }}>
+                                  {label}
+                                </span>
+                              );
+                            }
+                          }
+                          return null;
+                        })()}
                         <CategoryTag name={category?.name} size="xs" />
                       </div>
                     </div>
                   </div>
                   <div className="flex items-center space-x-3">
                     <p className="text-[14px] font-mono font-[700] text-noria-text flex items-baseline">
-                      <span>{formatAmountWithSymbol(anchor.amount, anchor.currency)}</span>
+                      <span><CurrencyAmount amount={anchor.amount} currencyCode={anchor.currency} /></span>
                       {isAnchorOverdue(anchor) ? (
                         <span className="text-[8px] font-mono font-bold text-[#9F2F2D] ml-1.5">[VENCIDO]</span>
                       ) : (
@@ -912,7 +1003,7 @@ export default function HomeScreen() {
                     <p className="text-[15px] font-[400] text-noria-text/50 line-through">{anchor.name}</p>
                   </div>
                   <p className="text-[14px] font-mono font-[700] text-noria-text/50 flex items-baseline line-through">
-                    <span>{formatAmountWithSymbol(anchor.amount, anchor.currency)}</span>
+                    <span><CurrencyAmount amount={anchor.amount} currencyCode={anchor.currency} /></span>
                     <span className="text-[8px] font-mono font-bold text-[#4F8F58] ml-1.5 no-underline">[OK]</span>
                   </p>
                 </div>
@@ -924,16 +1015,16 @@ export default function HomeScreen() {
             <div className="mt-4 border-2 border-[#1A1A1A] p-3 font-mono text-[9px] uppercase tracking-[0.1em] bg-transparent">
               <div className="flex justify-between items-center text-[#1A1A1A]/50 font-[700] pb-2 border-b border-[#1A1A1A]/10">
                 <span>ESTIMADO VARIABLE SEMANAL</span>
-                <span className="font-sans text-[11px] font-bold text-noria-text">~ {formatAmountWithSymbol(totalWeeklyVariableBudget, baseCurrency)}</span>
+                <span className="font-sans text-[11px] font-bold text-noria-text"><CurrencyAmount amount={totalWeeklyVariableBudget} currencyCode={baseCurrency} /></span>
               </div>
               <div className="divide-y divide-[#1A1A1A]/5 text-[9px] pt-1">
                 <div className="flex justify-between items-center py-1.5">
                   <span className="text-[#1A1A1A]/75 pl-2 border-l-2 border-[#4F8F58]">NECESIDADES</span>
-                  <span className="font-sans font-bold">~ {formatAmountWithSymbol(weeklyNeedsVariable, baseCurrency)}</span>
+                  <span className="font-sans font-bold"><CurrencyAmount amount={weeklyNeedsVariable} currencyCode={baseCurrency} /></span>
                 </div>
                 <div className="flex justify-between items-center py-1.5">
                   <span className="text-[#1A1A1A]/75 pl-2 border-l-2 border-[#3F7F9C]">DESEOS</span>
-                  <span className="font-sans font-bold">~ {formatAmountWithSymbol(weeklyWantsVariable, baseCurrency)}</span>
+                  <span className="font-sans font-bold"><CurrencyAmount amount={weeklyWantsVariable} currencyCode={baseCurrency} /></span>
                 </div>
               </div>
             </div>
@@ -958,9 +1049,13 @@ export default function HomeScreen() {
             <div className="flex items-baseline space-x-3">
               <h3 className="text-[17px] font-[600] text-noria-text leading-tight">Ingresos del Mes</h3>
               {incomeSum > 0 && (
-                <span className="text-[13px] font-mono font-[700]" style={{ color: '#647C78' }}>
-                  +${fmt(incomeSum)}
-                </span>
+                <CurrencyAmount 
+                  amount={incomeSum} 
+                  currencyCode={baseCurrency} 
+                  prefix="+" 
+                  className="text-[13px] font-mono font-[700]" 
+                  style={{ color: '#647C78' }} 
+                />
               )}
             </div>
             {showIncomes
@@ -986,15 +1081,33 @@ export default function HomeScreen() {
                           <IncomeTypeIcon incomeTypes={incomeTypes} incomeTypeId={source?.incomeTypeId} legacyType={source?.type} size={15} />
                         </div>
                         <div className="min-w-0">
-                          <p className="text-[15px] font-[500] text-noria-text truncate">{inc.description || 'Ingreso'}</p>
+                          <p className="text-[15px] font-[500] text-noria-text truncate">
+                            {(inc.description || 'Ingreso').replace(/^(?:Ingreso\s*)?Préstamo\s*Recibido:\s*/i, '').replace(/^Préstamo:\s*/i, '')}
+                          </p>
                           <div className="mt-1 flex flex-wrap items-center gap-1.5">
                             {source?.name && <p className="label-section">{source.name}</p>}
                             {incomeType?.name && <IncomeTypeTag name={incomeType.name} />}
+                            {(() => {
+                              if (inc.debtId) {
+                                const debt = debts.find(d => d.id === inc.debtId);
+                                if (debt) {
+                                  const isPagar = debt.type === 'PAGAR';
+                                  const label = isPagar ? 'PRÉSTAMO' : 'COBRO DEUDA';
+                                  const color = isPagar ? '#9F2F2D' : '#4F8F58';
+                                  return (
+                                    <span className="border px-1.5 py-0.5 text-[8px] font-mono font-[700] uppercase tracking-wider leading-none" style={{ borderColor: color, color }}>
+                                      {label}
+                                    </span>
+                                  );
+                                }
+                              }
+                              return null;
+                            })()}
                           </div>
                         </div>
                       </div>
                       <p className="text-[15px] font-mono font-[700]" style={{ color: '#647C78' }}>
-                        +${fmt(inc.amount)}
+                        +<CurrencyAmount amount={inc.amount} currencyCode={inc.currency || baseCurrency} />
                       </p>
                     </div>
                   );
@@ -1051,30 +1164,13 @@ export default function HomeScreen() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="muji-header block mb-1">Cuenta</label>
-                  <select id="anchor-account" value={anchorAccountId}
-                    onChange={e => setAnchorAccountId(e.target.value)} className="muji-input" required>
-                    <option value="" disabled>Selecciona...</option>
-                    {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="muji-header block mb-2">Pilar</label>
-                  <div className="flex space-x-1">
-                    {[['NEED', 'NEC', '#4F8F58'], ['WANT', 'DES', '#3F7F9C'], ['SAVE', 'AHO', '#C58A14']].map(([val, short, col]) => (
-                      <button key={val} type="button" onClick={() => setAnchorPillar(val)}
-                        className="flex-1 py-1 text-[9px] font-mono font-[700] uppercase border transition-all"
-                        style={{
-                          borderColor: anchorPillar === val ? col : 'rgba(26,26,26,0.10)',
-                          color: anchorPillar === val ? col : 'rgba(26,26,26,0.35)',
-                        }}>
-                        {short}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+              <div>
+                <label className="muji-header block mb-1">Cuenta</label>
+                <select id="anchor-account" value={anchorAccountId}
+                  onChange={e => setAnchorAccountId(e.target.value)} className="muji-input" required>
+                  <option value="" disabled>Selecciona...</option>
+                  {activeAccounts.map(acc => <option key={acc.id} value={acc.id}>{acc.name} ({acc.currency})</option>)}
+                </select>
               </div>
 
               <CategorySelect
@@ -1084,6 +1180,8 @@ export default function HomeScreen() {
                 tags={tags}
                 kind="EXPENSE"
                 className="max-w-[320px]"
+                required
+                allowCreate={false}
               />
 
               {anchorError && <p className="text-[12px] font-[500]" style={{ color: '#C58A14' }}>{anchorError}</p>}
@@ -1120,7 +1218,7 @@ export default function HomeScreen() {
                 <p className="text-[11px] font-[500]" style={{ color: '#C58A14' }}>META DE AHORRO PENDIENTE</p>
                 <div className="flex justify-between items-center mt-1">
                   <span className="text-[15px] font-[400] text-noria-text">{payingSaveAnchor.name}</span>
-                  <span className="text-[15px] font-[500] text-noria-text">${fmt(payingSaveAnchor.amount)}</span>
+                  <CurrencyAmount amount={payingSaveAnchor.amount} currencyCode={baseCurrency} className="text-[15px] font-[500] text-noria-text" />
                 </div>
               </div>
 
@@ -1235,7 +1333,7 @@ export default function HomeScreen() {
 
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="muji-header block mb-1">Monto Enviado ({accounts.find(a => a.id === parseInt(transFromAccountId))?.currency || 'USD'})</label>
+                      <label className="muji-header block mb-1">Monto Enviado ({accounts.find(a => a.id === parseInt(transFromAccountId))?.currency || baseCurrency})</label>
                       <input
                         type="number"
                         className="muji-input"
@@ -1244,7 +1342,7 @@ export default function HomeScreen() {
                       />
                     </div>
                     <div>
-                      <label className="muji-header block mb-1">Monto Recibido ({accounts.find(a => a.id === parseInt(transToAccountId))?.currency || 'USD'})</label>
+                      <label className="muji-header block mb-1">Monto Recibido ({accounts.find(a => a.id === parseInt(transToAccountId))?.currency || baseCurrency})</label>
                       <input
                         type="number"
                         step="0.01"
@@ -1306,7 +1404,7 @@ export default function HomeScreen() {
               <div className="bg-[rgba(26,26,26,0.02)] p-4 rounded border border-[rgba(26,26,26,0.04)] text-center">
                 <p className="text-[12px] text-noria-muted uppercase tracking-wider">Monto a Debitar</p>
                 <p className="text-[28px] font-[500] text-noria-text mt-1">
-                  ${fmt(payingGeneralAnchor.amount)}
+                  <CurrencyAmount amount={payingGeneralAnchor.amount} currencyCode={payingGeneralAnchor.currency || baseCurrency} />
                 </p>
                 <p className="text-[13px] text-noria-text/60 mt-1">
                   Gasto: <span className="font-[500] text-noria-text">{payingGeneralAnchor.name}</span>
@@ -1333,6 +1431,11 @@ export default function HomeScreen() {
                 </select>
               </div>
 
+              <div>
+                <label className="muji-header block mb-1">Fecha del pago</label>
+                <input type="date" value={generalPayDate} onChange={e => setGeneralPayDate(e.target.value)} className="muji-input" required />
+              </div>
+
               <button
                 type="submit"
                 className="w-full py-3.5 text-[13px] font-[500] uppercase tracking-wider transition-colors border"
@@ -1344,6 +1447,18 @@ export default function HomeScreen() {
           </div>
         </>
       )}
+
+      <DebtPaymentSheet
+        isOpen={!!payingDebtAnchor}
+        onClose={() => setPayingDebtAnchor(null)}
+        onSaved={() => setPayingDebtAnchor(null)}
+        debt={payingDebtAnchor?.debt}
+        defaultSettle={payingDebtAnchor?.defaultSettle}
+        activeAccounts={activeAccounts}
+        institutions={institutions}
+        instruments={instruments}
+        dbCurrencies={dbCurrencies}
+      />
 
       <BottomNav />
       <FAB />
