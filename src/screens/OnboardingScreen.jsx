@@ -174,6 +174,30 @@ export default function OnboardingScreen() {
     }
   };
 
+  const handleSkipOnboarding = async () => {
+    setLoading(true);
+    try {
+      await db.transaction('rw', [db.app_config, db.institutions, db.accounts, db.currencies], async () => {
+        const count = await db.currencies.count();
+        if (count === 0) {
+          await db.currencies.bulkAdd([
+            { code: 'USD', name: 'Dólar Estadounidense', symbol: '$', symbolPosition: 'before', decimalPlaces: 2, isFiat: true, isActive: true, baseRelation: 'BASE' },
+            { code: 'VES', name: 'Bolívar Venezolano', symbol: 'Bs.', symbolPosition: 'before', decimalPlaces: 2, isFiat: true, isActive: true, baseRelation: 'UNTRACKED' },
+            { code: 'EUR', name: 'Euro', symbol: '€', symbolPosition: 'before', decimalPlaces: 2, isFiat: true, isActive: true, baseRelation: 'UNTRACKED' },
+          ]);
+          await db.app_config.put({ key: 'baseCurrency', value: 'USD' });
+        }
+        await db.app_config.put({ key: 'onboardingComplete', value: true });
+        await db.app_config.put({ key: 'accessGranted', value: true });
+      });
+      navigate('/home', { replace: true });
+    } catch (err) {
+      console.error('Error skipping onboarding:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <main className="min-h-screen bg-gradient-to-tr from-[#F2EEE8] via-[#EFEBE4] to-[#E9E5DB] flex flex-col justify-between p-8 font-sans max-w-md mx-auto">
       {/* Top Header */}
@@ -182,9 +206,20 @@ export default function OnboardingScreen() {
           <span className="text-xs font-light text-noria-text/40 tracking-[0.2em] uppercase select-none">
             Noria
           </span>
-          <span className="text-xs font-light text-noria-text/40 tracking-wider">
-            {step + 1} / {stepsTotal}
-          </span>
+          <div className="flex items-center space-x-3">
+            <button
+              type="button"
+              id="skip-onboarding-btn"
+              onClick={handleSkipOnboarding}
+              disabled={loading}
+              className="text-[11px] font-light text-noria-text/50 hover:text-noria-text uppercase tracking-wider transition-colors focus:outline-none"
+            >
+              Saltar e ir a la app →
+            </button>
+            <span className="text-xs font-light text-noria-text/40 tracking-wider">
+              {step + 1} / {stepsTotal}
+            </span>
+          </div>
         </div>
         {/* Progress bar */}
         <div className="w-full bg-noria-text/5 h-[1px] mt-4 rounded-full overflow-hidden">

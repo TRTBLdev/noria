@@ -1,9 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
-  <!-- Background circle -->
-  <circle cx="24" cy="24" r="24" fill="#F2EEE8"/>
-  <!-- Noria waterwheel abstract: two curved arcs suggesting rotation/flow -->
-  <path d="M14 32 Q10 24 16 16 Q22 8 28 12" stroke="#7D9B76" stroke-width="2.5" stroke-linecap="round" fill="none"/>
-  <path d="M20 36 Q26 40 32 34 Q38 28 36 20" stroke="#7D9B76" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Background circle with high contrast dark aesthetic -->
+  <circle cx="32" cy="32" r="32" fill="#1A1A1A"/>
+  <!-- Noria waterwheel abstract: vibrant crisp salvia arcs -->
+  <path d="M18 42 C12 31 20 20 28 16 C34 12 42 16 46 20" stroke="#8AA883" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <path d="M24 48 C30 52 40 48 46 42 C52 36 48 26 44 22" stroke="#8AA883" stroke-width="5" stroke-linecap="round" fill="none"/>
   <!-- Center point -->
-  <circle cx="24" cy="24" r="2.5" fill="#7D9B76"/>
+  <circle cx="32" cy="32" r="4" fill="#EFEBE4"/>
 </svg>
