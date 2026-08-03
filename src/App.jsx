@@ -1,5 +1,5 @@
 import React from 'react';
-import { HashRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from './db/db.js';
 import AccessScreen from './screens/AccessScreen.jsx';
@@ -12,7 +12,8 @@ import TransactionsScreen from './screens/TransactionsScreen.jsx';
 import SettingsScreen from './screens/SettingsScreen.jsx';
 import DivisasScreen from './screens/DivisasScreen.jsx';
 import DebtsScreen from './screens/DebtsScreen.jsx';
-import SplitCalculatorScreen from './screens/SplitCalculatorScreen.jsx';
+import ReceiptSplitScreen from './screens/ReceiptSplitScreen.jsx';
+import SpendingGoalsScreen from './screens/SpendingGoalsScreen.jsx';
 
 function AccessGate({ children, onboardingRequired = true }) {
   const accessState = useLiveQuery(async () => {
@@ -38,12 +39,8 @@ function AccessGate({ children, onboardingRequired = true }) {
 }
 
 function AppRoutes() {
-  const location = useLocation();
-  const backgroundLocation = location.state?.backgroundLocation;
-
   return (
-    <>
-      <Routes location={backgroundLocation || location}>
+      <Routes>
         {/* Default route redirects to access validation screen */}
         <Route path="/" element={<Navigate to="/access" replace />} />
         
@@ -57,18 +54,13 @@ function AppRoutes() {
         <Route path="/settings" element={<AccessGate><SettingsScreen /></AccessGate>} />
         <Route path="/divisas" element={<AccessGate><DivisasScreen /></AccessGate>} />
         <Route path="/debts" element={<AccessGate><DebtsScreen /></AccessGate>} />
-        <Route path="/calculator/split" element={<AccessGate><SplitCalculatorScreen /></AccessGate>} />
+        <Route path="/calculator/split" element={<AccessGate><ReceiptSplitScreen initialMode="SHARED_EXPENSE" /></AccessGate>} />
+        <Route path="/transactions/receipt" element={<AccessGate><ReceiptSplitScreen /></AccessGate>} />
+        <Route path="/goals" element={<AccessGate><SpendingGoalsScreen /></AccessGate>} />
         
         {/* Fallback to root */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-
-      {backgroundLocation && (
-        <Routes>
-          <Route path="/calculator/split" element={<AccessGate><SplitCalculatorScreen isSheet /></AccessGate>} />
-        </Routes>
-      )}
-    </>
   );
 }
 

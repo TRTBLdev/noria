@@ -8,6 +8,11 @@ import { consumeCurrencyLots, createCurrencyLot, stringifyLotConsumption } from 
 import { formatAmountWithSymbol } from '../utils/format.js';
 import { convertAmountToBase } from '../utils/currency.js';
 import {
+  addApplicationInTransaction,
+  APPLICATION_KINDS,
+  APPLICATION_TARGETS,
+} from '../db/transactionApplications.js';
+import {
   DateInput,
   FormActions,
   FormField,
@@ -247,7 +252,7 @@ export default function DebtFormSheet({
     setSaving(true);
 
     try {
-      await db.transaction('rw', [db.debts, db.debt_payments, db.third_parties, db.transactions, db.accounts, db.anchors, db.lots], async () => {
+      await db.transaction('rw', [db.debts, db.debt_payments, db.third_parties, db.transactions, db.transaction_applications, db.accounts, db.anchors, db.lots], async () => {
         // Resolve third party
         let resolvedThirdPartyId = selectedThirdPartyId ? parseInt(selectedThirdPartyId) : null;
         if (thirdPartyInput.trim() && !resolvedThirdPartyId) {
@@ -368,6 +373,16 @@ export default function DebtFormSheet({
                   sourceType: 'LOAN',
                 });
               }
+
+              await addApplicationInTransaction(db, {
+                transaction: await db.transactions.get(txId),
+                targetType: APPLICATION_TARGETS.DEBT,
+                targetId: newDebtId,
+                kind: APPLICATION_KINDS.DEBT_ORIGIN,
+                targetAmountOverride: parsedAmount,
+                baseCurrency,
+                currencies: dbCurrencies,
+              });
             }
           }
 

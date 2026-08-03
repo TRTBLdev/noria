@@ -20,6 +20,7 @@ import { formatNumber, formatCurrency, formatAmountWithSymbol } from '../utils/f
 import DebtPaymentSheet from '../components/DebtPaymentSheet.jsx';
 import { consumeCurrencyLots, createCurrencyLot, stringifyLotConsumption } from '../db/currencyLots.js';
 import { addAnchorTemplateWithCurrentInstances } from '../db/anchorRecurrence.js';
+import { addSavingsContributionInTransaction, syncSavingsContributionPeriods } from '../db/savingsContributions.js';
 
 export default function HomeScreen() {
   const navigate = useNavigate();
@@ -43,6 +44,7 @@ export default function HomeScreen() {
   const [transAmountReceived, setTransAmountReceived] = useState('');
   const [transExchangeRate, setTransExchangeRate] = useState('1.00');
   const [savePayError, setSavePayError] = useState('');
+  const [saveContributionAmount, setSaveContributionAmount] = useState('');
 
   // Estados para el Modal de Ejecución de Gastos (NEED/WANT Anchor)
   const [payingGeneralAnchor, setPayingGeneralAnchor] = useState(null);
@@ -304,6 +306,13 @@ export default function HomeScreen() {
     runRecurrenceJob();
   }, [anchors]);
 
+  useEffect(() => {
+    if (!anchors.some(anchor => anchor.isTemplate === false && anchor.pillar === 'SAVE')) return;
+    syncSavingsContributionPeriods(db).catch(error => {
+      console.error('Error al actualizar los períodos de ahorro:', error);
+    });
+  }, [anchors.length]);
+
   // 1. Obtener todas las instancias de anchors que caen en la semana actual
   const thisWeekAnchors = anchors.filter(a => {
     if (a.isTemplate !== false) return false;
@@ -365,8 +374,8 @@ export default function HomeScreen() {
     .reduce((sum, a) => sum + convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies), 0);
 
   const pendingAhorros = thisMonthInstances
-    .filter(a => a.status !== 'PAID' && a.pillar === 'SAVE')
-    .reduce((sum, a) => sum + convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies), 0);
+    .filter(a => !['PAID', 'EXPIRED', 'PARTIAL_EXPIRED'].includes(a.status) && a.pillar === 'SAVE')
+    .reduce((sum, a) => sum + (convertAmountToBase(Math.max(0, Number(a.amount) - (Number(a.contributedAmount) || 0)), a.currency, baseCurrency, lots, dbCurrencies) || 0), 0);
 
   const disponibleDelMes = Math.max(0, aggregatedBalance - totalAllocatedToMacetas - pendingGastos - pendingAhorros);
 
@@ -394,6 +403,7 @@ export default function HomeScreen() {
     }
 
     if (anchor.pillar === 'SAVE' || anchor.type === 'SAVE') {
+      const remaining = Math.max(0, Number(anchor.amount) - (Number(anchor.contributedAmount) || 0));
       setPayingSaveAnchor(anchor);
       setSavePayMode('ALLOC');
       setSavePayError('');
@@ -403,7 +413,8 @@ export default function HomeScreen() {
         const secondActive = activeAccounts[1] || activeAccounts[0];
         setTransToAccountId(secondActive.id.toString());
       }
-      setTransAmountReceived(anchor.amount.toString());
+      setSaveContributionAmount(remaining.toString());
+      setTransAmountReceived(remaining.toString());
       setTransExchangeRate('1.00');
       return;
     }
@@ -490,10 +501,19 @@ export default function HomeScreen() {
       }
 
       const accountId = parseInt(allocAccountId);
-      const amount = payingSaveAnchor.amount;
+      const amount = parseFloat(saveContributionAmount);
       const account = accounts.find(a => a.id === accountId);
       if (!account) {
         setSavePayError('Cuenta no encontrada.');
+        return;
+      }
+      if (account.currency !== maceta.currency) {
+        setSavePayError(`La cuenta debe estar en ${maceta.currency}.`);
+        return;
+      }
+      const remaining = Math.max(0, Number(payingSaveAnchor.amount) - (Number(payingSaveAnchor.contributedAmount) || 0));
+      if (!Number.isFinite(amount) || amount <= 0 || amount > remaining + 0.001) {
+        setSavePayError(`El aporte debe estar entre 0 y ${remaining.toFixed(2)} ${payingSaveAnchor.currency}.`);
         return;
       }
 
@@ -521,7 +541,7 @@ export default function HomeScreen() {
 
       const totalAllocated = updatedAllocations.reduce((sum, a) => sum + a.amount, 0);
 
-      await db.transaction('rw', [db.maceta_allocations, db.macetas, db.anchors], async () => {
+      await db.transaction('rw', [db.maceta_allocations, db.macetas, db.anchors, db.savings_contributions], async () => {
         await db.maceta_allocations.where('macetaId').equals(maceta.id).delete();
         for (const alloc of updatedAllocations) {
           await db.maceta_allocations.add({
@@ -533,7 +553,15 @@ export default function HomeScreen() {
           });
         }
         await db.macetas.update(maceta.id, { currentAmount: totalAllocated });
-        await db.anchors.update(payingSaveAnchor.id, { status: 'PAID' });
+        await addSavingsContributionInTransaction(db, {
+          macetaId: maceta.id,
+          anchorId: payingSaveAnchor.id,
+          accountId,
+          amount,
+          currency: payingSaveAnchor.currency,
+          method: 'ALLOCATION',
+          date: new Date(),
+        });
       });
 
       setPayingSaveAnchor(null);
@@ -550,14 +578,14 @@ export default function HomeScreen() {
     try {
       const fromId = parseInt(transFromAccountId);
       const toId = parseInt(transToAccountId);
-      const amountSent = payingSaveAnchor.amount;
+      const amountSent = parseFloat(saveContributionAmount);
       const amountRec = parseFloat(transAmountReceived);
 
       if (fromId === toId) {
         setSavePayError('Las cuentas de origen y destino deben ser distintas.');
         return;
       }
-      if (isNaN(amountRec) || amountRec <= 0) {
+      if (!Number.isFinite(amountSent) || amountSent <= 0 || isNaN(amountRec) || amountRec <= 0) {
         setSavePayError('El monto recibido debe ser un número positivo.');
         return;
       }
@@ -590,6 +618,15 @@ export default function HomeScreen() {
         setSavePayError('Meta de ahorro asociada no encontrada.');
         return;
       }
+      if (toAccount.currency !== maceta.currency) {
+        setSavePayError(`La cuenta destino debe estar en ${maceta.currency}.`);
+        return;
+      }
+      const remaining = Math.max(0, Number(payingSaveAnchor.amount) - (Number(payingSaveAnchor.contributedAmount) || 0));
+      if (amountRec > remaining + 0.001) {
+        setSavePayError(`El aporte recibido excede lo pendiente (${remaining.toFixed(2)} ${maceta.currency}).`);
+        return;
+      }
 
       const transferId = 'TX-' + Date.now();
 
@@ -617,7 +654,7 @@ export default function HomeScreen() {
 
       const totalAllocated = updatedAllocations.reduce((sum, a) => sum + a.amount, 0);
 
-      await db.transaction('rw', [db.accounts, db.transactions, db.maceta_allocations, db.macetas, db.anchors, db.lots], async () => {
+      await db.transaction('rw', [db.accounts, db.transactions, db.maceta_allocations, db.macetas, db.anchors, db.lots, db.savings_contributions], async () => {
         let transferConsumptions = [];
         let transferBaseAmount = convertAmountToBase(amountSent, fromAccount.currency, baseCurrency, [], dbCurrencies);
         let transferBaseCurrency = transferBaseAmount === null ? null : baseCurrency;
@@ -684,7 +721,7 @@ export default function HomeScreen() {
           lotConsumption: stringifyLotConsumption(transferConsumptions),
         });
 
-        await db.transactions.add({
+        const incomingTransactionId = await db.transactions.add({
           date: new Date(),
           type: 'TRANSFER_IN',
           amount: amountRec,
@@ -711,8 +748,16 @@ export default function HomeScreen() {
         // 5. Actualizar maceta
         await db.macetas.update(maceta.id, { currentAmount: totalAllocated });
 
-        // 6. Marcar anchor como pagado
-        await db.anchors.update(payingSaveAnchor.id, { status: 'PAID' });
+        await addSavingsContributionInTransaction(db, {
+          macetaId: maceta.id,
+          anchorId: payingSaveAnchor.id,
+          transactionId: incomingTransactionId,
+          accountId: toId,
+          amount: amountRec,
+          currency: maceta.currency,
+          method: 'TRANSFER',
+          date: new Date(),
+        });
       });
 
       setPayingSaveAnchor(null);
@@ -1218,8 +1263,11 @@ export default function HomeScreen() {
                 <p className="text-[11px] font-[500]" style={{ color: '#C58A14' }}>META DE AHORRO PENDIENTE</p>
                 <div className="flex justify-between items-center mt-1">
                   <span className="text-[15px] font-[400] text-noria-text">{payingSaveAnchor.name}</span>
-                  <CurrencyAmount amount={payingSaveAnchor.amount} currencyCode={baseCurrency} className="text-[15px] font-[500] text-noria-text" />
+                  <CurrencyAmount amount={payingSaveAnchor.amount} currencyCode={payingSaveAnchor.currency || baseCurrency} className="text-[15px] font-[500] text-noria-text" />
                 </div>
+                <p className="text-[10px] text-noria-muted mt-1">
+                  Acumulado: {formatAmountWithSymbol(Number(payingSaveAnchor.contributedAmount) || 0, payingSaveAnchor.currency || baseCurrency)}
+                </p>
               </div>
 
               {/* Selector de modo */}
@@ -1251,6 +1299,18 @@ export default function HomeScreen() {
               {savePayMode === 'ALLOC' ? (
                 /* MODO A: ASIGNACIÓN */
                 <form onSubmit={handleExecuteSaveAlloc} className="space-y-4">
+                  <div>
+                    <label className="muji-header block mb-1">Monto del aporte ({payingSaveAnchor.currency || baseCurrency})</label>
+                    <input
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      value={saveContributionAmount}
+                      onChange={event => setSaveContributionAmount(event.target.value)}
+                      className="muji-input"
+                      required
+                    />
+                  </div>
                   <div>
                     <label className="muji-header block mb-1">Debitar y Bloquear Ahorro en Cuenta:</label>
                     <select
@@ -1336,9 +1396,16 @@ export default function HomeScreen() {
                       <label className="muji-header block mb-1">Monto Enviado ({accounts.find(a => a.id === parseInt(transFromAccountId))?.currency || baseCurrency})</label>
                       <input
                         type="number"
+                        min="0.01"
+                        step="0.01"
                         className="muji-input"
-                        value={payingSaveAnchor.amount}
-                        disabled
+                        value={saveContributionAmount}
+                        onChange={event => {
+                          setSaveContributionAmount(event.target.value);
+                          const rate = parseFloat(transAmountReceived) / parseFloat(event.target.value);
+                          setTransExchangeRate(Number.isFinite(rate) ? rate.toFixed(4) : '1.00');
+                        }}
+                        required
                       />
                     </div>
                     <div>
@@ -1351,7 +1418,7 @@ export default function HomeScreen() {
                         value={transAmountReceived}
                         onChange={e => {
                           setTransAmountReceived(e.target.value);
-                          const rate = parseFloat(e.target.value) / payingSaveAnchor.amount;
+                          const rate = parseFloat(e.target.value) / parseFloat(saveContributionAmount);
                           setTransExchangeRate(isNaN(rate) ? '1.00' : rate.toFixed(4));
                         }}
                         required

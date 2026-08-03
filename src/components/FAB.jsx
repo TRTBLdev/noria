@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
 import { Plus, X, ArrowDownLeft, ArrowUpRight, ArrowLeftRight, Calculator, Coins, Users } from 'lucide-react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import CategorySelect from './CategorySelect.jsx';
 import IncomeTypeSelect from './IncomeTypeSelect.jsx';
 import { getIncomeType } from './IncomeTypeIcon.jsx';
@@ -42,7 +42,6 @@ const getAccountLabel = (acc, inst) => {
 
 export default function FAB() {
   const navigate = useNavigate();
-  const location = useLocation();
   const [isOpen, setIsOpen] = useState(false);
   const [activeForm, setActiveForm] = useState(null); // 'GASTO' | 'INGRESO' | 'TRANSFERENCIA'
   const sheetRef = useRef(null);
@@ -338,7 +337,7 @@ export default function FAB() {
       return;
     }
     if (type === 'SPLIT_CALC') {
-      navigate('/calculator/split', { state: { backgroundLocation: location } });
+      navigate('/transactions/receipt');
       return;
     }
     resetForm();
@@ -513,82 +512,6 @@ export default function FAB() {
           transactionBaseCurrency = baseCurrency;
         }
 
-        // Validación de splits
-        if (activeForm === 'GASTO' && isSplit) {
-          let splitSum = 0;
-          for (let i = 0; i < splits.length; i++) {
-            const s = splits[i];
-            const sAmt = parseFloat(s.amount);
-            if (isNaN(sAmt) || sAmt <= 0) {
-              setError(`Monto inválido en la división #${i + 1}`);
-              return;
-            }
-            if (!s.tagId) {
-              setError(`Selecciona una categoría en la división #${i + 1}`);
-              return;
-            }
-            splitSum += sAmt;
-          }
-          if (Math.abs(splitSum - parsedAmount) > 0.01) {
-            setError(`La suma de las divisiones (${fmt(splitSum)}) debe coincidir con el monto total (${fmt(parsedAmount)})`);
-            return;
-          }
-        }
-
-        // Validación de splits por personas
-        let totalSplitAmount = 0;
-        let participantDeeds = [];
-        if (activeForm === 'GASTO' && isPersonSplit) {
-          if (personSplits.length === 0) {
-            setError('Debes añadir al menos un participante para dividir la cuenta.');
-            return;
-          }
-
-          const namesSeen = new Set();
-          for (let i = 0; i < personSplits.length; i++) {
-            const p = personSplits[i];
-            const pName = p.thirdPartyInput.trim();
-            if (!pName) {
-              setError(`Ingresa el nombre del participante #${i + 1}`);
-              return;
-            }
-            if (namesSeen.has(pName.toLowerCase())) {
-              setError(`El participante "${pName}" está duplicado.`);
-              return;
-            }
-            namesSeen.add(pName.toLowerCase());
-
-            let pAmount = 0;
-            if (personSplitMode === 'EQUITATIVO') {
-              pAmount = parsedAmount / (personSplits.length + 1);
-            } else {
-              pAmount = parseFloat(p.amount);
-              if (isNaN(pAmount) || pAmount <= 0) {
-                setError(`Monto inválido para el participante "${pName}"`);
-                return;
-              }
-            }
-
-            totalSplitAmount += pAmount;
-            participantDeeds.push({
-              name: pName,
-              selectedThirdPartyId: p.selectedThirdPartyId,
-              amount: pAmount
-            });
-          }
-
-          if (totalSplitAmount > parsedAmount + 0.01) {
-            setError(`La suma de las deudas (${fmt(totalSplitAmount)}) excede el monto total del gasto (${fmt(parsedAmount)})`);
-            return;
-          }
-
-          const yourPart = parsedAmount - totalSplitAmount;
-          if (yourPart < 0) {
-            setError('Tu parte no puede ser negativa.');
-            return;
-          }
-        }
-
         await db.transaction('rw', [db.accounts, db.transactions, db.lots, db.third_parties, db.debts, db.debt_payments], async () => {
           if (activeForm === 'GASTO' && selectedAccount.currency === lotCurrency) {
             const consumed = await consumeCurrencyLots(db, {
@@ -612,138 +535,28 @@ export default function FAB() {
             }
           }
 
-          // 1. Agregar transacción o transacciones divididas
-          if (activeForm === 'GASTO' && isSplit) {
-            const splitGroupId = 'SPLIT-' + Date.now();
-            const totalGastoConFee = parsedAmount + feeAmountVal;
-
-            for (const split of splits) {
-              const parsedSplitAmount = parseFloat(split.amount);
-              const splitProportion = parsedSplitAmount / parsedAmount;
-
-              const splitFee = feeAmountVal * splitProportion;
-              const splitTotalAmount = parsedSplitAmount + splitFee;
-              const splitTotalProportion = splitTotalAmount / totalGastoConFee;
-
-              // Proporción de lotes consumidos
-              const splitLotConsumptions = lotConsumptions.map(c => ({
-                lotId: c.lotId,
-                amountConsumed: c.amountConsumed * splitTotalProportion,
-                costConsumed: c.costConsumed * splitTotalProportion,
-                costCurrency: c.costCurrency,
-              }));
-
-              const splitBaseAmount = baseAmount !== null ? baseAmount * splitTotalProportion : null;
-
-              const splitTag = tags.find(t => t.id === parseInt(split.tagId));
-              const splitPillar = splitTag?.pillar || 'NEED';
-
-              await db.transactions.add({
-                date: new Date(date + 'T12:00:00'),
-                type: 'OUT',
-                amount: splitTotalAmount,
-                fee: splitFee,
-                currency: selectedAccount.currency,
-                accountId: parseInt(accountId),
-                tagId: parseInt(split.tagId),
-                pillar: splitPillar,
-                description: split.description.trim() || description.trim(),
-                baseAmount: splitBaseAmount,
-                baseCurrency: transactionBaseCurrency,
-                lotConsumption: splitLotConsumptions.length > 0 ? JSON.stringify(splitLotConsumptions) : null,
-                thirdPartyId: resolvedThirdPartyId,
-                instrumentId: selectedInstrumentId,
-                splitGroupId
-              });
-            }
-          } else if (activeForm === 'GASTO' && isPersonSplit) {
-            const splitGroupId = 'SPLIT-' + Date.now();
-            const yourPart = parsedAmount - totalSplitAmount;
-            const proportion = yourPart / parsedAmount;
-
-            const yourPartFee = feeAmountVal * proportion;
-            const yourPartTotalAmount = yourPart + yourPartFee;
-            const yourPartTotalProportion = yourPartTotalAmount / (parsedAmount + feeAmountVal);
-
-            // Proporción de lotes consumidos para tu parte
-            const yourLotConsumptions = lotConsumptions.map(c => ({
-              lotId: c.lotId,
-              amountConsumed: c.amountConsumed * yourPartTotalProportion,
-              costConsumed: c.costConsumed * yourPartTotalProportion,
-              costCurrency: c.costCurrency,
-            }));
-
-            const yourBaseAmount = baseAmount !== null ? baseAmount * yourPartTotalProportion : null;
-            const selectedTag = tags.find(t => t.id === parseInt(tagId));
-            const resolvedPillar = selectedTag?.pillar || 'NEED';
-
-            await db.transactions.add({
-              date: new Date(date + 'T12:00:00'),
-              type: 'OUT',
-              amount: yourPartTotalAmount,
-              fee: yourPartFee,
-              currency: selectedAccount.currency,
-              accountId: parseInt(accountId),
-              tagId: tagId ? parseInt(tagId) : null,
-              pillar: resolvedPillar,
-              description: `${description.trim()} (Tu parte)`,
-              baseAmount: yourBaseAmount,
-              baseCurrency: transactionBaseCurrency,
-              lotConsumption: yourLotConsumptions.length > 0 ? JSON.stringify(yourLotConsumptions) : null,
-              thirdPartyId: resolvedThirdPartyId,
-              instrumentId: selectedInstrumentId,
-              splitGroupId
-            });
-
-            // Registrar deudas por cobrar para cada participante
-            for (const participant of participantDeeds) {
-              let pThirdPartyId = participant.selectedThirdPartyId ? parseInt(participant.selectedThirdPartyId) : null;
-              if (!pThirdPartyId) {
-                const match = thirdParties.find(tp => tp.name.toLowerCase() === participant.name.toLowerCase());
-                if (match) {
-                  pThirdPartyId = match.id;
-                } else {
-                  pThirdPartyId = await db.third_parties.add({ name: participant.name });
-                }
-              }
-
-              await db.debts.add({
-                description: `${description.trim()} (Split)`,
-                thirdPartyId: pThirdPartyId,
-                type: 'COBRAR',
-                amount: participant.amount,
-                totalAmount: participant.amount,
-                paidAmount: 0,
-                currency: selectedAccount.currency,
-                status: 'ACTIVE',
-                dueDate: null,
-                splitGroupId,
-                createdAt: new Date()
-              });
-            }
-          } else {
-            const totalAmountToSave = activeForm === 'GASTO' ? (parsedAmount + feeAmountVal) : parsedAmount;
-            const selectedTag = tags.find(t => t.id === parseInt(tagId));
-            const resolvedPillar = selectedTag?.pillar || 'NEED';
-            await db.transactions.add({
-              id: transactionId,
-              date: new Date(date + 'T12:00:00'),
-              type: activeForm === 'GASTO' ? 'OUT' : 'IN',
-              amount: totalAmountToSave,
-              fee: activeForm === 'GASTO' ? feeAmountVal : undefined,
-              currency: selectedAccount.currency,
-              accountId: parseInt(accountId),
-              tagId: activeForm === 'GASTO' && tagId ? parseInt(tagId) : null,
-              pillar: activeForm === 'GASTO' ? resolvedPillar : null,
-              incomeSourceId: activeForm === 'INGRESO' ? resolvedSourceId : null,
-              description: description.trim(),
-              baseAmount,
-              baseCurrency: transactionBaseCurrency,
-              lotConsumption: lotConsumptions.length > 0 ? JSON.stringify(lotConsumptions) : null,
-              thirdPartyId: resolvedThirdPartyId,
-              instrumentId: selectedInstrumentId
-            });
-          }
+          // Los movimientos divididos se registran en el motor unificado.
+          const totalAmountToSave = activeForm === 'GASTO' ? (parsedAmount + feeAmountVal) : parsedAmount;
+          const selectedTag = tags.find(t => t.id === parseInt(tagId));
+          const resolvedPillar = selectedTag?.pillar || 'NEED';
+          await db.transactions.add({
+            id: transactionId,
+            date: new Date(date + 'T12:00:00'),
+            type: activeForm === 'GASTO' ? 'OUT' : 'IN',
+            amount: totalAmountToSave,
+            fee: activeForm === 'GASTO' ? feeAmountVal : undefined,
+            currency: selectedAccount.currency,
+            accountId: parseInt(accountId),
+            tagId: activeForm === 'GASTO' && tagId ? parseInt(tagId) : null,
+            pillar: activeForm === 'GASTO' ? resolvedPillar : null,
+            incomeSourceId: activeForm === 'INGRESO' ? resolvedSourceId : null,
+            description: description.trim(),
+            baseAmount,
+            baseCurrency: transactionBaseCurrency,
+            lotConsumption: lotConsumptions.length > 0 ? JSON.stringify(lotConsumptions) : null,
+            thirdPartyId: resolvedThirdPartyId,
+            instrumentId: selectedInstrumentId
+          });
 
           if (activeForm === 'INGRESO' && selectedAccount.currency === lotCurrency && parsedRate) {
             await createCurrencyLot(db, {
@@ -795,7 +608,7 @@ export default function FAB() {
     {
       type: 'SPLIT_CALC',
       icon: <Users size={17} strokeWidth={1.6} />,
-      label: 'Split Grupal',
+      label: 'Dividir movimiento',
       color: '#647C78',
     },
     {
@@ -1016,43 +829,13 @@ export default function FAB() {
                       )}
 
                       {activeForm === 'GASTO' && (
-                        <div className="flex flex-col gap-2 pt-1">
-                          {!isPersonSplit && (
-                            <div className="flex items-center space-x-2 animate-fade-in">
-                              <input
-                                type="checkbox"
-                                id="is-split-checkbox"
-                                checked={isSplit}
-                                onChange={e => setIsSplit(e.target.checked)}
-                                className="h-4 w-4 border-[#1A1A1A] accent-[#4F8F58]"
-                              />
-                              <label htmlFor="is-split-checkbox" className="text-[12px] font-mono uppercase tracking-[0.05em] text-noria-text font-[500] cursor-pointer select-none">
-                                Dividir Gasto (Ticket Mixto)
-                              </label>
-                            </div>
-                          )}
-                          {!isSplit && (
-                            <div className="flex items-center space-x-2 animate-fade-in">
-                              <input
-                                type="checkbox"
-                                id="is-person-split-checkbox"
-                                checked={isPersonSplit}
-                                onChange={e => {
-                                  setIsPersonSplit(e.target.checked);
-                                  if (e.target.checked) {
-                                    if (personSplits.length === 0 || (personSplits.length === 1 && !personSplits[0].thirdPartyInput)) {
-                                      setPersonSplits([{ thirdPartyInput: '', selectedThirdPartyId: '', amount: '' }]);
-                                    }
-                                  }
-                                }}
-                                className="h-4 w-4 border-[#1A1A1A] accent-[#4F8F58]"
-                              />
-                              <label htmlFor="is-person-split-checkbox" className="text-[12px] font-mono uppercase tracking-[0.05em] text-noria-text font-[500] cursor-pointer select-none">
-                                Dividir Cuenta (Con personas)
-                              </label>
-                            </div>
-                          )}
-                        </div>
+                        <button
+                          type="button"
+                          onClick={() => { closeSheet(); navigate('/transactions/receipt'); }}
+                          className="w-full border border-[#647C78] px-3 py-2 text-left font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-[#647C78]"
+                        >
+                          Dividir este movimiento →
+                        </button>
                       )}
                     </div>
                   )}

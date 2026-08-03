@@ -6,10 +6,12 @@ import BottomNav from '../components/BottomNav.jsx';
 import FAB from '../components/FAB.jsx';
 import DebtFormSheet from '../components/DebtFormSheet.jsx';
 import DebtPaymentSheet from '../components/DebtPaymentSheet.jsx';
+import TransactionApplicationSheet from '../components/TransactionApplicationSheet.jsx';
+import { getImplicitRate, unlinkTransactionApplication } from '../db/transactionApplications.js';
 import { getCurrencySymbol } from '../utils/format.js';
 import {
   Plus, ChevronDown, ChevronUp, MoreHorizontal,
-  Pencil, Trash2, Check
+  Pencil, Trash2, Check, Link2, Unlink
 } from 'lucide-react';
 import { CurrencyAmount } from '../components/CurrencyAmount.jsx';
 
@@ -25,10 +27,11 @@ export default function DebtsScreen() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingDebt, setEditingDebt] = useState(null);
   const [payingDebt, setPayingDebt] = useState(null);
+  const [linkingDebt, setLinkingDebt] = useState(null);
 
   // Dexie Queries
   const debts = useLiveQuery(() => db.debts.toArray()) || [];
-  const debtPayments = useLiveQuery(() => db.debt_payments.toArray()) || [];
+  const transactionApplications = useLiveQuery(() => db.transaction_applications.toArray()) || [];
   const thirdParties = useLiveQuery(() => db.third_parties.toArray()) || [];
   const accounts = useLiveQuery(() => db.accounts.toArray()) || [];
   const institutions = useLiveQuery(() => db.institutions.toArray()) || [];
@@ -47,8 +50,27 @@ export default function DebtsScreen() {
   // Compute paidAmount for each debt from debt_payments
   const debtsWithPayments = useMemo(() => {
     return debts.map(debt => {
-      const payments = debtPayments.filter(p => p.debtId === debt.id);
-      const paidAmount = debt.paidAmount || payments.reduce((sum, p) => sum + (p.amountPaid || 0), 0);
+      const payments = transactionApplications
+        .filter(application => application.targetType === 'DEBT' && application.targetId === debt.id && application.kind === 'DEBT_PAYMENT')
+        .map(application => {
+          const movement = application.transactionId != null
+            ? transactions.find(transaction => transaction.id === application.transactionId)
+            : null;
+          return {
+            id: application.id,
+            transactionId: application.transactionId,
+            date: movement?.date || application.createdAt,
+            amountPaid: Number(application.targetAmount) || 0,
+            currency: application.targetCurrency || debt.currency,
+            paymentAmount: Number(application.sourceAmount) || null,
+            paymentCurrency: application.sourceCurrency || null,
+            implicitRate: getImplicitRate(application),
+            rateSource: application.rateSource,
+            note: application.note,
+            isLegacy: application.isLegacy,
+          };
+        });
+      const paidAmount = payments.reduce((sum, payment) => sum + payment.amountPaid, 0);
       const totalAmount = debt.totalAmount || debt.amount || 0;
       const remaining = Math.max(0, totalAmount - paidAmount);
       const thirdParty = debt.thirdPartyId ? thirdParties.find(tp => tp.id === debt.thirdPartyId) : null;
@@ -73,7 +95,7 @@ export default function DebtsScreen() {
         initialMovement,
       };
     });
-  }, [debts, debtPayments, thirdParties, anchors, transactions]);
+  }, [debts, transactionApplications, thirdParties, anchors, transactions]);
 
   // Group active debts by splitGroupId to represent active splits
   const activeSplits = useMemo(() => {
@@ -178,7 +200,8 @@ export default function DebtsScreen() {
 
   const handleDeleteDebt = async (debtId, name) => {
     const linkedTransactions = await db.transactions.filter(t => t.debtId === debtId).count();
-    const linkedPayments = await db.debt_payments.where('debtId').equals(debtId).count();
+    const linkedPayments = await db.transaction_applications
+      .where('[targetType+targetId]').equals(['DEBT', debtId]).count();
     if (linkedTransactions > 0 || linkedPayments > 0) {
       alert('Esta deuda tiene movimientos financieros. Para proteger saldos y lotes, no puede eliminarse directamente. Puedes marcarla como saldada o corregir sus pagos.');
       return;
@@ -189,7 +212,7 @@ export default function DebtsScreen() {
     if (!confirmed) return;
 
     try {
-      await db.transaction('rw', [db.debts, db.debt_payments, db.anchors], async () => {
+      await db.transaction('rw', [db.debts, db.anchors], async () => {
         await db.anchors.filter(a => a.debtId === debtId).delete();
         await db.debts.delete(debtId);
       });
@@ -337,6 +360,16 @@ export default function DebtsScreen() {
               >
                 <Check size={12} strokeWidth={1.5} />
                 <span>Saldar</span>
+              </button>
+            )}
+            {debt.status !== 'SETTLED' && (
+              <button
+                type="button"
+                onClick={() => { setOpenMenuId(null); setLinkingDebt(debt); }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-noria-text/5 focus:outline-none"
+              >
+                <Link2 size={12} strokeWidth={1.5} />
+                <span>Vincular transacción</span>
               </button>
             )}
             <button
@@ -545,6 +578,19 @@ export default function DebtsScreen() {
                                 <p>Sin conversión · pago en {debtCurrency}</p>
                               )}
                             </div>
+                            {payment.transactionId != null && !payment.isLegacy && (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (!confirm('¿Desvincular este pago de la deuda?')) return;
+                                  try { await unlinkTransactionApplication(db, payment.transactionId); }
+                                  catch (unlinkError) { alert(unlinkError.message || 'No se pudo desvincular.'); }
+                                }}
+                                className="mt-1 flex items-center gap-1 font-mono text-[8px] uppercase text-[#9F2F2D]"
+                              >
+                                <Unlink size={10} /> Desvincular
+                              </button>
+                            )}
                           </div>
                         </div>
                       );
@@ -561,6 +607,12 @@ export default function DebtsScreen() {
                   className="flex-1 py-2 text-[10px] font-[700] uppercase tracking-[0.1em] border border-[#1A1A1A] hover:bg-noria-text/5 transition-colors focus:outline-none text-noria-text"
                 >
                   + {debt.type === 'COBRAR' ? 'Registrar Cobro' : 'Registrar Pago'}
+                </button>
+                <button
+                  onClick={() => setLinkingDebt(debt)}
+                  className="flex-1 py-2 text-[10px] font-[700] uppercase tracking-[0.1em] border border-[#1A1A1A]/40 hover:bg-noria-text/5 transition-colors focus:outline-none text-noria-text"
+                >
+                  Vincular existente
                 </button>
                 <button
                   onClick={() => setPayingDebt({ debt, defaultSettle: true })}
@@ -880,6 +932,13 @@ export default function DebtsScreen() {
         institutions={institutions}
         instruments={instruments}
         dbCurrencies={dbCurrencies}
+      />
+
+      <TransactionApplicationSheet
+        isOpen={!!linkingDebt}
+        onClose={() => setLinkingDebt(null)}
+        presetTargetType="DEBT"
+        presetTargetId={linkingDebt?.id}
       />
 
       <FAB />

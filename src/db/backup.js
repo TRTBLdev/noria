@@ -99,7 +99,7 @@ export async function exportDatabase(db) {
   const exportData = {
     _meta: {
       format: 'noria-backup',
-      version: 4,
+      version: 5,
       databaseVersion: db.verno,
       exportedAt: new Date().toISOString(),
     },
@@ -119,6 +119,51 @@ export async function importDatabase(db, text) {
     for (const table of db.tables) {
       const records = payload[table.name] || [];
       if (records.length > 0) await table.bulkPut(records);
+    }
+
+    if ((payload.transaction_applications || []).length === 0) {
+      const payments = await db.debt_payments.toArray();
+      const transactions = await db.transactions.toArray();
+      const used = new Set();
+      const migratedByDebt = new Map();
+      for (const payment of payments) {
+        const targetAmount = Number(payment.amountPaid);
+        if (!Number.isFinite(targetAmount) || targetAmount <= 0) continue;
+        const transaction = transactions.find(record => record.debtId === payment.debtId
+          && !['LOAN_PROCEEDS', 'LOAN_DISBURSEMENT'].includes(record.cashflowKind)
+          && !used.has(record.id));
+        if (transaction) used.add(transaction.id);
+        const sourceAmount = Number(payment.paymentAmount) || Number(transaction?.amount) || targetAmount;
+        const sourceCurrency = payment.paymentCurrency || transaction?.currency || payment.currency;
+        const applicationId = await db.transaction_applications.add({
+          transactionId: transaction?.id,
+          targetType: 'DEBT',
+          targetId: payment.debtId,
+          kind: 'DEBT_PAYMENT',
+          sourceAmount,
+          sourceCurrency,
+          targetAmount,
+          targetCurrency: payment.currency || sourceCurrency,
+          rateSource: payment.exchangeRateSource || (sourceCurrency === payment.currency ? 'SAME_CURRENCY' : 'LEGACY'),
+          legacyDebtPaymentId: payment.id,
+          note: payment.note || null,
+          createdAt: payment.date || new Date(),
+          isLegacy: !transaction,
+        });
+        if (transaction) await db.transactions.update(transaction.id, { applicationId });
+        migratedByDebt.set(payment.debtId, (migratedByDebt.get(payment.debtId) || 0) + targetAmount);
+      }
+      const debts = await db.debts.toArray();
+      for (const debt of debts) {
+        const difference = (Number(debt.paidAmount) || 0) - (migratedByDebt.get(debt.id) || 0);
+        if (difference <= 0.005) continue;
+        await db.transaction_applications.add({
+          targetType: 'DEBT', targetId: debt.id, kind: 'DEBT_PAYMENT',
+          sourceAmount: difference, sourceCurrency: debt.currency,
+          targetAmount: difference, targetCurrency: debt.currency,
+          rateSource: 'LEGACY', createdAt: debt.settledDate || debt.createdAt || new Date(), isLegacy: true,
+        });
+      }
     }
   });
 

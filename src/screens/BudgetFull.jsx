@@ -9,6 +9,7 @@ import { ChevronDown, ChevronRight, Search, AlertCircle, ArrowLeft } from 'lucid
 import { formatCurrency } from '../utils/format';
 import { CurrencyAmount } from '../components/CurrencyAmount.jsx';
 import { convertAmountToBase } from '../utils/currency.js';
+import { isPersonalExpenseTransaction } from '../db/transactionApplications.js';
 
 export default function BudgetFull() {
   const navigate = useNavigate();
@@ -107,12 +108,12 @@ export default function BudgetFull() {
     // Filter transactions
     const currTx = transactions.filter(t => {
       const d = new Date(t.date);
-      return d >= currStart && d <= currEnd && t.type === 'OUT';
+      return d >= currStart && d <= currEnd && isPersonalExpenseTransaction(t);
     });
 
     const histTx = transactions.filter(t => {
       const d = new Date(t.date);
-      return d >= histStart && d <= histEnd && t.type === 'OUT';
+      return d >= histStart && d <= histEnd && isPersonalExpenseTransaction(t);
     });
 
     // Helper to calculate statistics for a tag (including subtags if parent)

@@ -745,6 +745,11 @@ export default function SettingsScreen() {
       db.macetas.where('currency').equals(code).count(),
       db.maceta_allocations.where('currency').equals(code).count(),
       db.debt_payments.filter(item => item.currency === code || item.paymentCurrency === code).count(),
+      db.receipts.filter(item => item.invoiceCurrency === code || item.paymentCurrency === code).count(),
+      db.transaction_applications.filter(item => item.sourceCurrency === code || item.targetCurrency === code).count(),
+      db.spending_goals.filter(item => item.currency === code).count(),
+      db.spending_goal_periods.filter(item => item.currency === code).count(),
+      db.savings_contributions.filter(item => item.currency === code).count(),
     ]);
     const count = referenceCounts.reduce((sum, value) => sum + value, 0);
     if (count > 0) {

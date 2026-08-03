@@ -14,6 +14,11 @@ import PaymentMethodSelector from './PaymentMethodSelector.jsx';
 import CurrencyAmount from './CurrencyAmount.jsx';
 import { consumeCurrencyLots, createCurrencyLot, stringifyLotConsumption } from '../db/currencyLots.js';
 import { convertAmountToBase } from '../utils/currency.js';
+import {
+  addApplicationInTransaction,
+  APPLICATION_KINDS,
+  APPLICATION_TARGETS,
+} from '../db/transactionApplications.js';
 
 // Resolve accountId from a "acc-N" or "inst-N" value
 function getAccountIdFromMethod(val, instruments) {
@@ -111,15 +116,13 @@ export default function DebtPaymentSheet({
 
     const parsedAmount = parseFloat(amount);
     if (isNaN(parsedAmount) || parsedAmount <= 0) { setError('El monto debe ser mayor a cero.'); return; }
-    if (!settleDebt && parsedAmount > remaining + 0.001) { setError(`El monto excede el saldo restante (${currencySymbol}${remaining.toFixed(2)}).`); return; }
+    if (parsedAmount > remaining + 0.001) { setError(`El monto excede el saldo restante (${remaining.toFixed(2)} ${debt.currency}).`); return; }
     if (!paymentMethod) {
       setError(isCobrar ? 'Selecciona la cuenta de depósito.' : 'Selecciona el medio de pago.');
       return;
     }
 
     let actualAmount = parsedAmount;
-    let implicitRate = null;
-
     if (isMultiCurrency) {
       const parsedAlt = parseFloat(altCurrencyAmount);
       if (isNaN(parsedAlt) || parsedAlt <= 0) {
@@ -127,7 +130,6 @@ export default function DebtPaymentSheet({
         return;
       }
       actualAmount = parsedAlt;
-      implicitRate = parsedAlt / parsedAmount;
     }
 
     const needsLotRate = isCobrar && selectedAccount.currency === lotCurrency && !debtHasBaseConversion;
@@ -143,25 +145,11 @@ export default function DebtPaymentSheet({
 
     setSaving(true);
     try {
-      await db.transaction('rw', [db.debts, db.debt_payments, db.transactions, db.accounts, db.lots, db.anchors], async () => {
+      await db.transaction('rw', [db.debts, db.transactions, db.accounts, db.lots, db.anchors, db.transaction_applications], async () => {
         const txDate = new Date(date + 'T12:00:00');
         const txType = isCobrar ? 'IN' : 'OUT';
 
-        // 1. debt_payment record
-        await db.debt_payments.add({
-          debtId: debt.id,
-          anchorId: pendingAnchor?.id ?? null,
-          date: txDate,
-          amountPaid: parsedAmount,
-          currency: debt.currency,
-          exchangeRateSource: isMultiCurrency ? 'MANUAL' : null,
-          implicitRate,
-          paymentCurrency: isMultiCurrency ? selectedAccount.currency : null,
-          paymentAmount: isMultiCurrency ? actualAmount : null,
-          note: note.trim() || null,
-        });
-
-        // 2. Transaction record
+        // 1. Transaction record
         const txData = {
           date: txDate,
           type: txType,
@@ -214,30 +202,23 @@ export default function DebtPaymentSheet({
           });
         }
 
-        // 3. Update account balance
+        // 2. Update account balance
         const delta = txType === 'IN' ? actualAmount : -actualAmount;
         await db.accounts.update(selectedAccount.id, {
           balance: selectedAccount.balance + delta,
         });
 
-        // 4. Mark pending anchor as PAID
-        if (pendingAnchor) {
-          await db.anchors.update(pendingAnchor.id, { status: 'PAID' });
-        }
-
-        // 5. Update debt paidAmount and status
-        const newPaidAmount = (debt.paidAmount || 0) + parsedAmount;
-        const totalAmount = debt.totalAmount || debt.amount || 0;
-        const isSettled = settleDebt || newPaidAmount >= totalAmount - 0.001;
-        const debtUpdate = { paidAmount: newPaidAmount };
-        if (debt.isRecurring) {
-          debtUpdate.paidInstallments = (debt.paidInstallments || 0) + 1;
-        }
-        if (isSettled) {
-          debtUpdate.status = 'SETTLED';
-          debtUpdate.settledDate = txDate;
-        }
-        await db.debts.update(debt.id, debtUpdate);
+        // 3. Vincular el movimiento; este servicio recalcula deuda y cuotas.
+        await addApplicationInTransaction(db, {
+          transaction: await db.transactions.get(transactionId),
+          targetType: APPLICATION_TARGETS.DEBT,
+          targetId: debt.id,
+          kind: APPLICATION_KINDS.DEBT_PAYMENT,
+          manualTargetAmount: isMultiCurrency ? parsedAmount : null,
+          note: note.trim() || null,
+          baseCurrency,
+          currencies: dbCurrencies,
+        });
       });
 
       onSaved?.();
@@ -371,7 +352,11 @@ export default function DebtPaymentSheet({
             </span>
             <button
               type="button"
-              onClick={() => setSettleDebt(v => !v)}
+              onClick={() => setSettleDebt(value => {
+                const next = !value;
+                if (next) setAmount(remaining.toFixed(2));
+                return next;
+              })}
               className="w-10 h-5 border border-[#1A1A1A] relative flex items-center focus:outline-none"
               style={{ background: 'transparent' }}
             >

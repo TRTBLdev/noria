@@ -7,6 +7,9 @@ import { convertAmountToBase } from '../utils/currency.js';
 
 export async function deleteTransactionSafely(db, transaction) {
   const lotCurrency = (await db.app_config.get('lotCurrency'))?.value || '';
+  const application = await db.transaction_applications.where('transactionId').equals(transaction.id).first();
+  if (application) throw new Error('Desvincula la transacción de su deuda u objetivo antes de eliminarla.');
+  if (transaction.receiptId) throw new Error('Los fragmentos de una factura deben revertirse como un grupo completo.');
   if (transaction.debtId) {
     throw new Error('Los movimientos de deuda deben revertirse desde la pestaña Deudas.');
   }
@@ -96,8 +99,15 @@ export async function deleteTransactionSafely(db, transaction) {
 export async function updateTransactionSafely(db, transactionId, updatedFields) {
   const lotCurrency = (await db.app_config.get('lotCurrency'))?.value || '';
   const baseCurrency = (await db.app_config.get('baseCurrency'))?.value || '';
+  const application = await db.transaction_applications.where('transactionId').equals(transactionId).first();
   await db.transaction('rw', [db.accounts, db.transactions, db.currencies], async () => {
     const original = await db.transactions.get(transactionId);
+    if (application && updatedFields.amount !== undefined && updatedFields.amount !== original?.amount) {
+      throw new Error('Desvincula la transacción antes de cambiar su monto.');
+    }
+    if (original?.receiptId && updatedFields.amount !== undefined && updatedFields.amount !== original.amount) {
+      throw new Error('El monto de un fragmento de factura no se edita de forma aislada.');
+    }
     if (!original) throw new Error('La transacción ya no existe.');
     if (original.type === 'BALANCE_ADJUSTMENT' && updatedFields.amount !== original.amount) {
       throw new Error('El monto de una conciliación no se edita; reviértela y registra una nueva.');

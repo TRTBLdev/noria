@@ -143,6 +143,98 @@ db.version(12).stores({}).upgrade(async tx => {
   });
 });
 
+db.version(13).stores({
+  transactions: '++id, date, type, amount, currency, accountId, tagId, anchorId, incomeSourceId, pillar, description, transferId, thirdPartyId, splitGroupId, receiptId',
+  debt_payments: '++id, debtId, anchorId, transactionId, date, amountPaid, currency, exchangeRateSource, note',
+  receipts: 'id, date, accountId, merchantThirdPartyId, invoiceCurrency, paymentCurrency',
+  transaction_applications: '++id, &transactionId, targetType, targetId, [targetType+targetId], kind, periodId',
+  spending_goals: '++id, status, isRecurring, startDate, defaultTagId',
+  spending_goal_periods: '++id, goalId, [goalId+startDate], status, startDate, endDate',
+  savings_contributions: '++id, macetaId, anchorId, transactionId, date',
+}).upgrade(async tx => {
+  const payments = await tx.table('debt_payments').toArray();
+  const transactions = await tx.table('transactions').toArray();
+  const debts = await tx.table('debts').toArray();
+  const applications = tx.table('transaction_applications');
+  const usedTransactionIds = new Set();
+  const migratedPaidByDebt = new Map();
+
+  const dayKey = value => {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
+  };
+
+  const findMatchingTransaction = payment => {
+    const candidates = transactions.filter(record => (
+      record.debtId === payment.debtId
+      && !['LOAN_PROCEEDS', 'LOAN_DISBURSEMENT'].includes(record.cashflowKind)
+      && !usedTransactionIds.has(record.id)
+    ));
+    return candidates.sort((left, right) => {
+      const leftAnchor = left.anchorId === payment.anchorId ? 0 : 1;
+      const rightAnchor = right.anchorId === payment.anchorId ? 0 : 1;
+      if (leftAnchor !== rightAnchor) return leftAnchor - rightAnchor;
+      const leftDay = dayKey(left.date) === dayKey(payment.date) ? 0 : 1;
+      const rightDay = dayKey(right.date) === dayKey(payment.date) ? 0 : 1;
+      if (leftDay !== rightDay) return leftDay - rightDay;
+      return String(left.id).localeCompare(String(right.id));
+    })[0] || null;
+  };
+
+  for (const payment of payments) {
+    const targetAmount = Number(payment.amountPaid);
+    if (!Number.isFinite(targetAmount) || targetAmount <= 0 || !payment.debtId) continue;
+    const transaction = findMatchingTransaction(payment);
+    if (transaction) usedTransactionIds.add(transaction.id);
+    const sourceAmount = Number(payment.paymentAmount) > 0
+      ? Number(payment.paymentAmount)
+      : (Number(transaction?.amount) > 0 ? Number(transaction.amount) : targetAmount);
+    const sourceCurrency = payment.paymentCurrency || transaction?.currency || payment.currency;
+    const targetCurrency = payment.currency || sourceCurrency;
+
+    const applicationId = await applications.add({
+      transactionId: transaction?.id,
+      targetType: 'DEBT',
+      targetId: payment.debtId,
+      kind: 'DEBT_PAYMENT',
+      sourceAmount,
+      sourceCurrency,
+      targetAmount,
+      targetCurrency,
+      rateSource: payment.exchangeRateSource || (sourceCurrency === targetCurrency ? 'SAME_CURRENCY' : 'LEGACY'),
+      legacyDebtPaymentId: payment.id,
+      note: payment.note || null,
+      createdAt: payment.date || new Date(),
+      isLegacy: !transaction,
+    });
+    migratedPaidByDebt.set(payment.debtId, (migratedPaidByDebt.get(payment.debtId) || 0) + targetAmount);
+    if (transaction) {
+      await tx.table('debt_payments').update(payment.id, { transactionId: transaction.id });
+      await tx.table('transactions').update(transaction.id, { applicationId });
+    }
+  }
+
+  for (const debt of debts) {
+    const recordedPaid = Number(debt.paidAmount) || 0;
+    const migratedPaid = migratedPaidByDebt.get(debt.id) || 0;
+    const missingPaid = recordedPaid - migratedPaid;
+    if (missingPaid <= 0.005) continue;
+    await applications.add({
+      targetType: 'DEBT',
+      targetId: debt.id,
+      kind: 'DEBT_PAYMENT',
+      sourceAmount: missingPaid,
+      sourceCurrency: debt.currency,
+      targetAmount: missingPaid,
+      targetCurrency: debt.currency,
+      rateSource: 'LEGACY',
+      createdAt: debt.settledDate || debt.createdAt || new Date(),
+      isLegacy: true,
+      note: 'Saldo pagado migrado sin transacción vinculable',
+    });
+  }
+});
+
 
 // Seed data function to populate catalogs on first open
 export async function seedDatabase() {

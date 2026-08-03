@@ -14,13 +14,25 @@ import { useNavigate } from 'react-router-dom';
 import { formatNumber, formatCurrency, formatAmountWithSymbol } from '../utils/format';
 import { consumeCurrencyLots, createCurrencyLot, stringifyLotConsumption } from '../db/currencyLots.js';
 import { addAnchorTemplateWithCurrentInstances, syncAnchorTemplateCurrentInstances } from '../db/anchorRecurrence.js';
+import { isPersonalExpenseTransaction } from '../db/transactionApplications.js';
+import { addSavingsContributionInTransaction, syncSavingsContributionPeriods } from '../db/savingsContributions.js';
+import { getCurrentGoalPeriod, syncSpendingGoalPeriods } from '../db/spendingGoals.js';
 import { Plus, Pencil, Archive, ArchiveRestore, Trash2, Check, ChevronDown, ChevronUp, MoreHorizontal } from 'lucide-react';
+
+const GOAL_PERIOD_STATUS_LABELS = {
+  ACTIVE: 'Activo',
+  ACTIVE_PARTIAL: 'Activo parcial',
+  COMPLETED: 'Completado',
+  PARTIAL: 'Parcial',
+  EXPIRED: 'Vencido',
+};
 
 export default function BudgetScreen() {
   const navigate = useNavigate();
   const [showArchived, setShowArchived] = useState(false);
   const [isPaymentCalendarOpen, setIsPaymentCalendarOpen] = useState(true);
   const [isFixedExpensesOpen, setIsFixedExpensesOpen] = useState(true);
+  const [isSpendingGoalsOpen, setIsSpendingGoalsOpen] = useState(true);
   const [isSavingsTemplatesOpen, setIsSavingsTemplatesOpen] = useState(true);
   const [addAllowedPillars, setAddAllowedPillars] = useState(['NEED', 'WANT']);
   const [openAnchorMenuId, setOpenAnchorMenuId] = useState(null);
@@ -52,6 +64,7 @@ export default function BudgetScreen() {
   const [transAmountReceived, setTransAmountReceived] = useState('');
   const [transExchangeRate, setTransExchangeRate] = useState('1.00');
   const [savePayError, setSavePayError] = useState('');
+  const [saveContributionAmount, setSaveContributionAmount] = useState('');
 
   // Dexie Queries
   const accounts = useLiveQuery(() => db.accounts.toArray()) || [];
@@ -63,6 +76,8 @@ export default function BudgetScreen() {
   const tags = useLiveQuery(() => db.tags.toArray()) || [];
   const dbCurrencies = useLiveQuery(() => db.currencies.toArray()) || [];
   const lots = useLiveQuery(() => db.lots.toArray()) || [];
+  const spendingGoals = useLiveQuery(() => db.spending_goals.toArray()) || [];
+  const spendingGoalPeriods = useLiveQuery(() => db.spending_goal_periods.toArray()) || [];
   const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
   const lotCurrencyObj = useLiveQuery(() => db.app_config.get('lotCurrency'));
   const monthlyIncomeObj = useLiveQuery(() => db.app_config.get('monthlyIncome'));
@@ -93,6 +108,18 @@ export default function BudgetScreen() {
     };
     runMigration();
   }, [anchors]);
+
+  React.useEffect(() => {
+    if (anchors.length > 0) syncSavingsContributionPeriods(db).catch(console.error);
+  }, [anchors.length]);
+
+  React.useEffect(() => {
+    syncSpendingGoalPeriods(db).catch(console.error);
+  }, [spendingGoals.length]);
+
+  const activeSpendingGoals = useMemo(() => spendingGoals
+    .filter(goal => goal.status !== 'ARCHIVED')
+    .map(goal => ({ ...goal, currentPeriod: getCurrentGoalPeriod(spendingGoalPeriods, goal.id) })), [spendingGoals, spendingGoalPeriods]);
 
   const activeAccounts = accounts.filter(a => !a.isArchived);
   const excludedCurrencies = [...new Set(activeAccounts
@@ -132,8 +159,10 @@ export default function BudgetScreen() {
   // Aportes a Metas de este mes
   const thisMonthAhorros = thisMonthInstances.filter(a => a.pillar === 'SAVE');
   const planifiedAhorros = thisMonthAhorros.reduce((sum, a) => sum + convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies), 0);
-  const paidAhorros = thisMonthAhorros.filter(a => a.status === 'PAID').reduce((sum, a) => sum + convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies), 0);
-  const pendingAhorros = thisMonthAhorros.filter(a => a.status !== 'PAID').reduce((sum, a) => sum + convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies), 0);
+  const paidAhorros = thisMonthAhorros.reduce((sum, a) => sum + (convertAmountToBase(Number(a.contributedAmount) || (a.status === 'PAID' ? a.amount : 0), a.currency, baseCurrency, lots, dbCurrencies) || 0), 0);
+  const pendingAhorros = thisMonthAhorros
+    .filter(a => !['EXPIRED', 'PARTIAL_EXPIRED'].includes(a.status))
+    .reduce((sum, a) => sum + (convertAmountToBase(Math.max(0, Number(a.amount) - (Number(a.contributedAmount) || 0)), a.currency, baseCurrency, lots, dbCurrencies) || 0), 0);
 
   const totalComprometido = planifiedGastos + planifiedAhorros;
 
@@ -196,7 +225,9 @@ export default function BudgetScreen() {
         setTransFromAccountId(firstAccount.id.toString());
       }
       if (secondAccount) setTransToAccountId(secondAccount.id.toString());
-      setTransAmountReceived(anchor.amount.toString());
+      const remaining = Math.max(0, Number(anchor.amount) - (Number(anchor.contributedAmount) || 0));
+      setSaveContributionAmount(remaining.toString());
+      setTransAmountReceived(remaining.toString());
       setTransExchangeRate('1.00');
       return;
     }
@@ -286,8 +317,17 @@ export default function BudgetScreen() {
         setSavePayError('Cuenta no encontrada.');
         return;
       }
+      if (account.currency !== maceta.currency) {
+        setSavePayError(`La cuenta debe estar en ${maceta.currency}.`);
+        return;
+      }
 
-      const amount = payingSaveAnchor.amount;
+      const amount = parseFloat(saveContributionAmount);
+      const remaining = Math.max(0, Number(payingSaveAnchor.amount) - (Number(payingSaveAnchor.contributedAmount) || 0));
+      if (!Number.isFinite(amount) || amount <= 0 || amount > remaining + 0.001) {
+        setSavePayError(`El aporte debe estar entre 0 y ${remaining.toFixed(2)} ${payingSaveAnchor.currency}.`);
+        return;
+      }
       const currentAllocations = macetaAllocations.filter(a => a.macetaId === maceta.id);
       let exists = false;
       const updatedAllocations = currentAllocations.map(a => {
@@ -310,7 +350,7 @@ export default function BudgetScreen() {
 
       const totalAllocated = updatedAllocations.reduce((sum, a) => sum + a.amount, 0);
 
-      await db.transaction('rw', [db.maceta_allocations, db.macetas, db.anchors], async () => {
+      await db.transaction('rw', [db.maceta_allocations, db.macetas, db.anchors, db.savings_contributions], async () => {
         await db.maceta_allocations.where('macetaId').equals(maceta.id).delete();
         for (const alloc of updatedAllocations) {
           await db.maceta_allocations.add({
@@ -322,12 +362,20 @@ export default function BudgetScreen() {
           });
         }
         await db.macetas.update(maceta.id, { currentAmount: totalAllocated });
-        await db.anchors.update(payingSaveAnchor.id, { status: 'PAID' });
+        await addSavingsContributionInTransaction(db, {
+          macetaId: maceta.id,
+          anchorId: payingSaveAnchor.id,
+          accountId,
+          amount,
+          currency: payingSaveAnchor.currency,
+          method: 'ALLOCATION',
+          date: new Date(),
+        });
       });
 
       setPayingSaveAnchor(null);
     } catch {
-      setSavePayError('Error al procesar la asignacion del ahorro.');
+      setSavePayError('Error al procesar la asignación del ahorro.');
     }
   };
 
@@ -339,15 +387,15 @@ export default function BudgetScreen() {
     try {
       const fromId = parseInt(transFromAccountId);
       const toId = parseInt(transToAccountId);
-      const amountSent = payingSaveAnchor.amount;
+      const amountSent = parseFloat(saveContributionAmount);
       const amountRec = parseFloat(transAmountReceived);
 
       if (fromId === toId) {
         setSavePayError('Las cuentas de origen y destino deben ser distintas.');
         return;
       }
-      if (isNaN(amountRec) || amountRec <= 0) {
-        setSavePayError('El monto recibido debe ser un numero positivo.');
+      if (!Number.isFinite(amountSent) || amountSent <= 0 || isNaN(amountRec) || amountRec <= 0) {
+        setSavePayError('El monto recibido debe ser un número positivo.');
         return;
       }
 
@@ -365,6 +413,15 @@ export default function BudgetScreen() {
       const maceta = resolveSaveTarget(payingSaveAnchor);
       if (!maceta) {
         setSavePayError('Meta de ahorro asociada no encontrada.');
+        return;
+      }
+      if (toAccount.currency !== maceta.currency) {
+        setSavePayError(`La cuenta destino debe estar en ${maceta.currency}.`);
+        return;
+      }
+      const remaining = Math.max(0, Number(payingSaveAnchor.amount) - (Number(payingSaveAnchor.contributedAmount) || 0));
+      if (amountRec > remaining + 0.001) {
+        setSavePayError(`El aporte recibido excede lo pendiente (${remaining.toFixed(2)} ${maceta.currency}).`);
         return;
       }
 
@@ -391,7 +448,7 @@ export default function BudgetScreen() {
 
       const totalAllocated = updatedAllocations.reduce((sum, a) => sum + a.amount, 0);
 
-      await db.transaction('rw', [db.accounts, db.transactions, db.maceta_allocations, db.macetas, db.anchors, db.lots], async () => {
+      await db.transaction('rw', [db.accounts, db.transactions, db.maceta_allocations, db.macetas, db.anchors, db.lots, db.savings_contributions], async () => {
         let transferConsumptions = [];
         let transferBaseAmount = convertAmountToBase(amountSent, fromAccount.currency, baseCurrency, [], dbCurrencies);
         let transferBaseCurrency = transferBaseAmount === null ? null : baseCurrency;
@@ -453,7 +510,7 @@ export default function BudgetScreen() {
           baseCurrency: transferBaseCurrency,
           lotConsumption: stringifyLotConsumption(transferConsumptions),
         });
-        await db.transactions.add({
+        const incomingTransactionId = await db.transactions.add({
           date: new Date(),
           type: 'TRANSFER_IN',
           amount: amountRec,
@@ -475,7 +532,16 @@ export default function BudgetScreen() {
           });
         }
         await db.macetas.update(maceta.id, { currentAmount: totalAllocated });
-        await db.anchors.update(payingSaveAnchor.id, { status: 'PAID' });
+        await addSavingsContributionInTransaction(db, {
+          macetaId: maceta.id,
+          anchorId: payingSaveAnchor.id,
+          transactionId: incomingTransactionId,
+          accountId: toId,
+          amount: amountRec,
+          currency: maceta.currency,
+          method: 'TRANSFER',
+          date: new Date(),
+        });
       });
 
       setPayingSaveAnchor(null);
@@ -824,7 +890,7 @@ export default function BudgetScreen() {
   });
 
   const totalExpensesThisMonth = thisMonthTransactions
-    .filter(t => t.type === 'OUT')
+    .filter(isPersonalExpenseTransaction)
     .reduce((sum, t) => sum + transactionAmountInBase(t), 0);
 
   const totalEjecutadoReal = totalExpensesThisMonth + paidAhorros;
@@ -843,11 +909,11 @@ export default function BudgetScreen() {
   };
 
   const spentNeeds = thisMonthTransactions
-    .filter(t => t.type === 'OUT' && getTransactionPillar(t) === 'NEED')
+    .filter(t => isPersonalExpenseTransaction(t) && getTransactionPillar(t) === 'NEED')
     .reduce((sum, t) => sum + transactionAmountInBase(t), 0);
 
   const spentWants = thisMonthTransactions
-    .filter(t => t.type === 'OUT' && getTransactionPillar(t) === 'WANT')
+    .filter(t => isPersonalExpenseTransaction(t) && getTransactionPillar(t) === 'WANT')
     .reduce((sum, t) => sum + transactionAmountInBase(t), 0);
 
   const spentSavings = paidAhorros;
@@ -1097,7 +1163,7 @@ export default function BudgetScreen() {
               </div>
 
               {projectedInstances.length === 0 ? (
-            <p className="text-[12px] text-noria-muted font-mono text-center py-4">Sin pagos programados para este periodo</p>
+            <p className="text-[12px] text-noria-muted font-mono text-center py-4">Sin pagos programados para este período</p>
           ) : (
             <div className="max-h-72 overflow-y-auto pr-1 bg-transparent p-3 border border-[#1A1A1A] font-mono text-[12px] leading-relaxed">
               {Object.keys(groupedInstances).map((dateKey) => {
@@ -1217,6 +1283,90 @@ export default function BudgetScreen() {
                   )}
                 </div>
               )}
+            </div>
+          )}
+        </section>
+
+        <section className="py-0" id="spending-goals-section" aria-labelledby="spending-goals-heading">
+          <div className="flex items-center justify-between py-3.5 border-b border-[#1A1A1A]">
+            <button
+              type="button"
+              onClick={() => setIsSpendingGoalsOpen(prev => !prev)}
+              className="flex items-center space-x-2 text-left focus:outline-none"
+            >
+              {isSpendingGoalsOpen ? <ChevronUp size={14} strokeWidth={2} /> : <ChevronDown size={14} strokeWidth={2} />}
+              <h4 id="spending-goals-heading" className="text-[17px] font-[600] text-noria-text leading-tight">Objetivos de gasto y donaciones</h4>
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/goals?new=1')}
+              className="flex items-center space-x-1 focus:outline-none font-mono text-[10px] font-[700] uppercase tracking-[0.08em]"
+              style={{ color: '#647C78' }}
+            >
+              <Plus size={12} strokeWidth={2} />
+              <span>Añadir</span>
+            </button>
+          </div>
+
+          {isSpendingGoalsOpen && (
+            <div className="pt-4 pb-4 animate-fade-in">
+              {activeSpendingGoals.length === 0 ? (
+                <div className="flex flex-col items-center px-5 py-8 space-y-2 border border-[rgba(26,26,26,0.18)] text-center">
+                  <p className="text-[12px]" style={{ color: 'rgba(26,26,26,0.35)' }}>Sin objetivos de gasto activos</p>
+                  <p className="max-w-xs text-[10px] leading-relaxed text-noria-muted">
+                    Programa una donación u otro gasto flexible; el período puede cerrar con lo que hayas podido aportar.
+                  </p>
+                </div>
+              ) : (
+                <div className="bg-transparent">
+                  {activeSpendingGoals.map(goal => {
+                    const progress = Number(goal.currentPeriod?.progressAmount) || 0;
+                    const target = Number(goal.currentPeriod?.targetAmount || goal.targetAmount) || 0;
+                    const percentage = target > 0 ? Math.min(100, progress / target * 100) : 0;
+                    const category = getTag(goal.defaultTagId, 'EXPENSE');
+                    const frequency = goal.isRecurring
+                      ? getFrequencyLabel(goal.frequencyInterval, goal.frequencyUnit)
+                      : 'objetivo único';
+                    return (
+                      <button
+                        key={goal.id}
+                        type="button"
+                        onClick={() => navigate('/goals')}
+                        className="w-full border-b border-[rgba(26,26,26,0.10)] py-4 text-left focus:outline-none"
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center">
+                            <CategoryIcon iconKey={category?.iconKey} size={15} />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <span className="truncate text-[15px] font-[600] text-noria-text">{goal.name}</span>
+                              <PillarTag pillar={goal.defaultPillar || category?.pillar || 'WANT'} />
+                              <CategoryTag name={category?.name} size="xs" />
+                            </div>
+                            <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.09em] text-noria-muted leading-relaxed">
+                              <span>{formatAmountWithSymbol(progress, goal.currency, dbCurrencies)} de {formatAmountWithSymbol(target, goal.currency, dbCurrencies)}</span>
+                              <span> · {frequency}</span>
+                              <span> · {GOAL_PERIOD_STATUS_LABELS[goal.currentPeriod?.status] || 'Activo'}</span>
+                            </div>
+                            <div className="mt-2 h-1 border border-[#1A1A1A]/30" aria-label={`Progreso ${percentage.toFixed(0)}%`}>
+                              <div className="h-full bg-[#647C78]" style={{ width: `${percentage}%` }} />
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => navigate('/goals')}
+                className="mt-3 w-full py-1 text-left font-mono text-[10px] font-[700] uppercase tracking-[0.1em] text-noria-muted focus:outline-none"
+              >
+                Ver todos →
+              </button>
             </div>
           )}
         </section>
@@ -1372,6 +1522,11 @@ export default function BudgetScreen() {
               {savePayMode === 'ALLOC' ? (
                 <form onSubmit={handleExecuteSaveAlloc} className="space-y-4">
                   <div>
+                    <label className="muji-header block mb-1">Aporte ({payingSaveAnchor.currency})</label>
+                    <input type="number" step="0.01" inputMode="decimal" value={saveContributionAmount} onChange={e => setSaveContributionAmount(e.target.value)} className="muji-input" required />
+                    <p className="font-mono text-[9px] text-noria-muted mt-1">Acumulado: {Number(payingSaveAnchor.contributedAmount || 0).toFixed(2)} · Meta del período: {Number(payingSaveAnchor.amount).toFixed(2)}</p>
+                  </div>
+                  <div>
                     <label className="muji-header block mb-1">Cuenta donde se retiene</label>
                     <select value={allocAccountId} onChange={e => setAllocAccountId(e.target.value)} className="muji-input" required>
                       {activeAccounts.map(acc => {
@@ -1388,6 +1543,14 @@ export default function BudgetScreen() {
                 </form>
               ) : (
                 <form onSubmit={handleExecuteSaveTransfer} className="space-y-4">
+                  <div>
+                    <label className="muji-header block mb-1">Monto enviado</label>
+                    <input type="number" step="0.01" inputMode="decimal" value={saveContributionAmount} onChange={e => {
+                      setSaveContributionAmount(e.target.value);
+                      const rate = parseFloat(transAmountReceived) / parseFloat(e.target.value);
+                      setTransExchangeRate(Number.isFinite(rate) ? rate.toFixed(4) : '1.00');
+                    }} className="muji-input" required />
+                  </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="muji-header block mb-1">Origen</label>
@@ -1406,7 +1569,7 @@ export default function BudgetScreen() {
                     <label className="muji-header block mb-1">Monto recibido</label>
                     <input type="number" step="0.01" inputMode="decimal" value={transAmountReceived} onChange={e => {
                       setTransAmountReceived(e.target.value);
-                      const rate = parseFloat(e.target.value) / payingSaveAnchor.amount;
+                      const rate = parseFloat(e.target.value) / parseFloat(saveContributionAmount);
                       setTransExchangeRate(isNaN(rate) ? '1.00' : rate.toFixed(4));
                     }} className="muji-input" required />
                     <p className="font-mono text-[10px] text-noria-muted mt-1">Tasa efectiva: {transExchangeRate}</p>
