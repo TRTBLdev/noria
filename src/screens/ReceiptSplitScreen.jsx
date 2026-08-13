@@ -18,7 +18,13 @@ import {
   TextInput,
 } from '../components/FormSystem.jsx';
 import { createTransactionGroup, TRANSACTION_GROUP_KINDS } from '../db/receipts.js';
-import { allocateAmount, getCurrencyDecimals, roundMoney } from '../utils/moneyAllocation.js';
+import {
+  allocateAmount,
+  getCurrencyDecimals,
+  getReceiptAllocationBuckets,
+  getSharedConsumptionShares,
+  roundMoney,
+} from '../utils/moneyAllocation.js';
 
 const MODE_OPTIONS = [
   { value: TRANSACTION_GROUP_KINDS.RECEIPT, label: 'Factura / ticket' },
@@ -26,7 +32,13 @@ const MODE_OPTIONS = [
   { value: TRANSACTION_GROUP_KINDS.DEBT_DISTRIBUTION, label: 'Pago de deudas' },
 ];
 
-const newReceiptPart = () => ({
+const MODE_DESCRIPTIONS = {
+  [TRANSACTION_GROUP_KINDS.RECEIPT]: 'Conserva el total, la base y el IVA. También puedes asignar partes a otras personas y crear cuentas por cobrar.',
+  [TRANSACTION_GROUP_KINDS.SHARED_EXPENSE]: 'Divide un subtotal entre personas, con propina opcional, sin registrar desglose fiscal.',
+  [TRANSACTION_GROUP_KINDS.DEBT_DISTRIBUTION]: 'Distribuye un envío entre una o varias deudas existentes.',
+};
+
+const newReceiptPart = (fields = {}) => ({
   description: '',
   amount: '',
   taxTreatment: 'TAXABLE',
@@ -37,6 +49,13 @@ const newReceiptPart = () => ({
   destinationType: 'NONE',
   targetId: '',
   manualTargetAmount: '',
+  ...fields,
+});
+
+const newReceiptRemainders = () => ({
+  GROSS: newReceiptPart({ description: 'Mi parte' }),
+  TAXABLE: newReceiptPart({ description: 'Mi parte gravada', taxTreatment: 'TAXABLE' }),
+  EXEMPT: newReceiptPart({ description: 'Mi parte exenta', taxTreatment: 'EXEMPT' }),
 });
 
 const newParticipant = index => ({
@@ -59,6 +78,11 @@ const getAccountIdFromMethod = (value, instruments) => {
 const getInstrumentIdFromMethod = value => value?.startsWith('inst-')
   ? Number(value.replace('inst-', ''))
   : null;
+
+const formatMoneyForMessage = (value, decimals) => Number(value || 0).toLocaleString('es-VE', {
+  minimumFractionDigits: decimals,
+  maximumFractionDigits: decimals,
+});
 
 function ThirdPartyPicker({
   id,
@@ -158,7 +182,8 @@ export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KIN
   const [taxableBase, setTaxableBase] = useState('');
   const [exemptBase, setExemptBase] = useState('');
   const [taxAmount, setTaxAmount] = useState('');
-  const [receiptParts, setReceiptParts] = useState([newReceiptPart()]);
+  const [receiptParts, setReceiptParts] = useState([]);
+  const [receiptRemainders, setReceiptRemainders] = useState(newReceiptRemainders);
 
   const [splitMethod, setSplitMethod] = useState('EQUAL');
   const [numberPeople, setNumberPeople] = useState(2);
@@ -210,16 +235,42 @@ export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KIN
     ? parsedTaxable + parsedExempt + parsedTax
     : Math.max(0, Number(invoiceTotalInput) || 0);
 
-  const sharedShares = useMemo(() => {
-    if (splitMethod === 'MANUAL') return participants.map(person => Math.max(0, Number(person.amount) || 0));
+  const invoiceDecimals = getCurrencyDecimals(invoiceCurrency, currencies);
+  const receiptBuckets = useMemo(() => getReceiptAllocationBuckets({
+    hasTaxBreakdown: includeTax,
+    invoiceTotal,
+    taxableBase: parsedTaxable,
+    exemptBase: parsedExempt,
+    parts: receiptParts,
+    decimals: invoiceDecimals,
+  }), [includeTax, invoiceTotal, parsedTaxable, parsedExempt, receiptParts, invoiceDecimals]);
+  const automaticReceiptParts = receiptBuckets
+    .filter(bucket => bucket.remaining > 0)
+    .map(bucket => ({
+      ...receiptRemainders[bucket.key],
+      amount: bucket.remaining,
+      taxTreatment: bucket.taxTreatment || receiptRemainders[bucket.key].taxTreatment,
+      automatic: true,
+      bucketKey: bucket.key,
+    }));
+  const effectiveReceiptParts = [...automaticReceiptParts, ...receiptParts];
+
+  const sharedConsumptionResult = useMemo(() => getSharedConsumptionShares({
+    subtotal: parsedAmount,
+    participantAmounts: participants.map(person => person.amount),
+    splitMethod,
+    decimals: paymentDecimals,
+  }), [splitMethod, participants, parsedAmount, paymentDecimals]);
+  const sharedConsumptions = sharedConsumptionResult.shares;
+  const sharedTipShares = useMemo(() => {
     try {
-      return allocateAmount(paymentAmount, participants.map(() => 1), paymentDecimals);
+      return allocateAmount(tipAmount, sharedConsumptions, paymentDecimals);
     } catch {
       return participants.map(() => 0);
     }
-  }, [splitMethod, participants, paymentAmount, paymentDecimals]);
-  const sharedSum = sharedShares.reduce((sum, value) => sum + value, 0);
-  const sharedDifference = paymentAmount - sharedSum;
+  }, [tipAmount, sharedConsumptions, paymentDecimals, participants]);
+  const sharedShares = sharedConsumptions.map((consumption, index) => roundMoney(consumption + sharedTipShares[index], paymentDecimals));
+  const sharedOverage = sharedConsumptionResult.overage;
 
   const openCounterpartyDebts = debts.filter(debt => (
     debt.type === 'PAGAR'
@@ -234,11 +285,11 @@ export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KIN
   const receiptPreview = useMemo(() => {
     try {
       const documentDecimals = getCurrencyDecimals(invoiceCurrency, currencies);
-      const documentAmounts = receiptParts.map(part => Math.max(0, Number(part.amount) || 0));
-      let taxes = receiptParts.map(() => 0);
+      const documentAmounts = effectiveReceiptParts.map(part => Math.max(0, Number(part.amount) || 0));
+      let taxes = effectiveReceiptParts.map(() => 0);
       let gross = documentAmounts;
       if (includeTax) {
-        const taxableIndexes = receiptParts
+        const taxableIndexes = effectiveReceiptParts
           .map((part, index) => part.taxTreatment === 'TAXABLE' ? index : -1)
           .filter(index => index >= 0);
         const allocatedTax = allocateAmount(parsedTax, taxableIndexes.map(index => documentAmounts[index]), documentDecimals);
@@ -247,14 +298,17 @@ export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KIN
       }
       const paid = allocateAmount(paymentAmount, gross, paymentDecimals);
       const fees = allocateAmount(feeAmount, paid, paymentDecimals);
-      return receiptParts.map((part, index) => ({ tax: taxes[index], gross: gross[index], debit: paid[index] + fees[index] }));
+      return effectiveReceiptParts.map((part, index) => ({ tax: taxes[index], gross: gross[index], debit: paid[index] + fees[index] }));
     } catch {
-      return receiptParts.map(() => ({ tax: 0, gross: 0, debit: 0 }));
+      return effectiveReceiptParts.map(() => ({ tax: 0, gross: 0, debit: 0 }));
     }
-  }, [receiptParts, includeTax, parsedTax, invoiceCurrency, currencies, paymentAmount, paymentDecimals, feeAmount]);
+  }, [effectiveReceiptParts, includeTax, parsedTax, invoiceCurrency, currencies, paymentAmount, paymentDecimals, feeAmount]);
 
   const updateReceiptPart = (index, fields) => {
     setReceiptParts(current => current.map((part, position) => position === index ? { ...part, ...fields } : part));
+  };
+  const updateReceiptRemainder = (key, fields) => {
+    setReceiptRemainders(current => ({ ...current, [key]: { ...current[key], ...fields } }));
   };
   const updateParticipant = (index, fields) => {
     setParticipants(current => current.map((person, position) => position === index ? { ...person, ...fields } : person));
@@ -289,7 +343,20 @@ export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KIN
 
       if (mode === TRANSACTION_GROUP_KINDS.RECEIPT) {
         if (!invoiceCurrency) throw new Error('Selecciona la moneda del ticket.');
-        parts = receiptParts.map(part => ({
+        const overallocatedBucket = receiptBuckets.find(bucket => bucket.overage > 0);
+        if (overallocatedBucket) {
+          const currencyLabel = currencies.find(currency => currency.code === invoiceCurrency)?.symbol || invoiceCurrency;
+          const bucketAdjective = overallocatedBucket.key === 'TAXABLE' ? 'gravados' : 'exentos';
+          const bucketLabel = overallocatedBucket.key === 'GROSS'
+            ? 'el total del ticket'
+            : `la base ${overallocatedBucket.key === 'TAXABLE' ? 'gravada' : 'exenta'}`;
+          throw new Error(
+            `Los fragmentos ${overallocatedBucket.key === 'GROSS' ? '' : `${bucketAdjective} `}`
+            + `asignados suman ${currencyLabel} ${formatMoneyForMessage(overallocatedBucket.assigned, invoiceDecimals)} y ${bucketLabel} es ${currencyLabel} ${formatMoneyForMessage(overallocatedBucket.total, invoiceDecimals)}. `
+            + `Sobran ${currencyLabel} ${formatMoneyForMessage(overallocatedBucket.overage, invoiceDecimals)}; reduce un fragmento o corrige ${bucketLabel}.`
+          );
+        }
+        parts = effectiveReceiptParts.map(part => ({
           description: part.description,
           ...(includeTax ? { baseAmount: Number(part.amount), taxTreatment: part.taxTreatment } : { grossAmount: Number(part.amount) }),
           tagId: part.tagId ? Number(part.tagId) : null,
@@ -310,7 +377,9 @@ export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KIN
           parts,
         });
       } else if (mode === TRANSACTION_GROUP_KINDS.SHARED_EXPENSE) {
-        if (Math.abs(sharedDifference) > tolerance) throw new Error('Los montos manuales deben sumar el total con propina.');
+        if (sharedOverage > tolerance) {
+          throw new Error(`Los consumos de las otras personas superan el subtotal por ${formatMoneyForMessage(sharedOverage, paymentDecimals)} ${selectedAccount.currency}. Reduce uno de esos consumos o corrige el subtotal.`);
+        }
         if (!sharedTagId) throw new Error('Selecciona la categoría de tu parte.');
         const participantIds = new Set();
         participants.slice(1).forEach((participant, index) => {
@@ -377,6 +446,9 @@ export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KIN
         <Header title="Dividir movimiento" showBack backRoute="/transactions" />
         <form onSubmit={handleSave} className="space-y-6 py-5">
           <SegmentedChoice value={mode} onChange={value => { setMode(value); setError(''); }} options={MODE_OPTIONS} />
+          <p className="-mt-3 border-l-2 border-[#647C78] pl-3 text-[11px] leading-relaxed text-noria-muted">
+            {MODE_DESCRIPTIONS[mode]}
+          </p>
 
           <section className="space-y-4">
             <SectionTitle>Movimiento real</SectionTitle>
@@ -449,8 +521,10 @@ export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KIN
               setTaxAmount={setTaxAmount}
               invoiceTotal={invoiceTotal}
               receiptParts={receiptParts}
+              automaticReceiptParts={automaticReceiptParts}
               setReceiptParts={setReceiptParts}
               updateReceiptPart={updateReceiptPart}
+              updateReceiptRemainder={updateReceiptRemainder}
               receiptPreview={receiptPreview}
               thirdParties={thirdParties}
               debts={debts}
@@ -470,8 +544,9 @@ export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KIN
               participants={participants}
               updateParticipant={updateParticipant}
               sharedShares={sharedShares}
-              sharedSum={sharedSum}
-              sharedDifference={sharedDifference}
+              sharedConsumptions={sharedConsumptions}
+              sharedTipShares={sharedTipShares}
+              sharedOverage={sharedOverage}
               tolerance={tolerance}
               thirdParties={thirdParties}
               sharedTagId={sharedTagId}
@@ -538,8 +613,10 @@ function ReceiptFields({
   setTaxAmount,
   invoiceTotal,
   receiptParts,
+  automaticReceiptParts,
   setReceiptParts,
   updateReceiptPart,
+  updateReceiptRemainder,
   receiptPreview,
   thirdParties,
   debts,
@@ -588,32 +665,42 @@ function ReceiptFields({
       <section className="space-y-4">
         <SectionTitle aside={(
           <button type="button" onClick={() => setReceiptParts(current => [...current, newReceiptPart()])} className="flex items-center gap-1 font-mono text-[10px] uppercase text-[#647C78]">
-            <Plus size={13} /> Agregar
+            <Plus size={13} /> Agregar parte
           </button>
         )}>Fragmentos</SectionTitle>
-        {receiptParts.map((part, index) => {
+        {invoiceTotal <= 0 && receiptParts.length === 0 && (
+          <p className="border-l-2 border-[#647C78] pl-3 text-[11px] leading-relaxed text-noria-muted">
+            Ingresa los totales del documento. La app creará “Mi parte” con el monto que quede sin asignar.
+          </p>
+        )}
+        {[...automaticReceiptParts, ...receiptParts].map((part, index) => {
+          const isAutomatic = Boolean(part.automatic);
+          const manualIndex = index - automaticReceiptParts.length;
+          const updatePart = fields => isAutomatic
+            ? updateReceiptRemainder(part.bucketKey, fields)
+            : updateReceiptPart(manualIndex, fields);
           const ownerId = Number(part.ownerThirdPartyId);
           const availableDebts = debts.filter(debt => debt.type === 'PAGAR' && debt.status !== 'SETTLED' && debt.thirdPartyId === ownerId);
           const selectedDebt = debts.find(debt => debt.id === Number(part.targetId));
           const selectedGoal = goals.find(goal => goal.id === Number(part.targetId));
           const targetCurrency = selectedDebt?.currency || selectedGoal?.currency;
           return (
-            <div key={index} className="space-y-4 border border-[#1A1A1A] p-4">
+            <div key={isAutomatic ? `automatic-${part.bucketKey}` : `manual-${manualIndex}`} className={`space-y-4 border p-4 ${isAutomatic ? 'border-[#647C78]' : 'border-[#1A1A1A]'}`}>
               <div className="flex items-center justify-between">
-                <span className="font-mono text-[10px] font-bold uppercase">Fragmento {index + 1}</span>
-                {receiptParts.length > 1 && (
-                  <button type="button" onClick={() => setReceiptParts(current => current.filter((_, position) => position !== index))} className="text-[#9F2F2D]" aria-label={`Eliminar fragmento ${index + 1}`}>
+                <span className="font-mono text-[10px] font-bold uppercase">{isAutomatic ? 'Mi parte · restante automático' : `Parte asignada ${manualIndex + 1}`}</span>
+                {!isAutomatic && (
+                  <button type="button" onClick={() => setReceiptParts(current => current.filter((_, position) => position !== manualIndex))} className="text-[#9F2F2D]" aria-label={`Eliminar parte asignada ${manualIndex + 1}`}>
                     <Trash2 size={13} />
                   </button>
                 )}
               </div>
               <div className={`grid gap-3 ${includeTax ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                <FormField label={`${includeTax ? 'Base' : 'Importe'} (${invoiceCurrency})`} htmlFor={`part-amount-${index}`}>
-                  <NumberInput id={`part-amount-${index}`} value={part.amount} onChange={event => updateReceiptPart(index, { amount: event.target.value })} min="0" step="0.01" required />
+                <FormField label={`${includeTax ? 'Base' : 'Importe'} (${invoiceCurrency})`} htmlFor={`part-amount-${index}`} hint={isAutomatic ? 'Se calcula con lo que falta por asignar' : undefined}>
+                  <NumberInput id={`part-amount-${index}`} value={part.amount} onChange={event => updatePart({ amount: event.target.value })} min="0" step="0.01" readOnly={isAutomatic} required />
                 </FormField>
                 {includeTax && (
                   <FormField label="Condición fiscal" htmlFor={`part-tax-${index}`}>
-                    <SelectInput id={`part-tax-${index}`} value={part.taxTreatment} onChange={event => updateReceiptPart(index, { taxTreatment: event.target.value })}>
+                    <SelectInput id={`part-tax-${index}`} value={part.taxTreatment} onChange={event => updatePart({ taxTreatment: event.target.value })} disabled={isAutomatic}>
                       <option value="TAXABLE">Gravado</option>
                       <option value="EXEMPT">Exento</option>
                     </SelectInput>
@@ -621,10 +708,10 @@ function ReceiptFields({
                 )}
               </div>
               <FormField label="Concepto" htmlFor={`part-description-${index}`} hint="Opcional">
-                <TextInput id={`part-description-${index}`} value={part.description} onChange={event => updateReceiptPart(index, { description: event.target.value })} />
+                <TextInput id={`part-description-${index}`} value={part.description} onChange={event => updatePart({ description: event.target.value })} />
               </FormField>
               <FormField label="Consumido por" htmlFor={`part-owner-mode-${index}`}>
-                <SelectInput id={`part-owner-mode-${index}`} value={part.ownerMode} onChange={event => updateReceiptPart(index, {
+                <SelectInput id={`part-owner-mode-${index}`} value={part.ownerMode} disabled={isAutomatic} onChange={event => updatePart({
                   ownerMode: event.target.value,
                   ownerName: '',
                   ownerThirdPartyId: '',
@@ -643,15 +730,15 @@ function ReceiptFields({
                   inputValue={part.ownerName}
                   selectedId={part.ownerThirdPartyId}
                   thirdParties={thirdParties}
-                  onChange={(name, id) => updateReceiptPart(index, { ownerName: name, ownerThirdPartyId: id, targetId: '' })}
+                  onChange={(name, id) => updatePart({ ownerName: name, ownerThirdPartyId: id, targetId: '' })}
                   required
                 />
               )}
               {part.ownerMode === 'SELF' && (
-                <CategorySelect id={`part-tag-${index}`} value={part.tagId} onChange={value => updateReceiptPart(index, { tagId: value })} tags={tags} kind="EXPENSE" required />
+                <CategorySelect id={`part-tag-${index}`} value={part.tagId} onChange={value => updatePart({ tagId: value })} tags={tags} kind="EXPENSE" required />
               )}
               <FormField label="Destino" htmlFor={`part-destination-${index}`}>
-                <SelectInput id={`part-destination-${index}`} value={part.destinationType} onChange={event => updateReceiptPart(index, { destinationType: event.target.value, targetId: '' })}>
+                <SelectInput id={`part-destination-${index}`} value={part.destinationType} onChange={event => updatePart({ destinationType: event.target.value, targetId: '' })}>
                   {part.ownerMode === 'SELF' && <option value="NONE">Gasto personal</option>}
                   {part.ownerMode === 'SELF' && <option value="GOAL">Objetivo de gasto</option>}
                   {part.ownerMode === 'PERSON' && <option value="CREATE_RECEIVABLE">Crear deuda por cobrar</option>}
@@ -660,7 +747,7 @@ function ReceiptFields({
               </FormField>
               {part.destinationType === 'DEBT' && (
                 <FormField label="Deuda" htmlFor={`part-debt-${index}`}>
-                  <SelectInput id={`part-debt-${index}`} value={part.targetId} onChange={event => updateReceiptPart(index, { targetId: event.target.value })} required>
+                  <SelectInput id={`part-debt-${index}`} value={part.targetId} onChange={event => updatePart({ targetId: event.target.value })} required>
                     <option value="" disabled>Selecciona…</option>
                     {availableDebts.map(debt => <option key={debt.id} value={debt.id}>{getDebtLabel(debt)}</option>)}
                   </SelectInput>
@@ -670,7 +757,7 @@ function ReceiptFields({
                 <FormField label="Objetivo" htmlFor={`part-goal-${index}`}>
                   <SelectInput id={`part-goal-${index}`} value={part.targetId} onChange={event => {
                     const goal = goals.find(item => item.id === Number(event.target.value));
-                    updateReceiptPart(index, { targetId: event.target.value, tagId: part.tagId || String(goal?.defaultTagId || '') });
+                    updatePart({ targetId: event.target.value, tagId: part.tagId || String(goal?.defaultTagId || '') });
                   }} required>
                     <option value="" disabled>Selecciona…</option>
                     {goals.filter(goal => goal.status !== 'ARCHIVED').map(goal => <option key={goal.id} value={goal.id}>{goal.name} · {goal.currency}</option>)}
@@ -679,7 +766,7 @@ function ReceiptFields({
               )}
               {['DEBT', 'GOAL'].includes(part.destinationType) && targetCurrency && targetCurrency !== selectedAccount?.currency && (
                 <FormField label={`Equivalente manual (${targetCurrency})`} htmlFor={`part-equivalent-${index}`} hint="Opcional si FIFO o una paridad pueden resolverlo">
-                  <NumberInput id={`part-equivalent-${index}`} value={part.manualTargetAmount} onChange={event => updateReceiptPart(index, { manualTargetAmount: event.target.value })} min="0" step="0.01" />
+                  <NumberInput id={`part-equivalent-${index}`} value={part.manualTargetAmount} onChange={event => updatePart({ manualTargetAmount: event.target.value })} min="0" step="0.01" />
                 </FormField>
               )}
               <div className={`grid ${includeTax ? 'grid-cols-3' : 'grid-cols-2'} gap-2 border-t border-[#1A1A1A]/20 pt-3 font-mono text-[9px]`}>
@@ -703,8 +790,9 @@ function SharedExpenseFields({
   participants,
   updateParticipant,
   sharedShares,
-  sharedSum,
-  sharedDifference,
+  sharedConsumptions,
+  sharedTipShares,
+  sharedOverage,
   tolerance,
   thirdParties,
   sharedTagId,
@@ -716,7 +804,7 @@ function SharedExpenseFields({
 }) {
   let feeShares = participants.map(() => 0);
   try { feeShares = allocateAmount(feeAmount, sharedShares, paymentDecimals); } catch { /* preview stays at zero */ }
-  const valid = Math.abs(sharedDifference) <= tolerance;
+  const valid = sharedOverage <= tolerance;
   return (
     <section className="space-y-4">
       <SectionTitle>Reparto</SectionTitle>
@@ -747,19 +835,27 @@ function SharedExpenseFields({
                 required
               />
             )}
-            {splitMethod === 'MANUAL' && (
-              <FormField label={`Monto con propina (${currency || '—'})`} htmlFor={`shared-amount-${index}`}>
+            {splitMethod === 'MANUAL' && index > 0 && (
+              <FormField label={`Consumo sin propina (${currency || '—'})`} htmlFor={`shared-amount-${index}`} hint="Mi consumo se calcula con el subtotal restante">
                 <NumberInput id={`shared-amount-${index}`} value={participant.amount} onChange={event => updateParticipant(index, { amount: event.target.value })} min="0" step="0.01" required />
               </FormField>
             )}
+            <div className="grid grid-cols-2 gap-x-3 gap-y-2 border-t border-[#1A1A1A]/20 pt-3 font-mono text-[9px]">
+              <span>Consumo: <CurrencyAmount amount={sharedConsumptions[index] || 0} currencyCode={currency} /></span>
+              <span>Propina: <CurrencyAmount amount={sharedTipShares[index] || 0} currencyCode={currency} /></span>
+              <span>Comisión: <CurrencyAmount amount={feeShares[index] || 0} currencyCode={currency} /></span>
+              <span>Total: <CurrencyAmount amount={(sharedShares[index] || 0) + (feeShares[index] || 0)} currencyCode={currency} /></span>
+            </div>
             {index > 0 && (
-              <p className="font-mono text-[9px] text-noria-muted">Se creará una deuda por cobrar por su parte, incluida su proporción de comisión.</p>
+              <p className="font-mono text-[9px] text-noria-muted">Se creará una deuda por cobrar por el total mostrado.</p>
             )}
           </div>
         ))}
       </div>
       <div className={`border-l-2 pl-3 font-mono text-[10px] ${valid ? 'border-[#4F8F58] text-[#4F8F58]' : 'border-[#9F2F2D] text-[#9F2F2D]'}`}>
-        Distribuido: <CurrencyAmount amount={sharedSum} currencyCode={currency} /> · Diferencia: <CurrencyAmount amount={sharedDifference} currencyCode={currency} />
+        {valid
+          ? <>{splitMethod === 'MANUAL' ? 'Mi consumo calculado' : 'Subtotal distribuido'}: <CurrencyAmount amount={splitMethod === 'MANUAL' ? sharedConsumptions[0] : sharedConsumptions.reduce((sum, value) => sum + value, 0)} currencyCode={currency} /></>
+          : <>Los consumos ajenos exceden el subtotal por <CurrencyAmount amount={sharedOverage} currencyCode={currency} /></>}
       </div>
     </section>
   );

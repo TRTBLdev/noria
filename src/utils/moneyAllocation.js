@@ -14,6 +14,57 @@ export function roundMoney(value, decimals = 2) {
   return Math.round((Number(value) + Number.EPSILON) * factor) / factor;
 }
 
+const toMinorUnits = (value, decimals) => Math.round(assertFiniteNonNegative(value, 'El monto') * (10 ** decimals));
+const fromMinorUnits = (value, decimals) => value / (10 ** decimals);
+
+export function getReceiptAllocationBuckets({
+  hasTaxBreakdown,
+  invoiceTotal,
+  taxableBase,
+  exemptBase,
+  parts = [],
+  decimals = 2,
+}) {
+  const definitions = hasTaxBreakdown
+    ? [
+        { key: 'TAXABLE', taxTreatment: 'TAXABLE', total: taxableBase },
+        { key: 'EXEMPT', taxTreatment: 'EXEMPT', total: exemptBase },
+      ]
+    : [{ key: 'GROSS', taxTreatment: null, total: invoiceTotal }];
+
+  return definitions.map(definition => {
+    const totalUnits = toMinorUnits(Math.max(0, Number(definition.total) || 0), decimals);
+    const assignedUnits = parts
+      .filter(part => !hasTaxBreakdown || part.taxTreatment === definition.taxTreatment)
+      .reduce((sum, part) => sum + toMinorUnits(Math.max(0, Number(part.amount) || 0), decimals), 0);
+    const differenceUnits = totalUnits - assignedUnits;
+    return {
+      ...definition,
+      total: fromMinorUnits(totalUnits, decimals),
+      assigned: fromMinorUnits(assignedUnits, decimals),
+      remaining: fromMinorUnits(Math.max(0, differenceUnits), decimals),
+      overage: fromMinorUnits(Math.max(0, -differenceUnits), decimals),
+    };
+  });
+}
+
+export function getSharedConsumptionShares({ subtotal, participantAmounts = [], splitMethod, decimals = 2 }) {
+  const subtotalUnits = toMinorUnits(Math.max(0, Number(subtotal) || 0), decimals);
+  if (splitMethod !== 'MANUAL') {
+    return {
+      shares: allocateAmount(fromMinorUnits(subtotalUnits, decimals), participantAmounts.map(() => 1), decimals),
+      overage: 0,
+    };
+  }
+
+  const otherUnits = participantAmounts.slice(1).map(value => toMinorUnits(Math.max(0, Number(value) || 0), decimals));
+  const otherTotalUnits = otherUnits.reduce((sum, value) => sum + value, 0);
+  return {
+    shares: [fromMinorUnits(Math.max(0, subtotalUnits - otherTotalUnits), decimals), ...otherUnits.map(value => fromMinorUnits(value, decimals))],
+    overage: fromMinorUnits(Math.max(0, otherTotalUnits - subtotalUnits), decimals),
+  };
+}
+
 export function allocateAmount(total, weights, decimals = 2) {
   const safeTotal = assertFiniteNonNegative(total, 'El total');
   const safeWeights = weights.map((weight, index) => assertFiniteNonNegative(weight, `El peso #${index + 1}`));
