@@ -4,6 +4,14 @@ import App from './App.jsx'
 import './index.css'
 import { db, seedDatabase } from './db/db.js'
 
+window.addEventListener('vite:preloadError', event => {
+  event.preventDefault();
+  const reloadKey = 'noria-preload-reload';
+  if (sessionStorage.getItem(reloadKey) === '1') return;
+  sessionStorage.setItem(reloadKey, '1');
+  window.location.reload();
+});
+
 // DevTools can delete IndexedDB without changing the current hash route.
 // When that happens, return to the access screen after Dexie closes its connection.
 db.on('versionchange', event => {
