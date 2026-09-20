@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
 import { db } from '../db/db.js';
 import Header from '../components/Header.jsx';
 import BottomNav from '../components/BottomNav.jsx';
@@ -627,6 +627,8 @@ function ReceiptFields({
   selectedAccount,
   getDebtLabel,
 }) {
+  const [expandedPartKeys, setExpandedPartKeys] = useState({});
+
   return (
     <>
       <section className="space-y-4">
@@ -686,96 +688,164 @@ function ReceiptFields({
           const selectedDebt = debts.find(debt => debt.id === Number(part.targetId));
           const selectedGoal = goals.find(goal => goal.id === Number(part.targetId));
           const targetCurrency = selectedDebt?.currency || selectedGoal?.currency;
+
+          const partKey = isAutomatic ? `automatic-${part.bucketKey}` : `manual-${manualIndex}`;
+          const hasCustomAssignment = part.ownerMode === 'PERSON' || part.destinationType !== 'NONE';
+          const isExpanded = expandedPartKeys[partKey] !== undefined ? expandedPartKeys[partKey] : hasCustomAssignment;
+
           return (
-            <div key={isAutomatic ? `automatic-${part.bucketKey}` : `manual-${manualIndex}`} className={`space-y-4 border p-4 ${isAutomatic ? 'border-[#647C78]' : 'border-[#1A1A1A]'}`}>
-              <div className="flex items-center justify-between">
-                <span className="font-mono text-[10px] font-bold uppercase">{isAutomatic ? 'Mi parte · restante automático' : `Parte asignada ${manualIndex + 1}`}</span>
+            <div key={partKey} className={`space-y-3 border p-3.5 ${isAutomatic ? 'border-[#647C78] bg-[#647C78]/5' : 'border-[#1A1A1A]/30'}`}>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-mono text-[10px] font-bold uppercase">
+                    {isAutomatic ? 'Mi parte · restante automático' : `Parte asignada ${manualIndex + 1}`}
+                  </span>
+                  {hasCustomAssignment && (
+                    <span className="border border-[#647C78] bg-[#647C78]/10 text-[#647C78] px-1.5 py-0.5 font-mono text-[9px] uppercase font-bold tracking-wider">
+                      {part.ownerMode === 'PERSON'
+                        ? `Tercero: ${part.ownerName || 'Otra persona'}`
+                        : (part.destinationType === 'GOAL' ? `Meta: ${selectedGoal?.name || 'Objetivo'}` : 'Asignado')}
+                    </span>
+                  )}
+                </div>
                 {!isAutomatic && (
-                  <button type="button" onClick={() => setReceiptParts(current => current.filter((_, position) => position !== manualIndex))} className="text-[#9F2F2D]" aria-label={`Eliminar parte asignada ${manualIndex + 1}`}>
+                  <button
+                    type="button"
+                    onClick={() => setReceiptParts(current => current.filter((_, position) => position !== manualIndex))}
+                    className="text-[#9F2F2D] hover:opacity-75 transition-opacity"
+                    aria-label={`Eliminar parte asignada ${manualIndex + 1}`}
+                  >
                     <Trash2 size={13} />
                   </button>
                 )}
               </div>
-              <div className={`grid gap-3 ${includeTax ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                <FormField label={`${includeTax ? 'Base' : 'Importe'} (${invoiceCurrency})`} htmlFor={`part-amount-${index}`} hint={isAutomatic ? 'Se calcula con lo que falta por asignar' : undefined}>
-                  <NumberInput id={`part-amount-${index}`} value={part.amount} onChange={event => updatePart({ amount: event.target.value })} min="0" step="0.01" readOnly={isAutomatic} required />
-                </FormField>
-                {includeTax && (
-                  <FormField label="Condición fiscal" htmlFor={`part-tax-${index}`}>
-                    <SelectInput id={`part-tax-${index}`} value={part.taxTreatment} onChange={event => updatePart({ taxTreatment: event.target.value })} disabled={isAutomatic}>
-                      <option value="TAXABLE">Gravado</option>
-                      <option value="EXEMPT">Exento</option>
-                    </SelectInput>
+
+              {/* Fila 1: Monto y Categoría (o Tercero si es de otra persona) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {includeTax ? (
+                  <div className="grid grid-cols-2 gap-2">
+                    <FormField label={`Base (${invoiceCurrency})`} htmlFor={`part-amount-${index}`} hint={isAutomatic ? 'Restante' : undefined}>
+                      <NumberInput id={`part-amount-${index}`} value={part.amount} onChange={event => updatePart({ amount: event.target.value })} min="0" step="0.01" readOnly={isAutomatic} required />
+                    </FormField>
+                    <FormField label="Condición fiscal" htmlFor={`part-tax-${index}`}>
+                      <SelectInput id={`part-tax-${index}`} value={part.taxTreatment} onChange={event => updatePart({ taxTreatment: event.target.value })} disabled={isAutomatic}>
+                        <option value="TAXABLE">Gravado</option>
+                        <option value="EXEMPT">Exento</option>
+                      </SelectInput>
+                    </FormField>
+                  </div>
+                ) : (
+                  <FormField label={`Importe (${invoiceCurrency})`} htmlFor={`part-amount-${index}`} hint={isAutomatic ? 'Restante' : undefined}>
+                    <NumberInput id={`part-amount-${index}`} value={part.amount} onChange={event => updatePart({ amount: event.target.value })} min="0" step="0.01" readOnly={isAutomatic} required />
                   </FormField>
                 )}
+
+                {part.ownerMode === 'PERSON' ? (
+                  <ThirdPartyPicker
+                    id={`part-owner-${index}`}
+                    label="Persona"
+                    inputValue={part.ownerName}
+                    selectedId={part.ownerThirdPartyId}
+                    thirdParties={thirdParties}
+                    onChange={(name, id) => updatePart({ ownerName: name, ownerThirdPartyId: id, targetId: '' })}
+                    required
+                  />
+                ) : (
+                  <CategorySelect id={`part-tag-${index}`} label="Categoría" value={part.tagId} onChange={value => updatePart({ tagId: value })} tags={tags} kind="EXPENSE" required />
+                )}
               </div>
+
+              {/* Fila 2: Concepto opcional */}
               <FormField label="Concepto" htmlFor={`part-description-${index}`} hint="Opcional">
-                <TextInput id={`part-description-${index}`} value={part.description} onChange={event => updatePart({ description: event.target.value })} />
+                <TextInput id={`part-description-${index}`} value={part.description} onChange={event => updatePart({ description: event.target.value })} placeholder="Ej. Ropa, artículos de cocina..." />
               </FormField>
-              <FormField label="Consumido por" htmlFor={`part-owner-mode-${index}`}>
-                <SelectInput id={`part-owner-mode-${index}`} value={part.ownerMode} disabled={isAutomatic} onChange={event => updatePart({
-                  ownerMode: event.target.value,
-                  ownerName: '',
-                  ownerThirdPartyId: '',
-                  destinationType: event.target.value === 'SELF' ? 'NONE' : 'CREATE_RECEIVABLE',
-                  targetId: '',
-                  tagId: event.target.value === 'SELF' ? part.tagId : '',
-                })}>
-                  <option value="SELF">Mi consumo</option>
-                  <option value="PERSON">Otra persona</option>
-                </SelectInput>
-              </FormField>
-              {part.ownerMode === 'PERSON' && (
-                <ThirdPartyPicker
-                  id={`part-owner-${index}`}
-                  label="Persona"
-                  inputValue={part.ownerName}
-                  selectedId={part.ownerThirdPartyId}
-                  thirdParties={thirdParties}
-                  onChange={(name, id) => updatePart({ ownerName: name, ownerThirdPartyId: id, targetId: '' })}
-                  required
-                />
-              )}
-              {part.ownerMode === 'SELF' && (
-                <CategorySelect id={`part-tag-${index}`} value={part.tagId} onChange={value => updatePart({ tagId: value })} tags={tags} kind="EXPENSE" required />
-              )}
-              <FormField label="Destino" htmlFor={`part-destination-${index}`}>
-                <SelectInput id={`part-destination-${index}`} value={part.destinationType} onChange={event => updatePart({ destinationType: event.target.value, targetId: '' })}>
-                  {part.ownerMode === 'SELF' && <option value="NONE">Gasto personal</option>}
-                  {part.ownerMode === 'SELF' && <option value="GOAL">Objetivo de gasto</option>}
-                  {part.ownerMode === 'PERSON' && <option value="CREATE_RECEIVABLE">Crear deuda por cobrar</option>}
-                  {part.ownerMode === 'PERSON' && <option value="DEBT">Abonar deuda por pagar con esa persona</option>}
-                </SelectInput>
-              </FormField>
-              {part.destinationType === 'DEBT' && (
-                <FormField label="Deuda" htmlFor={`part-debt-${index}`}>
-                  <SelectInput id={`part-debt-${index}`} value={part.targetId} onChange={event => updatePart({ targetId: event.target.value })} required>
-                    <option value="" disabled>Selecciona…</option>
-                    {availableDebts.map(debt => <option key={debt.id} value={debt.id}>{getDebtLabel(debt)}</option>)}
-                  </SelectInput>
-                </FormField>
-              )}
-              {part.destinationType === 'GOAL' && (
-                <FormField label="Objetivo" htmlFor={`part-goal-${index}`}>
-                  <SelectInput id={`part-goal-${index}`} value={part.targetId} onChange={event => {
-                    const goal = goals.find(item => item.id === Number(event.target.value));
-                    updatePart({ targetId: event.target.value, tagId: part.tagId || String(goal?.defaultTagId || '') });
-                  }} required>
-                    <option value="" disabled>Selecciona…</option>
-                    {goals.filter(goal => goal.status !== 'ARCHIVED').map(goal => <option key={goal.id} value={goal.id}>{goal.name} · {goal.currency}</option>)}
-                  </SelectInput>
-                </FormField>
-              )}
-              {['DEBT', 'GOAL'].includes(part.destinationType) && targetCurrency && targetCurrency !== selectedAccount?.currency && (
-                <FormField label={`Equivalente manual (${targetCurrency})`} htmlFor={`part-equivalent-${index}`} hint="Opcional si FIFO o una paridad pueden resolverlo">
-                  <NumberInput id={`part-equivalent-${index}`} value={part.manualTargetAmount} onChange={event => updatePart({ manualTargetAmount: event.target.value })} min="0" step="0.01" />
-                </FormField>
-              )}
-              <div className={`grid ${includeTax ? 'grid-cols-3' : 'grid-cols-2'} gap-2 border-t border-[#1A1A1A]/20 pt-3 font-mono text-[9px]`}>
-                {includeTax && <span>IVA: <CurrencyAmount amount={receiptPreview[index]?.tax || 0} currencyCode={invoiceCurrency} /></span>}
-                <span>Bruto: <CurrencyAmount amount={receiptPreview[index]?.gross || 0} currencyCode={invoiceCurrency} /></span>
-                <span>Débito: <CurrencyAmount amount={receiptPreview[index]?.debit || 0} currencyCode={selectedAccount?.currency} /></span>
+
+              {/* Botón de alternancia para opciones avanzadas */}
+              <div className="pt-0.5">
+                <button
+                  type="button"
+                  onClick={() => setExpandedPartKeys(prev => ({ ...prev, [partKey]: !isExpanded }))}
+                  className="flex items-center gap-1 font-mono text-[10px] uppercase text-[#647C78] hover:underline"
+                >
+                  {isExpanded ? (
+                    <>
+                      <ChevronUp size={12} /> Ocultar opciones de asignación
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown size={12} /> + Asignar a otra persona o meta / deuda
+                    </>
+                  )}
+                </button>
               </div>
+
+              {/* Opciones avanzadas de asignación expandibles */}
+              {isExpanded && (
+                <div className="space-y-3 border-t border-[#1A1A1A]/15 pt-3 animate-fade-in">
+                  <FormField label="Consumido por" htmlFor={`part-owner-mode-${index}`}>
+                    <SelectInput id={`part-owner-mode-${index}`} value={part.ownerMode} disabled={isAutomatic} onChange={event => updatePart({
+                      ownerMode: event.target.value,
+                      ownerName: '',
+                      ownerThirdPartyId: '',
+                      destinationType: event.target.value === 'SELF' ? 'NONE' : 'CREATE_RECEIVABLE',
+                      targetId: '',
+                      tagId: event.target.value === 'SELF' ? part.tagId : '',
+                    })}>
+                      <option value="SELF">Mi consumo</option>
+                      <option value="PERSON">Otra persona</option>
+                    </SelectInput>
+                  </FormField>
+
+                  <FormField label="Destino" htmlFor={`part-destination-${index}`}>
+                    <SelectInput id={`part-destination-${index}`} value={part.destinationType} onChange={event => updatePart({ destinationType: event.target.value, targetId: '' })}>
+                      {part.ownerMode === 'SELF' && <option value="NONE">Gasto personal</option>}
+                      {part.ownerMode === 'SELF' && <option value="GOAL">Objetivo de gasto</option>}
+                      {part.ownerMode === 'PERSON' && <option value="CREATE_RECEIVABLE">Crear deuda por cobrar</option>}
+                      {part.ownerMode === 'PERSON' && <option value="DEBT">Abonar deuda por pagar con esa persona</option>}
+                    </SelectInput>
+                  </FormField>
+
+                  {part.destinationType === 'DEBT' && (
+                    <FormField label="Deuda" htmlFor={`part-debt-${index}`}>
+                      <SelectInput id={`part-debt-${index}`} value={part.targetId} onChange={event => updatePart({ targetId: event.target.value })} required>
+                        <option value="" disabled>Selecciona…</option>
+                        {availableDebts.map(debt => <option key={debt.id} value={debt.id}>{getDebtLabel(debt)}</option>)}
+                      </SelectInput>
+                    </FormField>
+                  )}
+
+                  {part.destinationType === 'GOAL' && (
+                    <FormField label="Objetivo" htmlFor={`part-goal-${index}`}>
+                      <SelectInput id={`part-goal-${index}`} value={part.targetId} onChange={event => {
+                        const goal = goals.find(item => item.id === Number(event.target.value));
+                        updatePart({ targetId: event.target.value, tagId: part.tagId || String(goal?.defaultTagId || '') });
+                      }} required>
+                        <option value="" disabled>Selecciona…</option>
+                        {goals.filter(goal => goal.status !== 'ARCHIVED').map(goal => <option key={goal.id} value={goal.id}>{goal.name} · {goal.currency}</option>)}
+                      </SelectInput>
+                    </FormField>
+                  )}
+
+                  {['DEBT', 'GOAL'].includes(part.destinationType) && targetCurrency && targetCurrency !== selectedAccount?.currency && (
+                    <FormField label={`Equivalente manual (${targetCurrency})`} htmlFor={`part-equivalent-${index}`} hint="Opcional si FIFO o una paridad pueden resolverlo">
+                      <NumberInput id={`part-equivalent-${index}`} value={part.manualTargetAmount} onChange={event => updatePart({ manualTargetAmount: event.target.value })} min="0" step="0.01" />
+                    </FormField>
+                  )}
+                </div>
+              )}
+
+              {/* Pie de fragmento: desglose fiscal condicional */}
+              {includeTax ? (
+                <div className="grid grid-cols-3 gap-2 border-t border-[#1A1A1A]/20 pt-2 font-mono text-[9px]">
+                  <span>IVA: <CurrencyAmount amount={receiptPreview[index]?.tax || 0} currencyCode={invoiceCurrency} /></span>
+                  <span>Bruto: <CurrencyAmount amount={receiptPreview[index]?.gross || 0} currencyCode={invoiceCurrency} /></span>
+                  <span>Débito: <CurrencyAmount amount={receiptPreview[index]?.debit || 0} currencyCode={selectedAccount?.currency} /></span>
+                </div>
+              ) : (selectedAccount?.currency && selectedAccount.currency !== invoiceCurrency ? (
+                <div className="flex justify-end border-t border-[#1A1A1A]/15 pt-2 font-mono text-[9px] text-noria-muted">
+                  <span>Débito en cuenta: <CurrencyAmount amount={receiptPreview[index]?.debit || 0} currencyCode={selectedAccount?.currency} /></span>
+                </div>
+              ) : null)}
             </div>
           );
         })}

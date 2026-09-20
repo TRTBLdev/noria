@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
-import { Search, Trash2, Pencil, ArrowDownRight, ArrowUpRight, ArrowLeftRight, ChevronDown, ChevronUp, Link2, Unlink, Scissors, Plus, MoreHorizontal } from 'lucide-react';
+import { Search, Trash2, Pencil, ArrowDownRight, ArrowUpRight, ArrowLeftRight, ChevronDown, ChevronUp, Link2, Unlink, Scissors, Plus, MoreHorizontal, Receipt } from 'lucide-react';
 import PillarTag from './PillarTag.jsx';
 import CategoryTag from './CategoryTag.jsx';
 import CategoryIcon from './CategoryIcon.jsx';
@@ -72,6 +72,7 @@ export default function TransactionsSection({
   const [editDate, setEditDate] = useState('');
   const [applyingTx, setApplyingTx] = useState(null);
   const [expandedReceipts, setExpandedReceipts] = useState(() => new Set());
+  const [expandedTransfers, setExpandedTransfers] = useState(() => new Set());
   const [splittingTx, setSplittingTx] = useState(null);
   const [splitParts, setSplitParts] = useState([]);
   const [splitError, setSplitError] = useState('');
@@ -131,7 +132,15 @@ export default function TransactionsSection({
     const text = (t.description || '').toLowerCase();
     if (search && !text.includes(search.toLowerCase())) return false;
 
-    if (filterAccount !== 'ALL' && t.accountId?.toString() !== filterAccount) return false;
+    if (filterAccount !== 'ALL') {
+      if (t.transferId) {
+        const isParticipant = t.accountId?.toString() === filterAccount || 
+                              t.targetAccountId?.toString() === filterAccount;
+        if (!isParticipant) return false;
+      } else if (t.accountId?.toString() !== filterAccount) {
+        return false;
+      }
+    }
     if (filterPillar !== 'ALL' && t.pillar !== filterPillar) return false;
 
     if (filterType !== 'ALL') {
@@ -261,7 +270,7 @@ export default function TransactionsSection({
     });
   };
 
-  const renderRow = (t) => {
+  const renderRow = (t, { isInsideReceipt = false } = {}) => {
     const isAdjustment = t.type === 'BALANCE_ADJUSTMENT';
     const isIncome = t.type === 'IN' || t.type === 'TRANSFER_IN' || (isAdjustment && t.adjustmentAmount > 0);
     const isTransfer = t.type.startsWith('TRANSFER_');
@@ -280,9 +289,14 @@ export default function TransactionsSection({
     const isActionMenuOpen = openActionMenu === actionMenuKey;
 
     const tp = t.thirdPartyId ? thirdParties.find(item => item.id === t.thirdPartyId) : null;
-    const displayName = tp 
-      ? (t.description ? `${tp.name} · ${t.description}` : tp.name)
-      : (t.description || (isAdjustment ? 'Conciliación de saldo' : isIncome ? 'Ingreso' : 'Gasto'));
+    let displayName = '';
+    if (isInsideReceipt) {
+      displayName = t.description || 'Fragmento';
+    } else {
+      displayName = tp 
+        ? (t.description ? `${tp.name} · ${t.description}` : tp.name)
+        : (t.description || (isAdjustment ? 'Conciliación de saldo' : isIncome ? 'Ingreso' : 'Gasto'));
+    }
 
     return (
       <div key={t.id} className="relative py-3 flex items-center gap-3">
@@ -303,7 +317,7 @@ export default function TransactionsSection({
             <span className="text-[14px] font-[500] text-noria-text truncate">
               {displayName}
             </span>
-            {t.splitGroupId && (
+            {t.splitGroupId && !isInsideReceipt && (
               <span className="font-mono text-[9px] uppercase tracking-[0.05em] px-1 border border-[#1A1A1A]/30 text-noria-muted select-none">
                 Split
               </span>
@@ -321,19 +335,21 @@ export default function TransactionsSection({
             <PillarTag pillar={t.pillar} size="xs" />
             <CategoryTag name={category?.name} size="xs" />
           </div>
-          <p className="mt-0.5 text-[10px] text-noria-muted uppercase tracking-[0.1em] font-mono truncate">
-            {(() => {
-              const inst = t.instrumentId ? instruments.find(i => i.id === t.instrumentId) : null;
-              const instLabel = inst 
-                ? (inst.alias || (INSTRUMENT_TYPES.find(it => it.value === inst.type)?.label || inst.type)) 
-                : null;
-              const accountDisplay = instLabel ? `${accountName} (${instLabel})` : accountName;
-              const feeDisplay = t.fee > 0
-                ? ` · Comisión: ${amountSign}${formatTransactionAmount(t.fee, t.currency)}`
-                : '';
-              return accountDisplay + feeDisplay;
-            })()}
-          </p>
+          {!isInsideReceipt && (
+            <p className="mt-0.5 text-[10px] text-noria-muted uppercase tracking-[0.1em] font-mono truncate">
+              {(() => {
+                const inst = t.instrumentId ? instruments.find(i => i.id === t.instrumentId) : null;
+                const instLabel = inst 
+                  ? (inst.alias || (INSTRUMENT_TYPES.find(it => it.value === inst.type)?.label || inst.type)) 
+                  : null;
+                const accountDisplay = instLabel ? `${accountName} (${instLabel})` : accountName;
+                const feeDisplay = t.fee > 0
+                  ? ` · Comisión: ${amountSign}${formatTransactionAmount(t.fee, t.currency)}`
+                  : '';
+                return accountDisplay + feeDisplay;
+              })()}
+            </p>
+          )}
           {beneficiary && (
             <p className="mt-0.5 text-[9px] text-noria-muted font-mono truncate">Por cuenta de {beneficiary.name}</p>
           )}
@@ -422,28 +438,59 @@ export default function TransactionsSection({
     const hasDocument = groupKind === 'RECEIPT' && receipt.invoiceCurrency && Number.isFinite(Number(receipt.invoiceTotal));
     const actionMenuKey = `group-${receiptId}`;
     const isActionMenuOpen = openActionMenu === actionMenuKey;
+
     return (
-      <div key={`receipt-${receiptId}`} className="relative border border-[#1A1A1A]/35 my-2">
-        <div className="flex items-center gap-3 p-3">
-          <button type="button" onClick={() => toggleReceipt(receiptId)} className="text-noria-muted">
-            {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+      <div key={`receipt-${receiptId}`} className="relative">
+        <div className="py-3 flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => toggleReceipt(receiptId)}
+            className="pt-0.5 flex-shrink-0 text-noria-muted hover:text-noria-text focus:outline-none"
+            aria-label={expanded ? 'Colapsar ticket' : 'Expandir ticket'}
+          >
+            <Receipt size={14} className="text-noria-muted" strokeWidth={1.6} />
           </button>
-          <button type="button" onClick={() => toggleReceipt(receiptId)} className="min-w-0 flex-1 text-left">
-            <div className="flex items-center gap-2">
-              <span className="truncate text-[14px] font-[600]">{receipt.description}</span>
-              <span className="border border-[#647C78] px-1 font-mono text-[8px] uppercase text-[#647C78]">{getGroupKindLabel(receipt)}</span>
+
+          <button
+            type="button"
+            onClick={() => toggleReceipt(receiptId)}
+            className="min-w-0 flex-1 text-left focus:outline-none"
+          >
+            <div className="flex items-center gap-2 min-w-0 flex-wrap">
+              <span className="text-[14px] font-[500] text-noria-text truncate">
+                {counterparty ? `${counterparty.name} · ${receipt.description}` : receipt.description}
+              </span>
+              <span className="border border-[#647C78] px-1 font-mono text-[8px] uppercase text-[#647C78] select-none">
+                {getGroupKindLabel(receipt)}
+              </span>
             </div>
-            <p className="font-mono text-[9px] uppercase text-noria-muted">
-              {accountName} · {fragments.length} fragmentos
-              {counterparty ? ` · ${counterparty.name}` : ''}
-              {hasDocument ? ` · Ticket ${Number(receipt.invoiceTotal).toFixed(2)} ${receipt.invoiceCurrency}` : ''}
+            <p className="mt-0.5 text-[10px] text-noria-muted uppercase tracking-[0.1em] font-mono truncate">
+              {accountName} · {fragments.length} {fragments.length === 1 ? 'fragmento' : 'fragmentos'}
+              {hasDocument && receipt.invoiceCurrency !== receipt.paymentCurrency ? ` · Ticket ${Number(receipt.invoiceTotal).toFixed(2)} ${receipt.invoiceCurrency}` : ''}
               {Number(receipt.feeAmount) > 0 ? ` · Comisión ${Number(receipt.feeAmount).toFixed(2)} ${receipt.paymentCurrency}` : ''}
             </p>
           </button>
-          <div className="text-right">
-            <p className="font-mono text-[13px] font-bold">-{formatTransactionAmount(receipt.paymentTotal, receipt.paymentCurrency)}</p>
-            <p className="font-mono text-[8px] uppercase text-noria-muted">Cargo total</p>
-          </div>
+
+          <button
+            type="button"
+            onClick={() => toggleReceipt(receiptId)}
+            className="text-right flex-shrink-0 focus:outline-none"
+          >
+            <p className="text-[13px] font-mono font-[700] whitespace-nowrap text-noria-text">
+              -{formatTransactionAmount(receipt.paymentTotal, receipt.paymentCurrency)}
+            </p>
+            <p className="text-[9px] text-noria-muted font-mono uppercase">{receipt.paymentCurrency}</p>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => toggleReceipt(receiptId)}
+            className="text-noria-muted hover:text-noria-text p-1 flex-shrink-0 focus:outline-none"
+            aria-label={expanded ? 'Colapsar detalles' : 'Ver detalles'}
+          >
+            {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+
           <div className="relative flex-shrink-0" data-history-action-menu>
             <button
               type="button"
@@ -474,8 +521,151 @@ export default function TransactionsSection({
           </div>
         </div>
         {expanded && (
-          <div className="divide-y divide-[#1A1A1A]/12 border-t border-[#1A1A1A]/20 px-3">
-            {fragments.sort((left, right) => String(left.id).localeCompare(String(right.id))).map(renderRow)}
+          <div className="divide-y divide-[#1A1A1A]/10 border-t border-[#1A1A1A]/15 pl-4 pr-1 bg-[#1A1A1A]/[0.02] animate-fade-in">
+            {fragments
+              .sort((left, right) => String(left.id).localeCompare(String(right.id)))
+              .map(fragment => renderRow(fragment, { isInsideReceipt: true }))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const toggleTransfer = transferId => {
+    setExpandedTransfers(current => {
+      const next = new Set(current);
+      if (next.has(transferId)) next.delete(transferId);
+      else next.add(transferId);
+      return next;
+    });
+  };
+
+  const getTransferSubtitle = (outLeg, inLeg) => {
+    const parts = [];
+    const rawOut = outLeg?.description || '';
+    const isGenericOut = rawOut.startsWith('Transferencia a ') || rawOut === 'Transferencia';
+    const customText = isGenericOut ? '' : rawOut.split(' · ')[0].trim();
+    if (customText) parts.push(customText);
+
+    if (rawOut.includes('Retiro de meta:')) {
+      const metaNote = rawOut.split(' · ').find(s => s.startsWith('Retiro de meta:'));
+      if (metaNote) parts.push(metaNote);
+    }
+    const rawIn = inLeg?.description || '';
+    if (rawIn.includes('Reposición a meta:')) {
+      const metaNote = rawIn.split(' · ').find(s => s.startsWith('Reposición a meta:'));
+      if (metaNote) parts.push(metaNote);
+    }
+    return parts.length > 0 ? parts.join(' · ') : null;
+  };
+
+  const renderTransferGroup = item => {
+    const { transferId, outLeg, inLeg } = item;
+    const expanded = expandedTransfers.has(transferId);
+    const fromAccount = accounts.find(a => a.id === outLeg.accountId);
+    const toAccount = accounts.find(a => a.id === inLeg.accountId);
+    const fromName = fromAccount?.name || 'Cuenta origen';
+    const toName = toAccount?.name || 'Cuenta destino';
+    const isMultiCurrency = outLeg.currency !== inLeg.currency;
+    const subtitle = getTransferSubtitle(outLeg, inLeg);
+    const actionMenuKey = `transfer-${transferId}`;
+    const isActionMenuOpen = openActionMenu === actionMenuKey;
+
+    return (
+      <div key={`transfer-${transferId}`} className="relative">
+        <div className="py-3 flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => toggleTransfer(transferId)}
+            className="pt-0.5 flex-shrink-0 text-noria-muted hover:text-noria-text focus:outline-none"
+            aria-label={expanded ? 'Colapsar transferencia' : 'Expandir transferencia'}
+          >
+            <ArrowLeftRight size={14} className="text-noria-muted" strokeWidth={1.6} />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => toggleTransfer(transferId)}
+            className="min-w-0 flex-1 text-left focus:outline-none"
+          >
+            <div className="flex items-center gap-2 min-w-0 flex-wrap">
+              <span className="text-[14px] font-[500] text-noria-text truncate">
+                {fromName} → {toName}
+              </span>
+              <span className="font-mono text-[8px] uppercase tracking-[0.05em] px-1 border border-[#647C78] text-[#647C78] select-none">
+                Transferencia
+              </span>
+            </div>
+            <p className="mt-0.5 text-[10px] text-noria-muted uppercase tracking-[0.1em] font-mono truncate">
+              {subtitle || `${fromAccount?.currency || ''} → ${toAccount?.currency || ''}`}
+            </p>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => toggleTransfer(transferId)}
+            className="text-right flex-shrink-0 focus:outline-none"
+          >
+            {isMultiCurrency ? (
+              <>
+                <p className="text-[12px] font-mono font-[700] whitespace-nowrap text-noria-text">
+                  -{formatTransactionAmount(outLeg.amount, outLeg.currency)} → +{formatTransactionAmount(inLeg.amount, inLeg.currency)}
+                </p>
+                <p className="text-[9px] text-noria-muted font-mono uppercase">
+                  {outLeg.currency} → {inLeg.currency}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-[13px] font-mono font-[700] whitespace-nowrap text-noria-text">
+                  {formatTransactionAmount(outLeg.amount, outLeg.currency)}
+                </p>
+                <p className="text-[9px] text-noria-muted font-mono uppercase">{outLeg.currency}</p>
+              </>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => toggleTransfer(transferId)}
+            className="text-noria-muted hover:text-noria-text p-1 flex-shrink-0 focus:outline-none"
+            aria-label={expanded ? 'Colapsar detalles' : 'Ver detalles'}
+          >
+            {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+
+          <div className="relative flex-shrink-0" data-history-action-menu>
+            <button
+              type="button"
+              onClick={() => setOpenActionMenu(isActionMenuOpen ? null : actionMenuKey)}
+              className="flex h-7 w-7 items-center justify-center text-noria-muted hover:text-noria-text focus:outline-none"
+              title="Acciones"
+              aria-label="Acciones de transferencia"
+              aria-expanded={isActionMenuOpen}
+            >
+              <MoreHorizontal size={16} strokeWidth={1.8} />
+            </button>
+            {isActionMenuOpen && (
+              <div className="absolute right-0 top-7 z-30 w-48 border border-[#1A1A1A] bg-[#F5F2ED] font-mono text-[10px] uppercase tracking-[0.08em]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpenActionMenu(null);
+                    onDeleteTransaction(outLeg);
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-[#9F2F2D] hover:bg-[#9F2F2D]/10 focus:outline-none"
+                >
+                  <Trash2 size={12} strokeWidth={1.5} /> Eliminar transferencia
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {expanded && (
+          <div className="divide-y divide-[#1A1A1A]/10 border-t border-[#1A1A1A]/15 pl-4 pr-1 bg-[#1A1A1A]/[0.02] animate-fade-in">
+            {renderRow(outLeg)}
+            {renderRow(inLeg)}
           </div>
         )}
       </div>
@@ -483,17 +673,32 @@ export default function TransactionsSection({
   };
 
   const collapseReceiptItems = items => {
-    const seen = new Set();
+    const seenReceipts = new Set();
+    const seenTransfers = new Set();
     const result = [];
     for (const transaction of items) {
-      if (!transaction.receiptId) {
-        result.push({ type: 'TRANSACTION', transaction });
+      if (transaction.receiptId) {
+        if (!seenReceipts.has(transaction.receiptId)) {
+          seenReceipts.add(transaction.receiptId);
+          result.push({ type: 'RECEIPT', receiptId: transaction.receiptId });
+        }
         continue;
       }
-      if (!seen.has(transaction.receiptId)) {
-        seen.add(transaction.receiptId);
-        result.push({ type: 'RECEIPT', receiptId: transaction.receiptId });
+      if (transaction.transferId) {
+        if (!seenTransfers.has(transaction.transferId)) {
+          seenTransfers.add(transaction.transferId);
+          const legs = transactions.filter(tx => tx.transferId === transaction.transferId);
+          const outLeg = legs.find(tx => tx.type === 'TRANSFER_OUT');
+          const inLeg = legs.find(tx => tx.type === 'TRANSFER_IN');
+          if (outLeg && inLeg) {
+            result.push({ type: 'TRANSFER_GROUP', transferId: transaction.transferId, outLeg, inLeg });
+          } else {
+            result.push({ type: 'TRANSACTION', transaction });
+          }
+        }
+        continue;
       }
+      result.push({ type: 'TRANSACTION', transaction });
     }
     return result;
   };
@@ -632,9 +837,11 @@ export default function TransactionsSection({
                   {dateLabel}
                 </div>
                 <div className="divide-y divide-[#1A1A1A]/12">
-                  {collapseReceiptItems(items).map(item => item.type === 'RECEIPT'
-                    ? renderReceiptGroup(item.receiptId)
-                    : renderRow(item.transaction))}
+                  {collapseReceiptItems(items).map(item => {
+                    if (item.type === 'RECEIPT') return renderReceiptGroup(item.receiptId);
+                    if (item.type === 'TRANSFER_GROUP') return renderTransferGroup(item);
+                    return renderRow(item.transaction);
+                  })}
                 </div>
               </div>
             ))}
