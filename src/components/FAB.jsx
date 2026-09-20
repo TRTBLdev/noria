@@ -57,15 +57,20 @@ export default function FAB() {
   const baseCurrency = baseCurrencyObj?.value || '';
   const lotCurrency = lotCurrencyObj?.value || '';
   const thirdParties = useLiveQuery(() => db.third_parties.toArray()) || [];
+  const macetas = useLiveQuery(() => db.macetas.toArray()) || [];
+  const macetaAllocations = useLiveQuery(() => db.maceta_allocations.toArray()) || [];
 
   const instruments = useLiveQuery(() => db.instruments.toArray()) || [];
 
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [accountId, setAccountId] = useState('');
   const [toAccountId, setToAccountId] = useState('');
+  const [sourceMacetaId, setSourceMacetaId] = useState('');
+  const [targetMacetaId, setTargetMacetaId] = useState('');
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('');
   const [amount, setAmount] = useState('');
   const [amountReceived, setAmountReceived] = useState('');
+  const [userEditedReceived, setUserEditedReceived] = useState(false);
   const [exchangeRate, setExchangeRate] = useState('');
   const [tagId, setTagId] = useState('');
   const [description, setDescription] = useState('');
@@ -228,7 +233,10 @@ export default function FAB() {
   const resetForm = () => {
     setAmount('');
     setAmountReceived('');
+    setUserEditedReceived(false);
     setExchangeRate('');
+    setSourceMacetaId('');
+    setTargetMacetaId('');
     setDescription('');
     setNewSourceName('');
     setNewSourceIncomeTypeId('');
@@ -259,30 +267,46 @@ export default function FAB() {
 
   const handleSourceAccountChange = (id) => {
     setAccountId(id);
+    setSourceMacetaId('');
     const sourceAcc = accounts.find(a => a.id.toString() === id);
     const targetAcc = accounts.find(a => a.id.toString() === toAccountId);
     if (sourceAcc && targetAcc) {
       if (sourceAcc.currency === targetAcc.currency) {
         setExchangeRate('1');
-        setAmountReceived(amount);
+        if (!userEditedReceived || !amountReceived) {
+          setAmountReceived(amount);
+        }
       } else {
-        setExchangeRate('');
-        setAmountReceived('');
+        const amt = parseFloat(amount);
+        const rec = parseFloat(amountReceived);
+        if (!isNaN(amt) && !isNaN(rec) && amt > 0 && rec > 0) {
+          setExchangeRate((rec / amt).toFixed(4));
+        } else {
+          setExchangeRate('');
+        }
       }
     }
   };
 
   const handleTargetAccountChange = (id) => {
     setToAccountId(id);
+    setTargetMacetaId('');
     const sourceAcc = accounts.find(a => a.id.toString() === accountId);
     const targetAcc = accounts.find(a => a.id.toString() === id);
     if (sourceAcc && targetAcc) {
       if (sourceAcc.currency === targetAcc.currency) {
         setExchangeRate('1');
-        setAmountReceived(amount);
+        if (!userEditedReceived || !amountReceived) {
+          setAmountReceived(amount);
+        }
       } else {
-        setExchangeRate('');
-        setAmountReceived('');
+        const amt = parseFloat(amount);
+        const rec = parseFloat(amountReceived);
+        if (!isNaN(amt) && !isNaN(rec) && amt > 0 && rec > 0) {
+          setExchangeRate((rec / amt).toFixed(4));
+        } else {
+          setExchangeRate('');
+        }
       }
     }
   };
@@ -293,11 +317,19 @@ export default function FAB() {
     const targetAcc = accounts.find(a => a.id.toString() === toAccountId);
     if (sourceAcc && targetAcc) {
       if (sourceAcc.currency === targetAcc.currency) {
-        setAmountReceived(val);
+        if (!userEditedReceived || !amountReceived) {
+          setAmountReceived(val);
+        }
       } else {
-        const rate = parseFloat(exchangeRate);
-        if (!isNaN(rate) && rate > 0) {
-          setAmountReceived((parseFloat(val) * rate).toFixed(2));
+        const amt = parseFloat(val);
+        const rec = parseFloat(amountReceived);
+        if (userEditedReceived && !isNaN(amt) && !isNaN(rec) && amt > 0 && rec > 0) {
+          setExchangeRate((rec / amt).toFixed(4));
+        } else {
+          const rate = parseFloat(exchangeRate);
+          if (!isNaN(rate) && rate > 0) {
+            setAmountReceived((parseFloat(val) * rate).toFixed(2));
+          }
         }
       }
     }
@@ -314,6 +346,7 @@ export default function FAB() {
 
   const handleAmountReceivedChange = (val) => {
     setAmountReceived(val);
+    setUserEditedReceived(val.trim() !== '');
     const sourceAcc = accounts.find(a => a.id.toString() === accountId);
     const targetAcc = accounts.find(a => a.id.toString() === toAccountId);
     if (sourceAcc && targetAcc && sourceAcc.currency !== targetAcc.currency) {
@@ -380,7 +413,10 @@ export default function FAB() {
           return;
         }
 
-        await db.transaction('rw', [db.accounts, db.transactions, db.lots], async () => {
+        const sourceMaceta = sourceMacetaId ? macetas.find(m => m.id === parseInt(sourceMacetaId)) : null;
+        const targetMaceta = targetMacetaId ? macetas.find(m => m.id === parseInt(targetMacetaId)) : null;
+
+        await db.transaction('rw', [db.accounts, db.transactions, db.lots, db.maceta_allocations, db.macetas], async () => {
           if (sourceAccount.currency === lotCurrency) {
             const consumed = await consumeCurrencyLots(db, { accountId: sourceAccount.id, currency: lotCurrency, amount: parsedAmount });
             lotConsumptions = consumed.consumptions;
@@ -393,13 +429,17 @@ export default function FAB() {
             ? transferBaseAmount
             : convertAmountToBase(parsedReceived, targetAccount.currency, baseCurrency, [], dbCurrencies);
 
+          const outDesc = description.trim()
+            ? `${description.trim()}${sourceMaceta ? ` · Retiro de meta: ${sourceMaceta.name}` : ''}`
+            : `Transferencia a ${targetAccount.name}${sourceMaceta ? ` · Retiro de meta: ${sourceMaceta.name}` : ''}`;
+
           await db.transactions.add({
             date: new Date(date + 'T12:00:00'),
             type: 'TRANSFER_OUT',
             amount: parsedAmount,
             currency: sourceAccount.currency,
             accountId: sourceAccount.id,
-            description: description.trim() || `Transferencia a ${targetAccount.name}`,
+            description: outDesc,
             transferId,
             baseAmount: transferBaseAmount,
             baseCurrency: transferBaseCurrency,
@@ -411,13 +451,17 @@ export default function FAB() {
           });
 
           // 2. Registrar entrada
+          const inDesc = description.trim()
+            ? `${description.trim()}${targetMaceta ? ` · Reposición a meta: ${targetMaceta.name}` : ''}`
+            : `Transferencia desde ${sourceAccount.name}${targetMaceta ? ` · Reposición a meta: ${targetMaceta.name}` : ''}`;
+
           await db.transactions.add({
             date: new Date(date + 'T12:00:00'),
             type: 'TRANSFER_IN',
             amount: parsedReceived,
             currency: targetAccount.currency,
             accountId: targetAccount.id,
-            description: description.trim() || `Transferencia desde ${sourceAccount.name}`,
+            description: inDesc,
             transferId,
             baseAmount: targetBaseAmount,
             baseCurrency: targetBaseAmount === null ? null : baseCurrency,
@@ -456,6 +500,45 @@ export default function FAB() {
                 sourceType: 'TRANSFER',
               });
             }
+          }
+
+          // 3. Ajustar asignaciones de metas (macetas)
+          if (sourceMacetaId) {
+            const sMacetaId = parseInt(sourceMacetaId);
+            const sourceAllocs = await db.maceta_allocations.where('macetaId').equals(sMacetaId).toArray();
+            const currentSourceAlloc = sourceAllocs.find(a => a.accountId === sourceAccount.id);
+            if (currentSourceAlloc) {
+              const deductAmount = Math.min(parsedAmount, currentSourceAlloc.amount);
+              const newAllocAmount = currentSourceAlloc.amount - deductAmount;
+              if (newAllocAmount <= 0.001) {
+                await db.maceta_allocations.delete(currentSourceAlloc.id);
+              } else {
+                await db.maceta_allocations.update(currentSourceAlloc.id, { amount: newAllocAmount });
+              }
+              const updatedAllocs = await db.maceta_allocations.where('macetaId').equals(sMacetaId).toArray();
+              const totalAllocated = updatedAllocs.reduce((sum, a) => sum + a.amount, 0);
+              await db.macetas.update(sMacetaId, { currentAmount: Math.max(0, totalAllocated) });
+            }
+          }
+
+          if (targetMacetaId) {
+            const tMacetaId = parseInt(targetMacetaId);
+            const targetAllocs = await db.maceta_allocations.where('macetaId').equals(tMacetaId).toArray();
+            const currentTargetAlloc = targetAllocs.find(a => a.accountId === targetAccount.id);
+            if (currentTargetAlloc) {
+              await db.maceta_allocations.update(currentTargetAlloc.id, { amount: currentTargetAlloc.amount + parsedReceived });
+            } else {
+              await db.maceta_allocations.add({
+                macetaId: tMacetaId,
+                accountId: targetAccount.id,
+                amount: parsedReceived,
+                currency: targetMaceta?.currency || targetAccount.currency,
+                locked: false
+              });
+            }
+            const updatedTargetAllocs = await db.maceta_allocations.where('macetaId').equals(tMacetaId).toArray();
+            const totalAllocatedTarget = updatedTargetAllocs.reduce((sum, a) => sum + a.amount, 0);
+            await db.macetas.update(tMacetaId, { currentAmount: totalAllocatedTarget });
           }
 
           // 4. Actualizar balances
@@ -1178,35 +1261,87 @@ export default function FAB() {
                   {activeForm === 'TRANSFERENCIA' ? (
                     /* Accounts for transfers */
                     <div className="space-y-4">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="muji-header block mb-1">Desde Cuenta</label>
-                          <select id="tx-account" value={accountId} onChange={e => handleSourceAccountChange(e.target.value)}
-                            className="muji-input" required>
-                            {activeAccounts.map(acc => {
-                              const inst = institutions.find(i => i.id === acc.institutionId);
-                              const label = getAccountLabel(acc, inst);
-                              return <option key={acc.id} value={acc.id}>{label} ({acc.currency})</option>;
-                            })}
-                          </select>
-                        </div>
-                        <div>
-                          <label className="muji-header block mb-1">Hacia Cuenta</label>
-                          <select id="tx-account-dest" value={toAccountId} onChange={e => handleTargetAccountChange(e.target.value)}
-                            className="muji-input" required>
-                            {activeAccounts.map(acc => {
-                              const inst = institutions.find(i => i.id === acc.institutionId);
-                              const label = getAccountLabel(acc, inst);
-                              return <option key={acc.id} value={acc.id}>{label} ({acc.currency})</option>;
-                            })}
-                          </select>
-                        </div>
-                      </div>
-                      <div>
-                        <label className="muji-header block mb-1">Fecha</label>
-                        <input id="tx-date" type="date" value={date} onChange={e => setDate(e.target.value)}
-                          className="muji-input" required />
-                      </div>
+                      {(() => {
+                        const sourceAccountObj = accounts.find(a => a.id.toString() === accountId);
+                        const sourceAllocations = macetaAllocations.filter(a => a.accountId === parseInt(accountId) && a.amount > 0);
+                        const sourceMacetasWithFunds = sourceAllocations.map(a => {
+                          const m = macetas.find(item => item.id === a.macetaId);
+                          return { ...a, macetaName: m?.name || 'Meta' };
+                        }).filter(item => item.macetaName);
+
+                        const targetAccountObj = accounts.find(a => a.id.toString() === toAccountId);
+                        const targetMacetas = macetas.filter(m => m.status !== 'ARCHIVED' && m.currency === targetAccountObj?.currency);
+
+                        return (
+                          <>
+                            <div className="grid grid-cols-2 gap-4">
+                              <div>
+                                <label className="muji-header block mb-1">Desde Cuenta</label>
+                                <select id="tx-account" value={accountId} onChange={e => handleSourceAccountChange(e.target.value)}
+                                  className="muji-input" required>
+                                  {activeAccounts.map(acc => {
+                                    const inst = institutions.find(i => i.id === acc.institutionId);
+                                    const label = getAccountLabel(acc, inst);
+                                    return <option key={acc.id} value={acc.id}>{label} ({acc.currency})</option>;
+                                  })}
+                                </select>
+                                {sourceMacetasWithFunds.length > 0 && (
+                                  <div className="mt-2 animate-fade-in">
+                                    <label className="muji-header block mb-1">Retirar de meta</label>
+                                    <select
+                                      id="tx-source-maceta"
+                                      value={sourceMacetaId}
+                                      onChange={e => setSourceMacetaId(e.target.value)}
+                                      className="muji-input text-[11px]"
+                                    >
+                                      <option value="">Ninguna (fondos libres)</option>
+                                      {sourceMacetasWithFunds.map(item => (
+                                        <option key={item.macetaId} value={item.macetaId}>
+                                          {item.macetaName} ({formatAmountWithSymbol(item.amount, item.currency || sourceAccountObj?.currency, dbCurrencies)})
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                )}
+                              </div>
+                              <div>
+                                <label className="muji-header block mb-1">Hacia Cuenta</label>
+                                <select id="tx-account-dest" value={toAccountId} onChange={e => handleTargetAccountChange(e.target.value)}
+                                  className="muji-input" required>
+                                  {activeAccounts.map(acc => {
+                                    const inst = institutions.find(i => i.id === acc.institutionId);
+                                    const label = getAccountLabel(acc, inst);
+                                    return <option key={acc.id} value={acc.id}>{label} ({acc.currency})</option>;
+                                  })}
+                                </select>
+                                {targetMacetas.length > 0 && (
+                                  <div className="mt-2 animate-fade-in">
+                                    <label className="muji-header block mb-1">Asignar / Reponer a meta</label>
+                                    <select
+                                      id="tx-target-maceta"
+                                      value={targetMacetaId}
+                                      onChange={e => setTargetMacetaId(e.target.value)}
+                                      className="muji-input text-[11px]"
+                                    >
+                                      <option value="">Ninguna</option>
+                                      {targetMacetas.map(m => (
+                                        <option key={m.id} value={m.id}>
+                                          {m.name}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            <div>
+                              <label className="muji-header block mb-1">Fecha</label>
+                              <input id="tx-date" type="date" value={date} onChange={e => setDate(e.target.value)}
+                                className="muji-input" required />
+                            </div>
+                          </>
+                        );
+                      })()}
                     </div>
                   ) : (
                     /* Account + Date row standard */
