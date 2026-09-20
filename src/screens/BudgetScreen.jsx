@@ -78,14 +78,17 @@ export default function BudgetScreen() {
   const lots = useLiveQuery(() => db.lots.toArray()) || [];
   const spendingGoals = useLiveQuery(() => db.spending_goals.toArray()) || [];
   const spendingGoalPeriods = useLiveQuery(() => db.spending_goal_periods.toArray()) || [];
+  const savingsContributions = useLiveQuery(() => db.savings_contributions?.toArray()) || [];
   const baseCurrencyObj = useLiveQuery(() => db.app_config.get('baseCurrency'));
   const lotCurrencyObj = useLiveQuery(() => db.app_config.get('lotCurrency'));
   const monthlyIncomeObj = useLiveQuery(() => db.app_config.get('monthlyIncome'));
   const pillarPctObj = useLiveQuery(() => db.app_config.get('pillarPct'));
+  const homeostasisBaseObj = useLiveQuery(() => db.app_config.get('homeostasisBase'));
   const baseCurrency = baseCurrencyObj?.value || '';
   const lotCurrency = lotCurrencyObj?.value || '';
   const monthlyIncome = monthlyIncomeObj?.value || 0;
   const pillarPct = pillarPctObj?.value || { NEED: 50, WANT: 30, SAVE: 20 };
+  const isRealMode = (homeostasisBaseObj?.value ?? 'REAL') === 'REAL';
 
   const getAccountBalanceInBase = (acc) => {
     return convertAmountToBase(acc.balance, acc.currency, baseCurrency, lots, dbCurrencies) ?? 0;
@@ -159,7 +162,17 @@ export default function BudgetScreen() {
   // Aportes a Metas de este mes
   const thisMonthAhorros = thisMonthInstances.filter(a => a.pillar === 'SAVE');
   const planifiedAhorros = thisMonthAhorros.reduce((sum, a) => sum + convertAmountToBase(a.amount, a.currency, baseCurrency, lots, dbCurrencies), 0);
-  const paidAhorros = thisMonthAhorros.reduce((sum, a) => sum + (convertAmountToBase(Number(a.contributedAmount) || (a.status === 'PAID' ? a.amount : 0), a.currency, baseCurrency, lots, dbCurrencies) || 0), 0);
+  const paidAhorrosFromAnchors = thisMonthAhorros.reduce((sum, a) => sum + (convertAmountToBase(Number(a.contributedAmount) || (a.status === 'PAID' ? a.amount : 0), a.currency, baseCurrency, lots, dbCurrencies) || 0), 0);
+  const thisMonthAnchorIds = new Set(thisMonthInstances.map(a => a.id));
+  const directSavings = savingsContributions
+    .filter(c => {
+      const d = new Date(c.date || c.createdAt);
+      return d >= startOfMonth && d <= endOfMonth && (!c.anchorId || !thisMonthAnchorIds.has(c.anchorId));
+    })
+    .reduce((sum, c) => (
+      sum + (convertAmountToBase(Number(c.amount) || 0, c.currency, baseCurrency, lots, dbCurrencies) || 0)
+    ), 0);
+  const paidAhorros = paidAhorrosFromAnchors + directSavings;
   const pendingAhorros = thisMonthAhorros
     .filter(a => !['EXPIRED', 'PARTIAL_EXPIRED'].includes(a.status))
     .reduce((sum, a) => sum + (convertAmountToBase(Math.max(0, Number(a.amount) - (Number(a.contributedAmount) || 0)), a.currency, baseCurrency, lots, dbCurrencies) || 0), 0);
@@ -939,9 +952,14 @@ export default function BudgetScreen() {
   const pctSavings = budgetSavings > 0 ? Math.round((spentSavings / budgetSavings) * 100) : 0;
 
   const spentByPillar = spentNeeds + spentWants + spentSavings;
-  const goalNeeds = monthlyIncome * (pillarPct.NEED / 100);
-  const goalWants = monthlyIncome * (pillarPct.WANT / 100);
-  const goalSavings = monthlyIncome * (pillarPct.SAVE / 100);
+  const effectiveIncome = (isRealMode && totalIngresosMes > 0) ? totalIngresosMes : monthlyIncome;
+  const isFallbackToEstimated = isRealMode && totalIngresosMes <= 0 && monthlyIncome > 0;
+  const handleToggleBase = async (mode) => {
+    await db.app_config.put({ key: 'homeostasisBase', value: mode });
+  };
+  const goalNeeds = effectiveIncome * (pillarPct.NEED / 100);
+  const goalWants = effectiveIncome * (pillarPct.WANT / 100);
+  const goalSavings = effectiveIncome * (pillarPct.SAVE / 100);
   const homePct = (spent, goal) => goal > 0 ? Math.round((spent / goal) * 100) : null;
 
   const countNeedsGoal = Math.max(0, Math.min(100, Math.round(Number(pillarPct.NEED) || 0)));
@@ -961,7 +979,7 @@ export default function BudgetScreen() {
   const budgetExceededAmount = Math.max(0, totalEjecutadoReal - totalPresupuestoGeneral);
   const homeostasisMeta = (spent, goal) => {
     const percentage = homePct(spent, goal);
-    if (percentage === null) return spent > 0 ? 'HOME: SIN INGRESO PROMEDIO' : 'HOME: —';
+    if (percentage === null) return spent > 0 ? (isRealMode ? 'HOME: SIN INGRESOS' : 'HOME: SIN INGRESO ESTIMADO') : 'HOME: —';
     return `HOME: ${percentage}% DE ${fmt(goal)}`;
   };
   const budgetMeta = (spent, budget, percentage) => {
@@ -1038,10 +1056,36 @@ export default function BudgetScreen() {
               </div>
             </div>
 
-            <div>
-              <p className="text-[8px] font-mono font-bold tracking-[0.12em] text-noria-muted">HOMEOSTASIS · INGRESO PROMEDIO {fmt(monthlyIncome)} {baseCurrency}</p>
-              {monthlyIncome <= 0 && spentByPillar > 0 && (
-                <p className="mt-1 border-l-2 border-[#B8860B] pl-2 text-[8px] normal-case tracking-normal text-[#8A6508]">Configura un ingreso promedio para medir el avance; el bloque con gasto se muestra completo.</p>
+            <div className="space-y-1">
+              <div className="flex justify-between items-center">
+                <p className="text-[8px] font-mono font-bold tracking-[0.12em] text-noria-muted">
+                  HOMEOSTASIS · BASE {fmt(effectiveIncome)} {baseCurrency}
+                  {isRealMode ? (isFallbackToEstimated ? ' (SIN INGRESOS · ESTIMADO)' : ' (REAL)') : ' (ESTIMADO)'}
+                </p>
+                <div className="inline-flex items-center font-mono text-[9px] uppercase tracking-[0.12em] text-noria-muted">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleBase('ESTIMATED')}
+                    className={`transition-colors focus:outline-none ${!isRealMode ? 'text-noria-text font-[700] border-b border-[#1A1A1A] pb-0.5' : 'hover:text-noria-text pb-0.5'}`}
+                  >
+                    Estimado
+                  </button>
+                  <span className="mx-1.5 opacity-30">|</span>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleBase('REAL')}
+                    className={`transition-colors focus:outline-none ${isRealMode ? 'text-noria-text font-[700] border-b border-[#1A1A1A] pb-0.5' : 'hover:text-noria-text pb-0.5'}`}
+                  >
+                    Real
+                  </button>
+                </div>
+              </div>
+              {effectiveIncome <= 0 && spentByPillar > 0 && (
+                <p className="mt-1 border-l-2 border-[#B8860B] pl-2 text-[8px] normal-case tracking-normal text-[#8A6508]">
+                  {isRealMode
+                    ? 'No se registran ingresos este mes ni ingreso estimado en configuración; el bloque con gasto se muestra completo.'
+                    : 'Configura un ingreso promedio para medir el avance; el bloque con gasto se muestra completo.'}
+                </p>
               )}
             </div>
 
