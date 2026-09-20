@@ -118,7 +118,9 @@ export async function refreshDebtInTransaction(database, debtId) {
     .filter(application => application.kind === 'DEBT_ORIGIN')
     .reduce((sum, application) => sum + (Number(application.targetAmount) || 0), 0);
   const totalAmount = debt.generatedFromReceipt ? originTotal : Number(debt.totalAmount || debt.amount || 0);
-  const status = totalAmount > 0 && paidAmount >= totalAmount - 0.001 ? 'SETTLED' : 'ACTIVE';
+  const status = totalAmount > 0 && paidAmount >= totalAmount - 0.001
+    ? 'SETTLED'
+    : (debt.status === 'WRITTEN_OFF' ? 'WRITTEN_OFF' : 'ACTIVE');
   await database.debts.update(debtId, {
     amount: totalAmount,
     totalAmount,

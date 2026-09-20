@@ -7,11 +7,13 @@ import FAB from '../components/FAB.jsx';
 import DebtFormSheet from '../components/DebtFormSheet.jsx';
 import DebtPaymentSheet from '../components/DebtPaymentSheet.jsx';
 import TransactionApplicationSheet from '../components/TransactionApplicationSheet.jsx';
+import DebtCompensationSheet from '../components/DebtCompensationSheet.jsx';
 import { getImplicitRate, unlinkTransactionApplication } from '../db/transactionApplications.js';
 import { getCurrencySymbol } from '../utils/format.js';
 import {
-  Plus, ChevronDown, ChevronUp, MoreHorizontal,
-  Pencil, Trash2, Check, Link2, Unlink
+  Plus, ChevronDown, ChevronUp,
+  Pencil, Trash2, Check, Link2, Unlink, ArrowLeftRight,
+  Ban, RotateCcw
 } from 'lucide-react';
 import { CurrencyAmount } from '../components/CurrencyAmount.jsx';
 
@@ -21,13 +23,14 @@ export default function DebtsScreen() {
   // UI State
   const [expandedDebtId, setExpandedDebtId] = useState(null);
   const [expandedSplitGroupId, setExpandedSplitGroupId] = useState(null);
-  const [openMenuId, setOpenMenuId] = useState(null);
   const [showSettled, setShowSettled] = useState(false);
   const [showSplits, setShowSplits] = useState(true);
+  const [showCompensations, setShowCompensations] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingDebt, setEditingDebt] = useState(null);
   const [payingDebt, setPayingDebt] = useState(null);
   const [linkingDebt, setLinkingDebt] = useState(null);
+  const [compensatingData, setCompensatingData] = useState(null);
 
   // Dexie Queries
   const debts = useLiveQuery(() => db.debts.toArray()) || [];
@@ -101,7 +104,7 @@ export default function DebtsScreen() {
   const activeSplits = useMemo(() => {
     const groups = {};
     debtsWithPayments.forEach(d => {
-      if (d.splitGroupId && d.status !== 'SETTLED') {
+      if (d.splitGroupId && !['SETTLED', 'WRITTEN_OFF'].includes(d.status)) {
         if (!groups[d.splitGroupId]) {
           const userTx = transactions.find(t => t.splitGroupId === d.splitGroupId && t.type === 'OUT');
           const yourPart = userTx ? userTx.amount : 0;
@@ -127,10 +130,48 @@ export default function DebtsScreen() {
     return Object.values(groups).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }, [debtsWithPayments, transactions]);
 
+  // Group active debts by third party to identify compensatable balances
+  const compensatableThirdParties = useMemo(() => {
+    const byParty = {};
+    debtsWithPayments.forEach(d => {
+      if (!d.thirdPartyId || ['SETTLED', 'WRITTEN_OFF'].includes(d.status) || d.remaining <= 0) return;
+      if (!byParty[d.thirdPartyId]) {
+        byParty[d.thirdPartyId] = {
+          thirdParty: d.thirdParty || thirdParties.find(tp => tp.id === d.thirdPartyId) || { id: d.thirdPartyId, name: 'Tercero' },
+          cobrar: [],
+          pagar: [],
+        };
+      }
+      if (d.type === 'COBRAR') {
+        byParty[d.thirdPartyId].cobrar.push(d);
+      } else if (d.type === 'PAGAR') {
+        byParty[d.thirdPartyId].pagar.push(d);
+      }
+    });
+
+    return Object.values(byParty).filter(group => group.cobrar.length > 0 && group.pagar.length > 0);
+  }, [debtsWithPayments, thirdParties]);
+
   // Split into sections
-  const cobrar = debtsWithPayments.filter(d => d.type === 'COBRAR' && d.status !== 'SETTLED');
-  const pagar = debtsWithPayments.filter(d => d.type === 'PAGAR' && d.status !== 'SETTLED');
-  const settled = debtsWithPayments.filter(d => d.status === 'SETTLED');
+  const cobrar = debtsWithPayments.filter(d => d.type === 'COBRAR' && !['SETTLED', 'WRITTEN_OFF'].includes(d.status));
+  const pagar = debtsWithPayments.filter(d => d.type === 'PAGAR' && !['SETTLED', 'WRITTEN_OFF'].includes(d.status));
+  const settled = useMemo(() => {
+    const getEffectiveSettledTime = (d) => {
+      if (d.writtenOffDate) return new Date(d.writtenOffDate).getTime();
+      if (d.settledDate) return new Date(d.settledDate).getTime();
+      if (d.payments && d.payments.length > 0) {
+        const maxPaymentTime = d.payments.reduce((max, p) => {
+          const t = p.date ? new Date(p.date).getTime() : 0;
+          return t > max ? t : max;
+        }, 0);
+        if (maxPaymentTime > 0) return maxPaymentTime;
+      }
+      return d.createdAt ? new Date(d.createdAt).getTime() : 0;
+    };
+    return debtsWithPayments
+      .filter(d => ['SETTLED', 'WRITTEN_OFF'].includes(d.status))
+      .sort((a, b) => getEffectiveSettledTime(b) - getEffectiveSettledTime(a));
+  }, [debtsWithPayments]);
 
   // Summary calculations
   const summary = useMemo(() => {
@@ -175,6 +216,11 @@ export default function DebtsScreen() {
 
   // Helpers
   const getDebtStatusBadge = (debt) => {
+    if (debt.status === 'WRITTEN_OFF') {
+      return debt.type === 'COBRAR'
+        ? { label: 'INCOBRABLE', color: '#9F2F2D' }
+        : { label: 'CONDONADA', color: '#647C78' };
+    }
     if (debt.status === 'SETTLED') return { label: 'SALDADA', color: '#4F8F58' };
     if (debt.remaining <= 0) return { label: 'SALDADA', color: '#4F8F58' };
 
@@ -198,6 +244,56 @@ export default function DebtsScreen() {
     return { label: 'ACTIVA', color: '#1A1A1A' };
   };
 
+  const handleWriteOffDebt = async (debt) => {
+    const isCobrar = debt.type === 'COBRAR';
+    const confirmMsg = isCobrar
+      ? `¿Dar por incobrable la deuda "${debt.description}"?\n\nSu saldo restante se considerará incobrable y se archivará en la sección de Saldadas.`
+      : `¿Marcar como condonada la deuda "${debt.description}"?\n\nSu saldo restante se considerará perdonado/condonado y se archivará en la sección de Saldadas.`;
+    if (!window.confirm(confirmMsg)) return;
+
+    try {
+      await db.transaction('rw', [db.debts, db.anchors], async () => {
+        await db.debts.update(debt.id, {
+          status: 'WRITTEN_OFF',
+          writtenOffDate: new Date(),
+          previousStatus: debt.status,
+        });
+        if (debt.isRecurring) {
+          const pendingAnchors = await db.anchors.where('debtId').equals(debt.id).filter(a => a.status === 'PENDING').toArray();
+          for (const anchor of pendingAnchors) {
+            await db.anchors.update(anchor.id, { status: 'CANCELLED' });
+          }
+        }
+      });
+    } catch (err) {
+      console.error('Error al dar de baja la deuda:', err);
+      alert('Ocurrió un error al actualizar la deuda.');
+    }
+  };
+
+  const handleReopenDebt = async (debt) => {
+    if (!window.confirm(`¿Reabrir la deuda "${debt.description}"?\n\nVolverá a estar activa con su saldo restante.`)) return;
+
+    try {
+      await db.transaction('rw', [db.debts, db.anchors], async () => {
+        const newStatus = debt.remaining <= 0.001 ? 'SETTLED' : 'ACTIVE';
+        await db.debts.update(debt.id, {
+          status: newStatus,
+          writtenOffDate: null,
+        });
+        if (debt.isRecurring) {
+          const cancelledAnchors = await db.anchors.where('debtId').equals(debt.id).filter(a => a.status === 'CANCELLED').toArray();
+          for (const anchor of cancelledAnchors) {
+            await db.anchors.update(anchor.id, { status: 'PENDING' });
+          }
+        }
+      });
+    } catch (err) {
+      console.error('Error al reabrir la deuda:', err);
+      alert('Ocurrió un error al reabrir la deuda.');
+    }
+  };
+
   const handleDeleteDebt = async (debtId, name) => {
     const linkedTransactions = await db.transactions.filter(t => t.debtId === debtId).count();
     const linkedPayments = await db.transaction_applications
@@ -218,7 +314,6 @@ export default function DebtsScreen() {
       });
 
       setExpandedDebtId(null);
-      setOpenMenuId(null);
     } catch (err) {
       console.error('Error deleting debt:', err);
     }
@@ -253,22 +348,26 @@ export default function DebtsScreen() {
   // ── Render: Debt Row ──
   const renderDebtRow = (debt) => {
     const isExpanded = expandedDebtId === debt.id;
-    const isMenuOpen = openMenuId === debt.id;
     const badge = getDebtStatusBadge(debt);
     const pct = debt.totalAmount > 0 ? Math.min(100, (debt.paidAmount / debt.totalAmount) * 100) : 0;
     const filledBlocks = Math.round(pct / 10);
     const isSplit = !!debt.splitGroupId;
+    const partyCobrar = debt.thirdPartyId ? debtsWithPayments.filter(d => d.thirdPartyId === debt.thirdPartyId && d.type === 'COBRAR' && !['SETTLED', 'WRITTEN_OFF'].includes(d.status) && d.remaining > 0) : [];
+    const partyPagar = debt.thirdPartyId ? debtsWithPayments.filter(d => d.thirdPartyId === debt.thirdPartyId && d.type === 'PAGAR' && !['SETTLED', 'WRITTEN_OFF'].includes(d.status) && d.remaining > 0) : [];
+    const hasOpposing = debt.thirdPartyId && !['SETTLED', 'WRITTEN_OFF'].includes(debt.status) && (debt.type === 'COBRAR' ? partyPagar.length > 0 : partyCobrar.length > 0);
     const nextPendingAnchor = debt.isRecurring
       ? debt.debtAnchors.find(anchor => anchor.status === 'PENDING')
       : null;
     const latestPaymentDate = debt.payments.reduce((latest, payment) => (
       !latest || new Date(payment.date) > new Date(latest) ? payment.date : latest
     ), null);
-    const deadline = debt.status === 'SETTLED'
-      ? { label: 'Saldada', date: latestPaymentDate || debt.settledDate }
-      : nextPendingAnchor
-        ? { label: 'Próxima cuota', date: nextPendingAnchor.nextDueDate }
-        : { label: 'Vence', date: debt.dueDate };
+    const deadline = debt.status === 'WRITTEN_OFF'
+      ? { label: debt.type === 'COBRAR' ? 'Incobrable' : 'Condonada', date: debt.writtenOffDate }
+      : debt.status === 'SETTLED'
+        ? { label: 'Saldada', date: latestPaymentDate || debt.settledDate }
+        : nextPendingAnchor
+          ? { label: 'Próxima cuota', date: nextPendingAnchor.nextDueDate }
+          : { label: 'Vence', date: debt.dueDate };
     const initialMovement = debt.initialMovement;
     const movementBaseAmount = Number(initialMovement?.baseAmount);
     const hasBaseEquivalent = Number.isFinite(movementBaseAmount)
@@ -323,66 +422,33 @@ export default function DebtsScreen() {
             </span>
           </div>
 
-          <div className="flex flex-col items-center gap-1 shrink-0">
+          <div className="flex items-center gap-0.5 shrink-0 self-center">
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); setEditingDebt(debt); }}
+              className="w-7 h-7 flex items-center justify-center text-noria-muted hover:text-noria-text focus:outline-none"
+              title="Editar deuda"
+            >
+              <Pencil size={13} strokeWidth={1.8} />
+            </button>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); handleDeleteDebt(debt.id, debt.description); }}
+              className="w-7 h-7 flex items-center justify-center text-noria-muted hover:text-[#9F2F2D] focus:outline-none"
+              title="Eliminar deuda"
+            >
+              <Trash2 size={13} strokeWidth={1.8} />
+            </button>
             <button
               type="button"
               onClick={() => setExpandedDebtId(isExpanded ? null : debt.id)}
               className="w-7 h-7 flex items-center justify-center text-noria-muted hover:text-noria-text focus:outline-none"
+              title={isExpanded ? 'Colapsar' : 'Expandir'}
             >
               {isExpanded ? <ChevronUp size={14} strokeWidth={1.8} /> : <ChevronDown size={14} strokeWidth={1.8} />}
             </button>
-            <button
-              type="button"
-              onClick={() => setOpenMenuId(isMenuOpen ? null : debt.id)}
-              className="w-7 h-7 flex items-center justify-center text-noria-muted hover:text-noria-text focus:outline-none"
-            >
-              <MoreHorizontal size={16} strokeWidth={1.8} />
-            </button>
           </div>
         </div>
-
-        {/* Context menu */}
-        {isMenuOpen && (
-          <div className="absolute right-4 top-12 z-20 w-40 border border-[#1A1A1A] bg-[#F5F2ED] font-mono text-[10px] uppercase tracking-[0.08em]">
-            <button
-              type="button"
-              onClick={() => { setOpenMenuId(null); setEditingDebt(debt); }}
-              className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-noria-text/5 focus:outline-none"
-            >
-              <Pencil size={12} strokeWidth={1.5} />
-              <span>Editar</span>
-            </button>
-            {debt.status !== 'SETTLED' && (
-              <button
-                type="button"
-                onClick={() => { setOpenMenuId(null); setPayingDebt({ debt, defaultSettle: true }); }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-noria-text/5 focus:outline-none"
-              >
-                <Check size={12} strokeWidth={1.5} />
-                <span>Saldar</span>
-              </button>
-            )}
-            {debt.status !== 'SETTLED' && (
-              <button
-                type="button"
-                onClick={() => { setOpenMenuId(null); setLinkingDebt(debt); }}
-                className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-noria-text/5 focus:outline-none"
-              >
-                <Link2 size={12} strokeWidth={1.5} />
-                <span>Vincular transacción</span>
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => { setOpenMenuId(null); handleDeleteDebt(debt.id, debt.description); }}
-              className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-[#9F2F2D]/10 focus:outline-none"
-              style={{ color: '#9F2F2D' }}
-            >
-              <Trash2 size={12} strokeWidth={1.5} />
-              <span>Eliminar</span>
-            </button>
-          </div>
-        )}
 
         {/* Expanded detail */}
         {isExpanded && (
@@ -415,6 +481,14 @@ export default function DebtsScreen() {
                   <dt className="uppercase tracking-[0.08em] text-noria-muted">Tercero</dt>
                   <dd className="mt-0.5 text-[11px] text-noria-text">{debt.thirdParty?.name || 'Sin tercero'}</dd>
                 </div>
+                {debt.status === 'WRITTEN_OFF' && (
+                  <div>
+                    <dt className="uppercase tracking-[0.08em] text-noria-muted">
+                      {debt.type === 'COBRAR' ? 'Fecha de incobrabilidad' : 'Fecha de condonación'}
+                    </dt>
+                    <dd className="mt-0.5 text-[11px] text-noria-text">{formatDate(debt.writtenOffDate)}</dd>
+                  </div>
+                )}
                 <div className="col-span-2">
                   <dt className="uppercase tracking-[0.08em] text-noria-muted">Modalidad</dt>
                   <dd className="mt-0.5 text-[11px] text-noria-text">
@@ -600,26 +674,74 @@ export default function DebtsScreen() {
             </div>
 
             {/* Actions */}
-            {debt.status !== 'SETTLED' && (
+            {!['SETTLED', 'WRITTEN_OFF'].includes(debt.status) && (
+              <div className="space-y-2 pt-2 border-t border-[rgba(26,26,26,0.16)]">
+                {hasOpposing && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCompensatingData({
+                        thirdParty: debt.thirdParty,
+                        receivableDebts: partyCobrar,
+                        payableDebts: partyPagar,
+                        initialReceivableId: debt.type === 'COBRAR' ? debt.id : partyCobrar[0]?.id,
+                        initialPayableId: debt.type === 'PAGAR' ? debt.id : partyPagar[0]?.id,
+                      });
+                    }}
+                    className="w-full py-2 text-[10px] font-[700] uppercase tracking-[0.1em] border border-[#647C78] bg-[#647C78]/10 hover:bg-[#647C78]/20 transition-colors focus:outline-none text-[#647C78] flex items-center justify-center gap-1.5"
+                  >
+                    <ArrowLeftRight size={12} strokeWidth={2} />
+                    <span>Compensar con deuda de {debt.thirdParty?.name || 'tercero'}</span>
+                  </button>
+                )}
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPayingDebt({ debt, defaultSettle: false })}
+                    className="py-2 text-[10px] font-[700] uppercase tracking-[0.1em] border border-[#1A1A1A] hover:bg-noria-text/5 transition-colors focus:outline-none text-noria-text text-center truncate"
+                  >
+                    + {debt.type === 'COBRAR' ? 'Registrar Cobro' : 'Registrar Pago'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPayingDebt({ debt, defaultSettle: true })}
+                    className="py-2 text-[10px] font-[700] uppercase tracking-[0.1em] border border-[#647C78] hover:bg-[#647C78]/5 transition-colors focus:outline-none text-center truncate"
+                    style={{ color: '#647C78' }}
+                  >
+                    Saldar Deuda
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLinkingDebt(debt)}
+                    className="py-2 text-[10px] font-[700] uppercase tracking-[0.1em] border border-[#1A1A1A]/40 hover:bg-noria-text/5 transition-colors focus:outline-none text-noria-text text-center truncate"
+                  >
+                    Vincular existente
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleWriteOffDebt(debt)}
+                    className="py-2 text-[10px] font-[700] uppercase tracking-[0.1em] border transition-colors focus:outline-none text-center truncate flex items-center justify-center gap-1"
+                    style={{
+                      borderColor: debt.type === 'COBRAR' ? '#9F2F2D' : '#647C78',
+                      color: debt.type === 'COBRAR' ? '#9F2F2D' : '#647C78',
+                    }}
+                  >
+                    <Ban size={11} strokeWidth={1.8} />
+                    <span>{debt.type === 'COBRAR' ? 'Dar por incobrable' : 'Marcar condonada'}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+            {debt.status === 'WRITTEN_OFF' && (
               <div className="flex space-x-3 pt-2 border-t border-[rgba(26,26,26,0.16)]">
                 <button
-                  onClick={() => setPayingDebt({ debt, defaultSettle: false })}
-                  className="flex-1 py-2 text-[10px] font-[700] uppercase tracking-[0.1em] border border-[#1A1A1A] hover:bg-noria-text/5 transition-colors focus:outline-none text-noria-text"
+                  type="button"
+                  onClick={() => handleReopenDebt(debt)}
+                  className="flex-1 py-2 text-[10px] font-[700] uppercase tracking-[0.1em] border border-[#1A1A1A] hover:bg-noria-text/5 transition-colors focus:outline-none text-noria-text flex items-center justify-center gap-1.5"
                 >
-                  + {debt.type === 'COBRAR' ? 'Registrar Cobro' : 'Registrar Pago'}
-                </button>
-                <button
-                  onClick={() => setLinkingDebt(debt)}
-                  className="flex-1 py-2 text-[10px] font-[700] uppercase tracking-[0.1em] border border-[#1A1A1A]/40 hover:bg-noria-text/5 transition-colors focus:outline-none text-noria-text"
-                >
-                  Vincular existente
-                </button>
-                <button
-                  onClick={() => setPayingDebt({ debt, defaultSettle: true })}
-                  className="flex-1 py-2 text-[10px] font-[700] uppercase tracking-[0.1em] border border-[#647C78] hover:bg-[#647C78]/5 transition-colors focus:outline-none"
-                  style={{ color: '#647C78' }}
-                >
-                  Saldar Deuda
+                  <RotateCcw size={12} strokeWidth={1.5} />
+                  <span>Reabrir Deuda</span>
                 </button>
               </div>
             )}
@@ -657,9 +779,7 @@ export default function DebtsScreen() {
           </button>
 
           <div className="flex flex-col items-end gap-1 shrink-0">
-            <p className="text-[15px] font-[700] text-noria-text tabular-nums">
-              {fmtWithSymbol(split.remaining, split.currency)}
-            </p>
+            <CurrencyAmount amount={split.remaining} currencyCode={split.currency} className="text-[15px] font-[700] text-noria-text tabular-nums" />
             <span
               className="border px-1.5 py-0.5 font-mono text-[8px] font-[700] uppercase tracking-[0.1em]"
               style={{
@@ -715,11 +835,13 @@ export default function DebtsScreen() {
               <div className="space-y-1">
                 {split.participants.map((debtItem, idx) => {
                   const prefix = idx === split.participants.length - 1 ? 'L─ ' : '├─ ';
+                  const isWrittenOff = debtItem.status === 'WRITTEN_OFF';
                   const isPaid = debtItem.status === 'SETTLED' || debtItem.remaining <= 0;
+                  const isClosed = isPaid || isWrittenOff;
                   return (
                     <div key={debtItem.id} className="flex items-center justify-between gap-2 py-1 font-mono text-[11px]">
                       <span className="text-noria-muted">{prefix}</span>
-                      <span className={`flex-1 min-w-0 truncate ${isPaid ? 'line-through text-noria-muted' : 'text-noria-text'}`}>
+                      <span className={`flex-1 min-w-0 truncate ${isClosed ? 'line-through text-noria-muted' : 'text-noria-text'}`}>
                         {debtItem.thirdParty ? debtItem.thirdParty.name : 'Participante'}
                       </span>
                       <span className="text-noria-muted text-[10px]">
@@ -731,11 +853,11 @@ export default function DebtsScreen() {
                       <span
                         className="border px-1 py-0 text-[7px] font-[700] uppercase tracking-[0.08em]"
                         style={{
-                          borderColor: isPaid ? '#4F8F58' : '#C58A14',
-                          color: isPaid ? '#4F8F58' : '#C58A14',
+                          borderColor: isWrittenOff ? '#9F2F2D' : (isPaid ? '#4F8F58' : '#C58A14'),
+                          color: isWrittenOff ? '#9F2F2D' : (isPaid ? '#4F8F58' : '#C58A14'),
                         }}
                       >
-                        {isPaid ? 'OK' : 'PENDIENTE'}
+                        {isWrittenOff ? 'INCOBRABLE' : (isPaid ? 'OK' : 'PENDIENTE')}
                       </span>
                     </div>
                   );
@@ -744,6 +866,63 @@ export default function DebtsScreen() {
             </div>
           </div>
         )}
+      </div>
+    );
+  };
+
+  const renderCompensationCard = (group) => {
+    return (
+      <div key={group.thirdParty.id} className="relative border border-[#1A1A1A] bg-transparent p-4 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <p className="text-[14px] font-[600] text-noria-text truncate">{group.thirdParty.name}</p>
+            <span
+              className="border px-1.5 py-0.5 font-mono text-[8px] font-[700] uppercase tracking-[0.1em]"
+              style={{ borderColor: '#647C78', color: '#647C78' }}
+            >
+              CRUCE DISPONIBLE
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setCompensatingData({
+                thirdParty: group.thirdParty,
+                receivableDebts: group.cobrar,
+                payableDebts: group.pagar,
+              });
+            }}
+            className="flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-[700] uppercase tracking-[0.1em] border border-[#1A1A1A] bg-noria-text text-[#F5F2ED] hover:bg-noria-text/90 transition-colors focus:outline-none shrink-0"
+          >
+            <ArrowLeftRight size={12} strokeWidth={2} />
+            <span>Compensar saldos</span>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 pt-1 font-mono text-[11px] border-t border-[rgba(26,26,26,0.12)]">
+          <div>
+            <p className="text-[9px] uppercase tracking-[0.08em] text-noria-muted">Por cobrar ({group.cobrar.length})</p>
+            <div className="mt-0.5 space-y-0.5">
+              {group.cobrar.map(d => (
+                <div key={d.id} className="flex items-center justify-between gap-1 text-[10px]">
+                  <span className="truncate text-noria-text/80">{d.description}</span>
+                  <CurrencyAmount amount={d.remaining} currencyCode={d.currency} className="text-noria-text font-[600] shrink-0" style={{ color: '#4F8F58' }} />
+                </div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p className="text-[9px] uppercase tracking-[0.08em] text-noria-muted">Por pagar ({group.pagar.length})</p>
+            <div className="mt-0.5 space-y-0.5">
+              {group.pagar.map(d => (
+                <div key={d.id} className="flex items-center justify-between gap-1 text-[10px]">
+                  <span className="truncate text-noria-text/80">{d.description}</span>
+                  <CurrencyAmount amount={d.remaining} currencyCode={d.currency} className="text-noria-text font-[600] shrink-0" style={{ color: '#9F2F2D' }} />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
     );
   };
@@ -824,6 +1003,23 @@ export default function DebtsScreen() {
             </>
           )}
         </section>
+
+        {/* ── Compensaciones Disponibles ── */}
+        {compensatableThirdParties.length > 0 && (
+          <section id="debts-compensations">
+            {renderSectionHeader(
+              'Compensaciones Disponibles',
+              compensatableThirdParties.length,
+              showCompensations,
+              () => setShowCompensations(prev => !prev)
+            )}
+            {showCompensations && (
+              <div className="pt-4 space-y-3 animate-fade-in">
+                {compensatableThirdParties.map(group => renderCompensationCard(group))}
+              </div>
+            )}
+          </section>
+        )}
 
         {/* ── Por Cobrar ── */}
         <section id="debts-cobrar">
@@ -939,6 +1135,19 @@ export default function DebtsScreen() {
         onClose={() => setLinkingDebt(null)}
         presetTargetType="DEBT"
         presetTargetId={linkingDebt?.id}
+      />
+
+      <DebtCompensationSheet
+        isOpen={!!compensatingData}
+        onClose={() => setCompensatingData(null)}
+        onSaved={() => setCompensatingData(null)}
+        thirdParty={compensatingData?.thirdParty}
+        receivableDebts={compensatingData?.receivableDebts}
+        payableDebts={compensatingData?.payableDebts}
+        initialReceivableId={compensatingData?.initialReceivableId}
+        initialPayableId={compensatingData?.initialPayableId}
+        dbCurrencies={dbCurrencies}
+        baseCurrency={baseCurrency}
       />
 
       <FAB />

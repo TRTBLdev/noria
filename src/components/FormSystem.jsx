@@ -108,23 +108,39 @@ export function SegmentedChoice({ label, value, onChange, options, disabledValue
   );
 }
 
-export function FormActions({ primaryLabel, secondaryLabel, onSecondary, primaryDisabled = false, primaryColor, danger = false, className = '' }) {
+export function FormActions({
+  primaryLabel,
+  submitLabel,
+  secondaryLabel,
+  cancelLabel,
+  onSecondary,
+  onCancel,
+  primaryDisabled = false,
+  isSubmitting = false,
+  primaryColor,
+  danger = false,
+  className = ''
+}) {
+  const pLabel = primaryLabel || submitLabel;
+  const sLabel = secondaryLabel || cancelLabel;
+  const handleSecondary = onSecondary || onCancel;
+  const isDisabled = primaryDisabled || isSubmitting;
   const actionColor = danger ? '#9F2F2D' : (primaryColor || '#1A1A1A');
 
   return (
-    <div className={['grid gap-2', secondaryLabel ? 'grid-cols-2' : 'grid-cols-1', className].join(' ')}>
-      {secondaryLabel && (
+    <div className={['grid gap-2', sLabel ? 'grid-cols-2' : 'grid-cols-1', className].join(' ')}>
+      {sLabel && (
         <button
           type="button"
-          onClick={onSecondary}
+          onClick={handleSecondary}
           className="border border-[#1A1A1A] px-3 py-3 font-mono text-[11px] font-[700] uppercase tracking-[0.12em] text-noria-text"
         >
-          {secondaryLabel}
+          {sLabel}
         </button>
       )}
       <button
         type="submit"
-        disabled={primaryDisabled}
+        disabled={isDisabled}
         className="border px-3 py-3 font-mono text-[11px] font-[700] uppercase tracking-[0.12em] disabled:cursor-not-allowed disabled:opacity-30"
         style={{
           borderColor: actionColor,
@@ -132,7 +148,7 @@ export function FormActions({ primaryLabel, secondaryLabel, onSecondary, primary
           background: 'transparent'
         }}
       >
-        {primaryLabel}
+        {pLabel}
       </button>
     </div>
   );
