@@ -157,6 +157,7 @@ function SectionTitle({ children, aside }) {
 export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KINDS.RECEIPT }) {
   const navigate = useNavigate();
   const accounts = useLiveQuery(() => db.accounts.toArray()) || [];
+  const institutions = useLiveQuery(() => db.institutions.toArray()) || [];
   const instruments = useLiveQuery(() => db.instruments.toArray()) || [];
   const currencies = useLiveQuery(() => db.currencies.toArray()) || [];
   const tags = useLiveQuery(() => db.tags.toArray()) || [];
@@ -456,6 +457,7 @@ export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KIN
               value={paymentMethod}
               onChange={event => setPaymentMethod(event.target.value)}
               activeAccounts={activeAccounts}
+              institutions={institutions}
               instruments={instruments}
               required
             />

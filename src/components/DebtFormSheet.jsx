@@ -584,6 +584,7 @@ export default function DebtFormSheet({
                   }}
                   isCobrar={type === 'PAGAR'}
                   activeAccounts={activeAccounts}
+                  institutions={institutions}
                   instruments={instruments}
                   required={true}
                 />

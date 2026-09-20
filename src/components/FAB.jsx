@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
-import { Plus, X, ArrowDownLeft, ArrowUpRight, ArrowLeftRight, Calculator, Coins, Users } from 'lucide-react';
+import { Plus, X, ArrowDownLeft, ArrowUpRight, ArrowLeftRight, Calculator, Coins, Users, ChevronDown, ChevronUp } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import CategorySelect from './CategorySelect.jsx';
 import IncomeTypeSelect from './IncomeTypeSelect.jsx';
@@ -40,6 +40,35 @@ const getAccountLabel = (acc, inst) => {
   return baseName;
 };
 
+const groupAccountsByInstitution = (accountList, instList) => {
+  const instMap = new Map();
+  instList.forEach(inst => {
+    instMap.set(inst.id, { institution: inst, accounts: [] });
+  });
+  const noInstAccounts = [];
+  accountList.forEach(acc => {
+    if (acc.institutionId && instMap.has(acc.institutionId)) {
+      instMap.get(acc.institutionId).accounts.push(acc);
+    } else {
+      noInstAccounts.push(acc);
+    }
+  });
+  const groups = Array.from(instMap.values())
+    .filter(g => g.accounts.length > 0)
+    .sort((a, b) => (a.institution.name || '').localeCompare(b.institution.name || '', 'es', { sensitivity: 'base' }));
+  groups.forEach(g => {
+    g.accounts.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'es', { sensitivity: 'base' }));
+  });
+  if (noInstAccounts.length > 0) {
+    noInstAccounts.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'es', { sensitivity: 'base' }));
+    groups.push({
+      institution: { id: 'other', name: 'Otras cuentas / Efectivo' },
+      accounts: noInstAccounts,
+    });
+  }
+  return groups;
+};
+
 export default function FAB() {
   const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
@@ -67,7 +96,13 @@ export default function FAB() {
   const [toAccountId, setToAccountId] = useState('');
   const [sourceMacetaId, setSourceMacetaId] = useState('');
   const [targetMacetaId, setTargetMacetaId] = useState('');
+  const [showAdvancedTransferOptions, setShowAdvancedTransferOptions] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('');
+
+  const accountGroups = useMemo(
+    () => groupAccountsByInstitution(activeAccounts, institutions),
+    [activeAccounts, institutions]
+  );
   const [amount, setAmount] = useState('');
   const [amountReceived, setAmountReceived] = useState('');
   const [userEditedReceived, setUserEditedReceived] = useState(false);
@@ -237,6 +272,7 @@ export default function FAB() {
     setExchangeRate('');
     setSourceMacetaId('');
     setTargetMacetaId('');
+    setShowAdvancedTransferOptions(false);
     setDescription('');
     setNewSourceName('');
     setNewSourceIncomeTypeId('');
@@ -1271,6 +1307,7 @@ export default function FAB() {
 
                         const targetAccountObj = accounts.find(a => a.id.toString() === toAccountId);
                         const targetMacetas = macetas.filter(m => m.status !== 'ARCHIVED' && m.currency === targetAccountObj?.currency);
+                        const hasMetaOptions = sourceMacetasWithFunds.length > 0 || targetMacetas.length > 0;
 
                         return (
                           <>
@@ -1279,61 +1316,93 @@ export default function FAB() {
                                 <label className="muji-header block mb-1">Desde Cuenta</label>
                                 <select id="tx-account" value={accountId} onChange={e => handleSourceAccountChange(e.target.value)}
                                   className="muji-input" required>
-                                  {activeAccounts.map(acc => {
-                                    const inst = institutions.find(i => i.id === acc.institutionId);
-                                    const label = getAccountLabel(acc, inst);
-                                    return <option key={acc.id} value={acc.id}>{label} ({acc.currency})</option>;
-                                  })}
-                                </select>
-                                {sourceMacetasWithFunds.length > 0 && (
-                                  <div className="mt-2 animate-fade-in">
-                                    <label className="muji-header block mb-1">Retirar de meta</label>
-                                    <select
-                                      id="tx-source-maceta"
-                                      value={sourceMacetaId}
-                                      onChange={e => setSourceMacetaId(e.target.value)}
-                                      className="muji-input text-[11px]"
-                                    >
-                                      <option value="">Ninguna (fondos libres)</option>
-                                      {sourceMacetasWithFunds.map(item => (
-                                        <option key={item.macetaId} value={item.macetaId}>
-                                          {item.macetaName} ({formatAmountWithSymbol(item.amount, item.currency || sourceAccountObj?.currency, dbCurrencies)})
-                                        </option>
+                                  {accountGroups.map(group => (
+                                    <optgroup key={`src-group-${group.institution.id}`} label={group.institution.name}>
+                                      {group.accounts.map(acc => (
+                                        <option key={acc.id} value={acc.id}>{acc.name} ({acc.currency})</option>
                                       ))}
-                                    </select>
-                                  </div>
-                                )}
+                                    </optgroup>
+                                  ))}
+                                </select>
                               </div>
                               <div>
                                 <label className="muji-header block mb-1">Hacia Cuenta</label>
                                 <select id="tx-account-dest" value={toAccountId} onChange={e => handleTargetAccountChange(e.target.value)}
                                   className="muji-input" required>
-                                  {activeAccounts.map(acc => {
-                                    const inst = institutions.find(i => i.id === acc.institutionId);
-                                    const label = getAccountLabel(acc, inst);
-                                    return <option key={acc.id} value={acc.id}>{label} ({acc.currency})</option>;
-                                  })}
-                                </select>
-                                {targetMacetas.length > 0 && (
-                                  <div className="mt-2 animate-fade-in">
-                                    <label className="muji-header block mb-1">Asignar / Reponer a meta</label>
-                                    <select
-                                      id="tx-target-maceta"
-                                      value={targetMacetaId}
-                                      onChange={e => setTargetMacetaId(e.target.value)}
-                                      className="muji-input text-[11px]"
-                                    >
-                                      <option value="">Ninguna</option>
-                                      {targetMacetas.map(m => (
-                                        <option key={m.id} value={m.id}>
-                                          {m.name}
-                                        </option>
+                                  {accountGroups.map(group => (
+                                    <optgroup key={`dest-group-${group.institution.id}`} label={group.institution.name}>
+                                      {group.accounts.map(acc => (
+                                        <option key={acc.id} value={acc.id}>{acc.name} ({acc.currency})</option>
                                       ))}
-                                    </select>
+                                    </optgroup>
+                                  ))}
+                                </select>
+                              </div>
+                            </div>
+
+                            {/* Opciones avanzadas de metas (colapsable) */}
+                            {hasMetaOptions && (
+                              <div className="pt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setShowAdvancedTransferOptions(prev => !prev)}
+                                  className="flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.08em] text-[#647C78] hover:text-noria-text focus:outline-none"
+                                >
+                                  {showAdvancedTransferOptions ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                                  <span>Opciones avanzadas</span>
+                                  {(sourceMacetaId || targetMacetaId) && (
+                                    <span className="border border-[#647C78] px-1 text-[8px] text-[#647C78]">
+                                      {sourceMacetaId && targetMacetaId ? '2 metas activas' : '1 meta activa'}
+                                    </span>
+                                  )}
+                                </button>
+                                {showAdvancedTransferOptions && (
+                                  <div className="grid grid-cols-2 gap-4 mt-2 p-3 border border-[#1A1A1A]/20 bg-noria-bg/5 animate-fade-in">
+                                    <div>
+                                      <label className="muji-header block mb-1">Retirar de meta</label>
+                                      {sourceMacetasWithFunds.length > 0 ? (
+                                        <select
+                                          id="tx-source-maceta"
+                                          value={sourceMacetaId}
+                                          onChange={e => setSourceMacetaId(e.target.value)}
+                                          className="muji-input text-[11px]"
+                                        >
+                                          <option value="">Ninguna (fondos libres)</option>
+                                          {sourceMacetasWithFunds.map(item => (
+                                            <option key={item.macetaId} value={item.macetaId}>
+                                              {item.macetaName} ({formatAmountWithSymbol(item.amount, item.currency || sourceAccountObj?.currency, dbCurrencies)})
+                                            </option>
+                                          ))}
+                                        </select>
+                                      ) : (
+                                        <p className="text-[11px] text-noria-muted italic mt-1">Sin metas en origen</p>
+                                      )}
+                                    </div>
+                                    <div>
+                                      <label className="muji-header block mb-1">Reponer a meta</label>
+                                      {targetMacetas.length > 0 ? (
+                                        <select
+                                          id="tx-target-maceta"
+                                          value={targetMacetaId}
+                                          onChange={e => setTargetMacetaId(e.target.value)}
+                                          className="muji-input text-[11px]"
+                                        >
+                                          <option value="">Ninguna</option>
+                                          {targetMacetas.map(m => (
+                                            <option key={m.id} value={m.id}>
+                                              {m.name}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      ) : (
+                                        <p className="text-[11px] text-noria-muted italic mt-1">Sin metas compatibles</p>
+                                      )}
+                                    </div>
                                   </div>
                                 )}
                               </div>
-                            </div>
+                            )}
+
                             <div>
                               <label className="muji-header block mb-1">Fecha</label>
                               <input id="tx-date" type="date" value={date} onChange={e => setDate(e.target.value)}
@@ -1360,39 +1429,39 @@ export default function FAB() {
                               }}
                               className="muji-input" required
                             >
-                              {activeAccounts.map(acc => {
-                                const inst = institutions.find(i => i.id === acc.institutionId);
-                                const accLabel = getAccountLabel(acc, inst);
-                                const accInstruments = instruments.filter(i => i.accountId === acc.id);
-
-                                if (accInstruments.length === 0) {
-                                  return (
-                                    <option key={`acc-${acc.id}`} value={`acc-${acc.id}`}>
-                                      {accLabel} ({acc.currency})
-                                    </option>
-                                  );
-                                }
-
-                                return (
-                                  <optgroup key={acc.id} label={`${accLabel} (${acc.currency})`}>
-                                    {accInstruments.map(i => {
-                                      const typeLabel = INSTRUMENT_TYPES.find(t => t.value === i.type)?.label || i.type;
-                                      const name = i.alias ? `${typeLabel} (${i.alias})` : typeLabel;
-                                      const feeText = (i.feePercentage > 0 || i.feeFixed > 0)
-                                        ? ` (${i.feePercentage > 0 ? `${i.feePercentage}%` : ''}${i.feePercentage > 0 && i.feeFixed > 0 ? ' + ' : ''}${i.feeFixed > 0 ? `${i.feeFixed}` : ''} fee)`
-                                        : '';
+                              {accountGroups.map(group => (
+                                <optgroup key={`pay-group-${group.institution.id}`} label={group.institution.name}>
+                                  {group.accounts.map(acc => {
+                                    const accInstruments = instruments.filter(i => i.accountId === acc.id);
+                                    if (accInstruments.length === 0) {
                                       return (
-                                        <option key={`inst-${i.id}`} value={`inst-${i.id}`}>
-                                          {name}{feeText}
+                                        <option key={`acc-${acc.id}`} value={`acc-${acc.id}`}>
+                                          {acc.name} — Saldo ({acc.currency})
                                         </option>
                                       );
-                                    })}
-                                    <option value={`acc-${acc.id}`}>
-                                      Saldo de cuenta
-                                    </option>
-                                  </optgroup>
-                                );
-                              })}
+                                    }
+                                    return (
+                                      <React.Fragment key={`acc-frag-${acc.id}`}>
+                                        <option value={`acc-${acc.id}`}>
+                                          {acc.name} — Saldo ({acc.currency})
+                                        </option>
+                                        {accInstruments.map(i => {
+                                          const typeLabel = INSTRUMENT_TYPES.find(t => t.value === i.type)?.label || i.type;
+                                          const name = i.alias ? `${typeLabel} (${i.alias})` : typeLabel;
+                                          const feeText = (i.feePercentage > 0 || i.feeFixed > 0)
+                                            ? ` (${i.feePercentage > 0 ? `${i.feePercentage}%` : ''}${i.feePercentage > 0 && i.feeFixed > 0 ? ' + ' : ''}${i.feeFixed > 0 ? `${i.feeFixed}` : ''} fee)`
+                                            : '';
+                                          return (
+                                            <option key={`inst-${i.id}`} value={`inst-${i.id}`}>
+                                              {acc.name} — {name}{feeText} ({acc.currency})
+                                            </option>
+                                          );
+                                        })}
+                                      </React.Fragment>
+                                    );
+                                  })}
+                                </optgroup>
+                              ))}
                             </select>
                           </>
                         ) : (
@@ -1400,11 +1469,13 @@ export default function FAB() {
                             <label className="muji-header block mb-1">Cuenta de destino</label>
                             <select id="tx-account" value={accountId} onChange={e => setAccountId(e.target.value)}
                               className="muji-input" required>
-                              {activeAccounts.map(acc => {
-                                const inst = institutions.find(i => i.id === acc.institutionId);
-                                const label = getAccountLabel(acc, inst);
-                                return <option key={acc.id} value={acc.id}>{label} ({acc.currency})</option>;
-                              })}
+                              {accountGroups.map(group => (
+                                <optgroup key={`inc-group-${group.institution.id}`} label={group.institution.name}>
+                                  {group.accounts.map(acc => (
+                                    <option key={acc.id} value={acc.id}>{acc.name} ({acc.currency})</option>
+                                  ))}
+                                </optgroup>
+                              ))}
                             </select>
                           </>
                         )}

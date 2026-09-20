@@ -291,6 +291,7 @@ export default function DebtPaymentSheet({
           onChange={e => { setPaymentMethod(e.target.value); setAltCurrencyAmount(''); }}
           isCobrar={isCobrar}
           activeAccounts={activeAccounts}
+          institutions={institutions}
           instruments={instruments}
           required={true}
         />
