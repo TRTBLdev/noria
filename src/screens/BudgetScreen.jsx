@@ -1476,8 +1476,8 @@ export default function BudgetScreen() {
             onClick={() => navigate('/budget/full')}
             className="w-full py-2 flex justify-between items-center hover:bg-black/5 transition-colors focus:outline-none text-left"
           >
-            <span>{">>> Ver Presupuesto Detallado"}</span>
-            <span className="text-noria-muted">[DETALLE]</span>
+            <span>{">>> Análisis Anual & Cashflow"}</span>
+            <span className="text-noria-muted">[ANÁLISIS]</span>
           </button>
           <button
             type="button"
