@@ -43,6 +43,16 @@ export function resolveApplicationEquivalent({
     return { sourceAmount, sourceCurrency, targetAmount: sourceAmount, targetCurrency, rateSource: 'SAME_CURRENCY' };
   }
 
+  if (positive(manualTargetAmount)) {
+    return {
+      sourceAmount,
+      sourceCurrency,
+      targetAmount: Number(manualTargetAmount),
+      targetCurrency,
+      rateSource: 'MANUAL',
+    };
+  }
+
   if (transaction.invoiceCurrency === targetCurrency && positive(transaction.invoiceSettlementAmount)) {
     return {
       sourceAmount,
@@ -85,15 +95,6 @@ export function resolveApplicationEquivalent({
     };
   }
 
-  if (positive(manualTargetAmount)) {
-    return {
-      sourceAmount,
-      sourceCurrency,
-      targetAmount: Number(manualTargetAmount),
-      targetCurrency,
-      rateSource: 'MANUAL',
-    };
-  }
   throw new Error(`Indica el equivalente de ${sourceAmount} ${sourceCurrency} en ${targetCurrency}.`);
 }
 

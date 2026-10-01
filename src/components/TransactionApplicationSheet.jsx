@@ -31,6 +31,7 @@ export default function TransactionApplicationSheet({
   const debts = useLiveQuery(() => db.debts.toArray()) || [];
   const goals = useLiveQuery(() => db.spending_goals.toArray()) || [];
   const currencies = useLiveQuery(() => db.currencies.toArray()) || [];
+  const anchors = useLiveQuery(() => db.anchors.toArray()) || [];
   const thirdParties = useLiveQuery(() => db.third_parties.toArray()) || [];
   const baseCurrencyConfig = useLiveQuery(() => db.app_config.get('baseCurrency'));
   const baseCurrency = baseCurrencyConfig?.value || '';
@@ -56,6 +57,22 @@ export default function TransactionApplicationSheet({
   const selectedDebt = debts.find(debt => debt.id === Number(presetTargetType === 'DEBT' ? presetTargetId : targetId));
   const selectedGoal = goals.find(goal => goal.id === Number(presetTargetType === 'SPENDING_GOAL' ? presetTargetId : targetId));
   const selectedTarget = targetType === 'DEBT' ? selectedDebt : selectedGoal;
+
+  const pendingAnchor = useMemo(() => {
+    if (!selectedDebt?.isRecurring) return null;
+    return anchors
+      .filter(a => a.debtId === selectedDebt.id && a.status === 'PENDING')
+      .sort((a, b) => (a.installmentNumber ?? 0) - (b.installmentNumber ?? 0))[0] ?? null;
+  }, [anchors, selectedDebt]);
+
+  const debtRemaining = useMemo(() => {
+    if (!selectedDebt) return null;
+    const paid = applications
+      .filter(a => a.targetType === 'DEBT' && a.targetId === selectedDebt.id && a.kind === 'DEBT_PAYMENT')
+      .reduce((sum, a) => sum + (Number(a.targetAmount) || 0), 0);
+    return Math.max(0, Number(selectedDebt.totalAmount || selectedDebt.amount || 0) - paid);
+  }, [applications, selectedDebt]);
+
   const compatibleTransactions = transactions.filter(transaction => {
     if (appliedTransactionIds.has(String(transaction.id))) return false;
     if (transaction.type?.startsWith('TRANSFER_') || ['BALANCE_ADJUSTMENT', 'OPENING_BALANCE'].includes(transaction.type)) return false;
@@ -75,7 +92,17 @@ export default function TransactionApplicationSheet({
   const needsManual = selectedTransaction && selectedTarget
     && selectedTransaction.currency !== selectedTarget.currency
     && selectedTransaction.invoiceCurrency !== selectedTarget.currency
-    && !(sourceHasBaseEquivalent && targetUsesBaseEquivalent);
+    && (targetType === 'DEBT' || !(sourceHasBaseEquivalent && targetUsesBaseEquivalent));
+
+  useEffect(() => {
+    if (!isOpen || !needsManual || manualTargetAmount) return;
+    if (targetType === 'DEBT' && selectedDebt) {
+      const suggestedAmount = pendingAnchor ? pendingAnchor.amount : (debtRemaining > 0 ? debtRemaining : null);
+      if (suggestedAmount != null && suggestedAmount > 0) {
+        setManualTargetAmount(suggestedAmount.toFixed(2));
+      }
+    }
+  }, [isOpen, needsManual, targetType, selectedDebt, pendingAnchor, debtRemaining, manualTargetAmount]);
 
   if (!isOpen) return null;
 
@@ -201,7 +228,7 @@ export default function TransactionApplicationSheet({
 
         {!presetTargetId && targetType === 'DEBT' && (
           <FormField label="Deuda" htmlFor="application-debt">
-            <SelectInput id="application-debt" value={targetId} onChange={event => setTargetId(event.target.value)} required>
+            <SelectInput id="application-debt" value={targetId} onChange={event => { setTargetId(event.target.value); setManualTargetAmount(''); }} required>
               <option value="" disabled>Selecciona...</option>
               {debts.filter(debt => debt.status !== 'SETTLED' && (!selectedTransaction
                 || (debt.type === 'PAGAR' && selectedTransaction.type === 'OUT')
@@ -213,7 +240,7 @@ export default function TransactionApplicationSheet({
 
         {!presetTargetId && targetType === 'SPENDING_GOAL' && (
           <FormField label="Objetivo" htmlFor="application-goal">
-            <SelectInput id="application-goal" value={targetId} onChange={event => setTargetId(event.target.value)} required>
+            <SelectInput id="application-goal" value={targetId} onChange={event => { setTargetId(event.target.value); setManualTargetAmount(''); }} required>
               <option value="" disabled>Selecciona...</option>
               {goals.filter(goal => goal.status !== 'ARCHIVED').map(goal => <option key={goal.id} value={goal.id}>{goal.name} · {goal.currency}</option>)}
             </SelectInput>
@@ -221,7 +248,17 @@ export default function TransactionApplicationSheet({
         )}
 
         {needsManual && (
-          <FormField label={`Equivalente (${selectedTarget.currency})`} htmlFor="application-equivalent" hint="La tasa implícita se guardará con ambos montos">
+          <FormField
+            label={`Equivalente (${selectedTarget?.currency || ''})`}
+            htmlFor="application-equivalent"
+            hint={
+              targetType === 'DEBT' && pendingAnchor
+                ? `Sugerido: ${pendingAnchor.installmentNumber === 0 ? 'Inicial' : `Cuota ${pendingAnchor.installmentNumber}`} (${pendingAnchor.amount.toFixed(2)} ${selectedTarget?.currency || ''})`
+                : (targetType === 'DEBT' && debtRemaining != null
+                  ? `Sugerido: saldo restante (${debtRemaining.toFixed(2)} ${selectedTarget?.currency || ''})`
+                  : 'La tasa implícita se guardará con ambos montos')
+            }
+          >
             <NumberInput id="application-equivalent" value={manualTargetAmount} onChange={event => setManualTargetAmount(event.target.value)} step="0.01" required />
           </FormField>
         )}

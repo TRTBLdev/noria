@@ -175,6 +175,72 @@ describe('facturas y aplicaciones', () => {
     expect(await db.transactions.get(transactionId)).toMatchObject({ cashflowKind: 'LOAN_PROCEEDS', debtId: null, applicationId: null });
   });
 
+  it('aplica pago en bolivares a deuda en dolares respetando la cuota manual sin sobreescribir con FIFO', async () => {
+    await db.app_config.put({ key: 'baseCurrency', value: 'USD' });
+    await db.app_config.put({ key: 'lotCurrency', value: 'VES' });
+    await db.currencies.where('code').equals('USD').modify({ baseRelation: 'BASE' });
+    await db.currencies.where('code').equals('VES').modify({ baseRelation: 'LOTS' });
+
+    const accountId = await db.accounts.add({ name: 'Banco VES', currency: 'VES', balance: 5000, isArchived: false });
+    const debtId = await db.debts.add({
+      type: 'PAGAR',
+      amount: 100,
+      totalAmount: 100,
+      paidAmount: 0,
+      currency: 'USD',
+      isRecurring: true,
+      numberOfInstallments: 5,
+      status: 'ACTIVE',
+    });
+    const anchor1Id = await db.anchors.add({
+      name: 'Cuota 1',
+      amount: 20,
+      currency: 'USD',
+      debtId,
+      installmentNumber: 1,
+      status: 'PENDING',
+    });
+    const anchor2Id = await db.anchors.add({
+      name: 'Cuota 2',
+      amount: 20,
+      currency: 'USD',
+      debtId,
+      installmentNumber: 2,
+      status: 'PENDING',
+    });
+
+    const txId = await db.transactions.add({
+      type: 'OUT',
+      amount: 1000,
+      currency: 'VES',
+      accountId,
+      date: new Date(),
+      baseAmount: 25,
+      baseCurrency: 'USD',
+      lotConsumption: '[{"lotId":1,"amount":1000,"costAmount":25}]',
+    });
+
+    await applyExistingTransaction(db, {
+      transactionId: txId,
+      targetType: APPLICATION_TARGETS.DEBT,
+      targetId: debtId,
+      kind: APPLICATION_KINDS.DEBT_PAYMENT,
+      manualTargetAmount: 20,
+      baseCurrency: 'USD',
+      currencies: await db.currencies.toArray(),
+    });
+
+    const refreshedDebt = await db.debts.get(debtId);
+    expect(refreshedDebt.paidAmount).toBe(20);
+    expect((await db.anchors.get(anchor1Id)).status).toBe('PAID');
+    expect((await db.anchors.get(anchor2Id)).status).toBe('PENDING');
+
+    const app = await db.transaction_applications.where('transactionId').equals(txId).first();
+    expect(app.targetAmount).toBe(20);
+    expect(app.sourceAmount).toBe(1000);
+    expect(app.rateSource).toBe('MANUAL');
+  });
+
   it('divide retrospectivamente sin tocar saldo ni lotes', async () => {
     const accountId = await db.accounts.add({ name: 'USD', currency: 'USD', balance: 90, isArchived: false });
     const tagId = await db.tags.add({ name: 'General', kind: 'EXPENSE', pillar: 'NEED' });

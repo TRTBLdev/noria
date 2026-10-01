@@ -39,6 +39,11 @@ describe('distribucion monetaria', () => {
     expect(resolveApplicationEquivalent({
       transaction: { amount: 7, currency: 'XYZ' }, targetCurrency: 'ABC', baseCurrency: 'VES', currencies: [], manualTargetAmount: 91,
     })).toMatchObject({ targetAmount: 91, rateSource: 'MANUAL' });
+
+    expect(resolveApplicationEquivalent({
+      transaction: { amount: 1000, currency: 'VES', baseAmount: 25, baseCurrency: 'USD', lotConsumption: '[{}]' },
+      targetCurrency: 'USD', baseCurrency: 'USD', currencies: [], manualTargetAmount: 20,
+    })).toMatchObject({ targetAmount: 20, rateSource: 'MANUAL' });
   });
 
   it('cierra periodos incompletos sin arrastrar progreso', () => {
