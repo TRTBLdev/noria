@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
 import Header from '../components/Header.jsx';
@@ -8,6 +8,7 @@ import DebtFormSheet from '../components/DebtFormSheet.jsx';
 import DebtPaymentSheet from '../components/DebtPaymentSheet.jsx';
 import TransactionApplicationSheet from '../components/TransactionApplicationSheet.jsx';
 import DebtCompensationSheet from '../components/DebtCompensationSheet.jsx';
+import MonthFilterBar, { getYearMonthKey } from '../components/MonthFilterBar.jsx';
 import { getImplicitRate, unlinkTransactionApplication } from '../db/transactionApplications.js';
 import { getCurrencySymbol } from '../utils/format.js';
 import {
@@ -31,6 +32,8 @@ export default function DebtsScreen() {
   const [payingDebt, setPayingDebt] = useState(null);
   const [linkingDebt, setLinkingDebt] = useState(null);
   const [compensatingData, setCompensatingData] = useState(null);
+  const [selectedSettledMonth, setSelectedSettledMonth] = useState('');
+  const [showAllSettledMonths, setShowAllSettledMonths] = useState(false);
 
   // Dexie Queries
   const debts = useLiveQuery(() => db.debts.toArray()) || [];
@@ -155,23 +158,60 @@ export default function DebtsScreen() {
   // Split into sections
   const cobrar = debtsWithPayments.filter(d => d.type === 'COBRAR' && !['SETTLED', 'WRITTEN_OFF'].includes(d.status));
   const pagar = debtsWithPayments.filter(d => d.type === 'PAGAR' && !['SETTLED', 'WRITTEN_OFF'].includes(d.status));
+
+  const getEffectiveSettledDate = (d) => {
+    if (d.writtenOffDate) return new Date(d.writtenOffDate);
+    if (d.payments && d.payments.length > 0) {
+      const maxPaymentTime = d.payments.reduce((max, p) => {
+        const t = p.date ? new Date(p.date).getTime() : 0;
+        return t > max ? t : max;
+      }, 0);
+      if (maxPaymentTime > 0) return new Date(maxPaymentTime);
+    }
+    if (d.settledDate) return new Date(d.settledDate);
+    if (d.createdAt) return new Date(d.createdAt);
+    return new Date();
+  };
+
   const settled = useMemo(() => {
-    const getEffectiveSettledTime = (d) => {
-      if (d.writtenOffDate) return new Date(d.writtenOffDate).getTime();
-      if (d.settledDate) return new Date(d.settledDate).getTime();
-      if (d.payments && d.payments.length > 0) {
-        const maxPaymentTime = d.payments.reduce((max, p) => {
-          const t = p.date ? new Date(p.date).getTime() : 0;
-          return t > max ? t : max;
-        }, 0);
-        if (maxPaymentTime > 0) return maxPaymentTime;
-      }
-      return d.createdAt ? new Date(d.createdAt).getTime() : 0;
-    };
     return debtsWithPayments
       .filter(d => ['SETTLED', 'WRITTEN_OFF'].includes(d.status))
-      .sort((a, b) => getEffectiveSettledTime(b) - getEffectiveSettledTime(a));
+      .sort((a, b) => getEffectiveSettledDate(b).getTime() - getEffectiveSettledDate(a).getTime() || b.id - a.id);
   }, [debtsWithPayments]);
+
+  const settledWithDates = useMemo(() => {
+    return settled.map(debt => {
+      const effectiveDate = getEffectiveSettledDate(debt);
+      const monthKey = getYearMonthKey(effectiveDate);
+      return { debt, effectiveDate, monthKey };
+    });
+  }, [settled]);
+
+  const settledAvailableMonths = useMemo(() => {
+    const monthsSet = new Set();
+    settledWithDates.forEach(item => {
+      if (item.monthKey) monthsSet.add(item.monthKey);
+    });
+    return Array.from(monthsSet).sort().reverse();
+  }, [settledWithDates]);
+
+  useEffect(() => {
+    if (settledAvailableMonths.length > 0) {
+      if (!selectedSettledMonth || !settledAvailableMonths.includes(selectedSettledMonth)) {
+        setSelectedSettledMonth(settledAvailableMonths[0]);
+      }
+    } else {
+      setSelectedSettledMonth('');
+    }
+  }, [settledAvailableMonths, selectedSettledMonth]);
+
+  const displayedSettled = useMemo(() => {
+    if (showAllSettledMonths) return settledWithDates.map(item => item.debt);
+    if (!selectedSettledMonth) return [];
+    return settledWithDates
+      .filter(item => item.monthKey === selectedSettledMonth)
+      .map(item => item.debt);
+  }, [settledWithDates, selectedSettledMonth, showAllSettledMonths]);
 
   // Summary calculations
   const summary = useMemo(() => {
@@ -1090,7 +1130,18 @@ export default function DebtsScreen() {
             'Saldadas',
             settled.length,
             showSettled,
-            () => setShowSettled(prev => !prev)
+            () => setShowSettled(prev => !prev),
+            showSettled && settled.length > 0 ? (
+              <MonthFilterBar
+                availableMonths={settledAvailableMonths}
+                selectedMonth={selectedSettledMonth}
+                onSelectMonth={setSelectedSettledMonth}
+                showAll={showAllSettledMonths}
+                onToggleShowAll={() => setShowAllSettledMonths(prev => !prev)}
+                countForMonth={month => settledWithDates.filter(i => i.monthKey === month).length}
+                totalCount={settled.length}
+              />
+            ) : null
           )}
           {showSettled && (
             <div className="pt-4 space-y-3 animate-fade-in">
@@ -1098,8 +1149,12 @@ export default function DebtsScreen() {
                 <p className="text-[12px] text-noria-muted text-center py-4 border border-[rgba(26,26,26,0.12)]">
                   Sin deudas saldadas
                 </p>
+              ) : displayedSettled.length === 0 ? (
+                <p className="text-[12px] text-noria-muted text-center py-4 border border-[rgba(26,26,26,0.12)]">
+                  Sin deudas saldadas en este mes
+                </p>
               ) : (
-                settled.map(debt => renderDebtRow(debt))
+                displayedSettled.map(debt => renderDebtRow(debt))
               )}
             </div>
           )}

@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
 import Header from '../components/Header.jsx';
 import BottomNav from '../components/BottomNav.jsx';
 import FAB from '../components/FAB.jsx';
 import CurrencyAmount from '../components/CurrencyAmount.jsx';
+import MonthFilterBar, { getYearMonthKey } from '../components/MonthFilterBar.jsx';
 import { Coins, ChevronDown, ChevronUp } from 'lucide-react';
 import { createCurrencyLot, LOT_EPSILON } from '../db/currencyLots.js';
 
@@ -36,6 +37,8 @@ export default function DivisasScreen() {
   const [openingCosts, setOpeningCosts] = useState({});
   const [activationError, setActivationError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [selectedLotMonth, setSelectedLotMonth] = useState('');
+  const [showAllLotMonths, setShowAllLotMonths] = useState(false);
 
   const lots = useLiveQuery(() => db.lots.toArray()) || [];
   const accounts = useLiveQuery(() => db.accounts.toArray()) || [];
@@ -49,6 +52,53 @@ export default function DivisasScreen() {
   useEffect(() => {
     if (!activationCurrency && activationOptions.length > 0) setActivationCurrency(activationOptions[0].code);
   }, [activationCurrency, activationOptions]);
+
+  const currencyLots = useMemo(() => {
+    return lotCurrency ? lots.filter(lot => lot.currency === lotCurrency) : [];
+  }, [lots, lotCurrency]);
+
+  const activeLots = useMemo(() => {
+    return currencyLots.filter(lot => lot.remainingAmount > LOT_EPSILON);
+  }, [currencyLots]);
+
+  const exhaustedLots = useMemo(() => {
+    return currencyLots
+      .filter(lot => lot.remainingAmount <= LOT_EPSILON)
+      .sort((a, b) => new Date(b.date) - new Date(a.date) || b.id - a.id);
+  }, [currencyLots]);
+
+  const exhaustedWithMonths = useMemo(() => {
+    return exhaustedLots.map(lot => ({
+      lot,
+      monthKey: getYearMonthKey(lot.date),
+    }));
+  }, [exhaustedLots]);
+
+  const exhaustedAvailableMonths = useMemo(() => {
+    const monthsSet = new Set();
+    exhaustedWithMonths.forEach(item => {
+      if (item.monthKey) monthsSet.add(item.monthKey);
+    });
+    return Array.from(monthsSet).sort().reverse();
+  }, [exhaustedWithMonths]);
+
+  useEffect(() => {
+    if (exhaustedAvailableMonths.length > 0) {
+      if (!selectedLotMonth || !exhaustedAvailableMonths.includes(selectedLotMonth)) {
+        setSelectedLotMonth(exhaustedAvailableMonths[0]);
+      }
+    } else {
+      setSelectedLotMonth('');
+    }
+  }, [exhaustedAvailableMonths, selectedLotMonth]);
+
+  const displayedExhaustedLots = useMemo(() => {
+    if (showAllLotMonths) return exhaustedLots;
+    if (!selectedLotMonth) return [];
+    return exhaustedWithMonths
+      .filter(item => item.monthKey === selectedLotMonth)
+      .map(item => item.lot);
+  }, [exhaustedLots, exhaustedWithMonths, selectedLotMonth, showAllLotMonths]);
 
   const activationAccounts = accounts.filter(account => !account.isArchived && account.currency === activationCurrency);
 
@@ -137,9 +187,8 @@ export default function DivisasScreen() {
     );
   }
 
-  const currencyLots = lots.filter(lot => lot.currency === lotCurrency);
-  const activeLots = currencyLots.filter(lot => lot.remainingAmount > LOT_EPSILON);
-  const exhaustedLots = currencyLots.filter(lot => lot.remainingAmount <= LOT_EPSILON);
+
+
   const totalRemaining = activeLots.reduce((sum, lot) => sum + lot.remainingAmount, 0);
   const totalBaseCost = activeLots.reduce((sum, lot) => sum + (lot.remainingCostAmount || 0), 0);
   const averageRate = totalBaseCost > 0 ? totalRemaining / totalBaseCost : 0;
@@ -206,22 +255,58 @@ export default function DivisasScreen() {
         </section>
 
         <section>
-          <button type="button" onClick={() => setHistoryOpen(open => !open)} className="flex w-full justify-between border-b border-[#1A1A1A] pb-2 text-left">
-            <span className="text-[15px] font-[600]">Historial agotado ({exhaustedLots.length})</span>
-            {historyOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
-          </button>
-          {historyOpen && exhaustedLots.map(lot => (
-            <div key={lot.id} className="border-b border-[#1A1A1A]/10 py-3 text-[10px]">
-              <div className="flex justify-between gap-3">
-                <strong>{getLotSourceLabel(lot)}</strong>
-                <span>{formatLotDate(lot.date)}</span>
-              </div>
-              <div className="mt-1 flex justify-between gap-3 font-mono text-noria-muted">
-                <span className="truncate">{getLotAccountName(lot)}</span>
-                <CurrencyAmount amount={lot.costAmount} currencyCode={lot.costCurrency} />
-              </div>
+          <div className="flex items-center justify-between border-b border-[#1A1A1A] pb-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setHistoryOpen(open => !open)}
+              className="flex items-center gap-2 text-left focus:outline-none min-w-0"
+            >
+              {historyOpen ? <ChevronUp size={14} strokeWidth={2} /> : <ChevronDown size={14} strokeWidth={2} />}
+              <span className="text-[15px] font-[600] text-noria-text leading-tight truncate">
+                Historial agotado
+              </span>
+              <span className="font-mono text-[10px] font-[700] text-noria-muted uppercase tracking-[0.1em] shrink-0">
+                ({exhaustedLots.length})
+              </span>
+            </button>
+            {historyOpen && exhaustedLots.length > 0 && (
+              <MonthFilterBar
+                availableMonths={exhaustedAvailableMonths}
+                selectedMonth={selectedLotMonth}
+                onSelectMonth={setSelectedLotMonth}
+                showAll={showAllLotMonths}
+                onToggleShowAll={() => setShowAllLotMonths(prev => !prev)}
+                countForMonth={month => exhaustedWithMonths.filter(i => i.monthKey === month).length}
+                totalCount={exhaustedLots.length}
+              />
+            )}
+          </div>
+          {historyOpen && (
+            <div className="space-y-3 pt-3">
+              {exhaustedLots.length === 0 ? (
+                <p className="border border-dashed border-[#1A1A1A]/15 py-6 text-center text-[11px] text-noria-muted">
+                  No hay lotes agotados.
+                </p>
+              ) : displayedExhaustedLots.length === 0 ? (
+                <p className="border border-dashed border-[#1A1A1A]/15 py-4 text-center text-[11px] text-noria-muted">
+                  No hay lotes agotados en este mes.
+                </p>
+              ) : (
+                displayedExhaustedLots.map(lot => (
+                  <div key={lot.id} className="border-b border-[#1A1A1A]/10 py-3 text-[10px]">
+                    <div className="flex justify-between gap-3">
+                      <strong>{getLotSourceLabel(lot)}</strong>
+                      <span>{formatLotDate(lot.date)}</span>
+                    </div>
+                    <div className="mt-1 flex justify-between gap-3 font-mono text-noria-muted">
+                      <span className="truncate">{getLotAccountName(lot)}</span>
+                      <CurrencyAmount amount={lot.costAmount} currencyCode={lot.costCurrency} />
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
-          ))}
+          )}
         </section>
       </main>
       <FAB />
