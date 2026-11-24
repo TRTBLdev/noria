@@ -697,7 +697,7 @@ export default function DebtsScreen() {
                                 type="button"
                                 onClick={async () => {
                                   if (!confirm('¿Desvincular este pago de la deuda?')) return;
-                                  try { await unlinkTransactionApplication(db, payment.transactionId); }
+                                  try { await unlinkTransactionApplication(db, payment.transactionId, { applicationId: payment.id }); }
                                   catch (unlinkError) { alert(unlinkError.message || 'No se pudo desvincular.'); }
                                 }}
                                 className="mt-1 flex items-center gap-1 font-mono text-[8px] uppercase text-[#9F2F2D]"

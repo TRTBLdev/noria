@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { useNavigate } from 'react-router-dom';
 import { db } from '../db/db.js';
 import { Search, Trash2, Pencil, ArrowDownRight, ArrowUpRight, ArrowLeftRight, ChevronDown, ChevronUp, Link2, Unlink, Scissors, Plus, MoreHorizontal, Receipt } from 'lucide-react';
 import PillarTag from './PillarTag.jsx';
@@ -12,19 +13,27 @@ import { formatAmountWithSymbol, formatCurrency } from '../utils/format.js';
 import CurrencyAmount from './CurrencyAmount.jsx';
 import TransactionApplicationSheet from './TransactionApplicationSheet.jsx';
 import { deleteReceiptGroup, splitExistingTransaction } from '../db/receipts.js';
-import { unlinkTransactionApplication } from '../db/transactionApplications.js';
+import { getImplicitRate, unlinkTransactionApplication } from '../db/transactionApplications.js';
 
-export function getTransactionActionAvailability(transaction, application) {
+export function getTransactionActionAvailability(transaction, applicationsInput) {
   const type = String(transaction?.type || '');
   const isAdjustment = type === 'BALANCE_ADJUSTMENT';
   const isTransfer = type.startsWith('TRANSFER_');
+  const apps = Array.isArray(applicationsInput)
+    ? applicationsInput
+    : (applicationsInput ? [applicationsInput] : []);
+  const hasAnyApp = apps.length > 0;
+  const hasLegacy = apps.some(item => item.isLegacy);
+  const hasEditableDebtApps = type === 'OUT' && hasAnyApp && !hasLegacy && apps.every(item => item.targetType === 'DEBT');
+
   return {
-    edit: !isTransfer && !isAdjustment && !transaction.receiptId && !application,
-    link: !isTransfer && !isAdjustment && !application,
-    unlink: Boolean(application && !application.isLegacy),
-    split: type === 'OUT' && !transaction.receiptId && !transaction.splitGroupId && !application
+    edit: !isTransfer && !isAdjustment && !transaction.receiptId && !hasAnyApp,
+    link: !isTransfer && !isAdjustment && !hasAnyApp,
+    editLinks: hasEditableDebtApps,
+    unlink: hasAnyApp && !hasLegacy,
+    split: type === 'OUT' && !transaction.receiptId && !transaction.splitGroupId && !hasAnyApp
       && !transaction.debtId && !transaction.transferId,
-    delete: !transaction.receiptId,
+    delete: !transaction.receiptId && !hasLegacy,
   };
 }
 
@@ -37,6 +46,7 @@ export default function TransactionsSection({
   onDeleteTransaction,
   onUpdateTransaction
 }) {
+  const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [dateRange, setDateRange] = useState('ALL');
   const [customStart, setCustomStart] = useState('');
@@ -71,6 +81,7 @@ export default function TransactionsSection({
   const [editTagId, setEditTagId] = useState('');
   const [editDate, setEditDate] = useState('');
   const [applyingTx, setApplyingTx] = useState(null);
+  const [applyingEditMode, setApplyingEditMode] = useState(false);
   const [expandedReceipts, setExpandedReceipts] = useState(() => new Set());
   const [expandedTransfers, setExpandedTransfers] = useState(() => new Set());
   const [splittingTx, setSplittingTx] = useState(null);
@@ -214,7 +225,7 @@ export default function TransactionsSection({
     setEditingTx(null);
   };
 
-  const getApplication = transactionId => applications.find(application => application.transactionId === transactionId);
+  const getApplications = transactionId => applications.filter(application => application.transactionId === transactionId);
   const getApplicationLabel = application => {
     if (!application) return '';
     if (application.targetType === 'SPENDING_GOAL') {
@@ -279,11 +290,11 @@ export default function TransactionsSection({
     const source = t.incomeSourceId ? incomeSources.find(item => item.id === t.incomeSourceId) : null;
     const amountSign = isIncome ? '+' : '-';
     const amountColor = isAdjustment ? '#647C78' : isTransfer ? '#1A1A1A' : isIncome ? '#4F8F58' : '#1A1A1A';
-    const application = getApplication(t.id);
+    const rowApplications = getApplications(t.id);
     const beneficiary = t.beneficiaryThirdPartyId
       ? thirdParties.find(item => item.id === t.beneficiaryThirdPartyId)
       : null;
-    const actions = getTransactionActionAvailability(t, application);
+    const actions = getTransactionActionAvailability(t, rowApplications);
     const hasActions = Object.values(actions).some(Boolean);
     const actionMenuKey = `transaction-${t.id}`;
     const isActionMenuOpen = openActionMenu === actionMenuKey;
@@ -327,9 +338,13 @@ export default function TransactionsSection({
                 Conciliación
               </span>
             )}
-            {application && (
+            {rowApplications.length > 0 && (
               <span className="font-mono text-[8px] uppercase tracking-[0.05em] px-1 border border-[#647C78] text-[#647C78] select-none">
-                {application.kind === 'GOAL_PROGRESS' ? 'Objetivo' : application.kind === 'DEBT_ORIGIN' ? 'Por cobrar' : 'Deuda'}
+                {rowApplications.length > 1
+                  ? `${rowApplications.length} Deudas`
+                  : (rowApplications[0].kind === 'GOAL_PROGRESS'
+                    ? 'Objetivo'
+                    : rowApplications[0].kind === 'DEBT_ORIGIN' ? 'Por cobrar' : 'Deuda')}
               </span>
             )}
             <PillarTag pillar={t.pillar} size="xs" />
@@ -353,14 +368,51 @@ export default function TransactionsSection({
           {beneficiary && (
             <p className="mt-0.5 text-[9px] text-noria-muted font-mono truncate">Por cuenta de {beneficiary.name}</p>
           )}
-          {application && (
-            <p className="mt-0.5 text-[9px] text-[#647C78] font-mono">
-              → {getApplicationLabel(application)} · {Number(application.sourceAmount).toFixed(2)} {application.sourceCurrency}
-              {' → '}{Number(application.targetAmount).toFixed(2)} {application.targetCurrency}
-              {application.kind === 'DEBT_PAYMENT' && application.sourceAmount > 0
-                ? ` · Tasa ${Number(application.targetAmount / application.sourceAmount).toFixed(6)}`
-                : ''}
-            </p>
+          {rowApplications.length > 0 && (
+            <div className="mt-1.5 space-y-1">
+              {rowApplications.map((app, appIndex) => {
+                const prefix = appIndex === rowApplications.length - 1 ? '└─' : '├─';
+                const targetDebt = app.targetType === 'DEBT' ? debts.find(item => item.id === app.targetId) : null;
+                const appliedRate = getImplicitRate(app);
+                const isMultiCurr = app.sourceCurrency !== app.targetCurrency;
+                const badge = app.kind === 'DEBT_ORIGIN'
+                  ? { label: 'POR COBRAR', color: '#647C78' }
+                  : (app.kind === 'DEBT_PAYMENT' && targetDebt
+                    ? (targetDebt.status === 'SETTLED'
+                      ? { label: 'SALDADA', color: '#4F8F58' }
+                      : { label: 'PARCIAL', color: '#647C78' })
+                    : null);
+                return (
+                  <div key={app.id} className="font-mono text-[9px] leading-snug">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="min-w-0 truncate text-[#647C78]">
+                        <span className="mr-1 text-noria-muted">{prefix}</span>
+                        {getApplicationLabel(app)}
+                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className="tabular-nums text-noria-text font-[600]">
+                          {Number(app.sourceAmount).toFixed(2)} {app.sourceCurrency}
+                        </span>
+                        {badge && (
+                          <span
+                            className="border px-1 py-0 text-[7px] font-[700] uppercase tracking-[0.08em]"
+                            style={{ borderColor: badge.color, color: badge.color }}
+                          >
+                            {badge.label}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    {isMultiCurr && (
+                      <p className="pl-4 text-noria-muted">
+                        → {Number(app.targetAmount).toFixed(2)} {app.targetCurrency}
+                        {app.kind === 'DEBT_PAYMENT' && appliedRate ? ` · Tasa ${Number(appliedRate).toFixed(4)}` : ''}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           )}
           {t.taxTreatment && t.invoiceCurrency && (
             <p className="mt-0.5 text-[9px] text-noria-muted font-mono">
@@ -399,8 +451,13 @@ export default function TransactionsSection({
                   </button>
                 )}
                 {actions.link && (
-                  <button type="button" onClick={() => { setOpenActionMenu(null); setApplyingTx(t); }} className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-noria-text/5 focus:outline-none">
+                  <button type="button" onClick={() => { setOpenActionMenu(null); setApplyingEditMode(false); setApplyingTx(t); }} className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-noria-text/5 focus:outline-none">
                     <Link2 size={12} strokeWidth={1.5} /> Vincular
+                  </button>
+                )}
+                {actions.editLinks && (
+                  <button type="button" onClick={() => { setOpenActionMenu(null); setApplyingEditMode(true); setApplyingTx(t); }} className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-noria-text/5 focus:outline-none">
+                    <Pencil size={12} strokeWidth={1.5} /> Editar reparto
                   </button>
                 )}
                 {actions.unlink && (
@@ -506,9 +563,19 @@ export default function TransactionsSection({
               <div className="absolute right-0 top-7 z-30 w-48 border border-[#1A1A1A] bg-[#F5F2ED] font-mono text-[10px] uppercase tracking-[0.08em]">
                 <button
                   type="button"
+                  onClick={() => {
+                    setOpenActionMenu(null);
+                    navigate(`/transactions/receipt/${receiptId}`);
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-noria-text/5 focus:outline-none"
+                >
+                  <Pencil size={12} strokeWidth={1.5} /> Editar movimiento
+                </button>
+                <button
+                  type="button"
                   onClick={async () => {
                     setOpenActionMenu(null);
-                    if (!confirm('¿Eliminar el movimiento completo y restaurar el saldo?')) return;
+                    if (!confirm('¿Eliminar el movimiento completo, revertir abonos en deudas vinculadas y restaurar el saldo?')) return;
                     try { await deleteReceiptGroup(db, receiptId); }
                     catch (error) { alert(error.message || 'No se pudo eliminar el movimiento.'); }
                   }}
@@ -521,9 +588,9 @@ export default function TransactionsSection({
           </div>
         </div>
         {expanded && (
-          <div className="divide-y divide-[#1A1A1A]/10 border-t border-[#1A1A1A]/15 pl-4 pr-1 bg-[#1A1A1A]/[0.02] animate-fade-in">
-            {fragments
-              .sort((left, right) => String(left.id).localeCompare(String(right.id)))
+          <div className="ml-1 border-t border-[rgba(26,26,26,0.16)] border-l-2 border-l-[#1A1A1A]/25 pl-3 pr-1 divide-y divide-[#1A1A1A]/10 bg-transparent animate-fade-in">
+            {[...fragments]
+              .sort((left, right) => (Number(left.id) || 0) - (Number(right.id) || 0) || String(left.id).localeCompare(String(right.id)))
               .map(fragment => renderRow(fragment, { isInsideReceipt: true }))}
           </div>
         )}
@@ -956,8 +1023,9 @@ export default function TransactionsSection({
 
       <TransactionApplicationSheet
         isOpen={!!applyingTx}
-        onClose={() => setApplyingTx(null)}
+        onClose={() => { setApplyingTx(null); setApplyingEditMode(false); }}
         transaction={applyingTx}
+        editMode={applyingEditMode}
       />
 
       {splittingTx && (

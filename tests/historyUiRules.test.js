@@ -7,6 +7,7 @@ describe('acciones del historial', () => {
     expect(getTransactionActionAvailability({ id: 1, type: 'OUT' }, null)).toEqual({
       edit: true,
       link: true,
+      editLinks: false,
       unlink: false,
       split: true,
       delete: true,
@@ -17,29 +18,46 @@ describe('acciones del historial', () => {
     expect(getTransactionActionAvailability({ id: 2, type: 'OUT', receiptId: 'R-1' }, null)).toEqual({
       edit: false,
       link: true,
+      editLinks: false,
       unlink: false,
       split: false,
       delete: false,
     });
     expect(getTransactionActionAvailability(
       { id: 3, type: 'OUT', receiptId: 'R-1' },
-      { id: 9, isLegacy: false }
+      { id: 9, targetType: 'DEBT', isLegacy: false }
     )).toEqual({
       edit: false,
       link: false,
+      editLinks: true,
       unlink: true,
       split: false,
       delete: false,
     });
     expect(getTransactionActionAvailability(
       { id: 4, type: 'OUT', receiptId: 'R-1' },
-      { id: 10, isLegacy: true }
+      { id: 10, targetType: 'DEBT', isLegacy: true }
     )).toEqual({
       edit: false,
       link: false,
+      editLinks: false,
       unlink: false,
       split: false,
       delete: false,
+    });
+    expect(getTransactionActionAvailability(
+      { id: 5, type: 'OUT' },
+      [
+        { id: 11, targetType: 'DEBT', isLegacy: false },
+        { id: 12, targetType: 'DEBT', isLegacy: false },
+      ]
+    )).toEqual({
+      edit: false,
+      link: false,
+      editLinks: true,
+      unlink: true,
+      split: false,
+      delete: true,
     });
   });
 });
@@ -76,6 +94,28 @@ describe('navegacion mensual de saldadas y lotes', () => {
     ];
     const sorted = [...items].sort((a, b) => new Date(b.date) - new Date(a.date));
     expect(sorted.map(i => i.id)).toEqual([2, 3, 1]);
+  });
+});
+
+describe('integridad de imports de base de datos en UI', () => {
+  it('todos los componentes y pantallas que usan db. importan db explícitamente', async () => {
+    const { readdirSync, readFileSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const dirs = [
+      join(process.cwd(), 'src', 'components'),
+      join(process.cwd(), 'src', 'screens'),
+    ];
+    const missing = [];
+    for (const dir of dirs) {
+      for (const file of readdirSync(dir)) {
+        if (!file.endsWith('.jsx')) continue;
+        const content = readFileSync(join(dir, file), 'utf8');
+        const usesDb = /\bdb\./.test(content);
+        const importsDb = /import\s*\{[^}]*\bdb\b[^}]*\}\s*from\s*['"][^'"]*db(?:\.js)?['"]/.test(content);
+        if (usesDb && !importsDb) missing.push(file);
+      }
+    }
+    expect(missing).toEqual([]);
   });
 });
 

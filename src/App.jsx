@@ -68,6 +68,7 @@ function AppRoutes() {
         <Route path="/debts" element={<AccessGate><DebtsScreen /></AccessGate>} />
         <Route path="/calculator/split" element={<AccessGate><ReceiptSplitScreen initialMode="SHARED_EXPENSE" /></AccessGate>} />
         <Route path="/transactions/receipt" element={<AccessGate><ReceiptSplitScreen /></AccessGate>} />
+        <Route path="/transactions/receipt/:receiptId" element={<AccessGate><ReceiptSplitScreen /></AccessGate>} />
         <Route path="/goals" element={<AccessGate><SpendingGoalsScreen /></AccessGate>} />
         
         {/* Fallback to root */}

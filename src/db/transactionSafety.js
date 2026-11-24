@@ -4,13 +4,16 @@ import {
   restoreCurrencyLots,
 } from './currencyLots.js';
 import { convertAmountToBase } from '../utils/currency.js';
+import { unlinkApplicationsInTransaction } from './transactionApplications.js';
 
 export async function deleteTransactionSafely(db, transaction) {
   const lotCurrency = (await db.app_config.get('lotCurrency'))?.value || '';
-  const application = await db.transaction_applications.where('transactionId').equals(transaction.id).first();
-  if (application) throw new Error('Desvincula la transacción de su deuda u objetivo antes de eliminarla.');
+  const applications = await db.transaction_applications.where('transactionId').equals(transaction.id).toArray();
+  if (applications.some(item => item.isLegacy)) {
+    throw new Error('Este vínculo heredado no puede eliminarse de forma segura.');
+  }
   if (transaction.receiptId) throw new Error('Los fragmentos de una factura deben revertirse como un grupo completo.');
-  if (transaction.debtId) {
+  if (transaction.debtId && applications.length === 0) {
     throw new Error('Los movimientos de deuda deben revertirse desde la pestaña Deudas.');
   }
   if (transaction.splitGroupId) {
@@ -20,7 +23,20 @@ export async function deleteTransactionSafely(db, transaction) {
     throw new Error('El saldo inicial no se elimina como una transacción normal.');
   }
 
-  await db.transaction('rw', [db.accounts, db.transactions, db.anchors, db.lots], async () => {
+  await db.transaction('rw', [
+    db.accounts,
+    db.transactions,
+    db.anchors,
+    db.lots,
+    db.debts,
+    db.transaction_applications,
+    db.spending_goals,
+    db.spending_goal_periods,
+  ], async () => {
+    if (applications.length > 0) {
+      await unlinkApplicationsInTransaction(db, transaction.id);
+    }
+
     if (transaction.type === 'BALANCE_ADJUSTMENT') {
       const adjustmentAmount = Number(transaction.adjustmentAmount);
       if (!Number.isFinite(adjustmentAmount)) throw new Error('La conciliación no conserva una diferencia válida.');
@@ -99,10 +115,10 @@ export async function deleteTransactionSafely(db, transaction) {
 export async function updateTransactionSafely(db, transactionId, updatedFields) {
   const lotCurrency = (await db.app_config.get('lotCurrency'))?.value || '';
   const baseCurrency = (await db.app_config.get('baseCurrency'))?.value || '';
-  const application = await db.transaction_applications.where('transactionId').equals(transactionId).first();
+  const applicationCount = await db.transaction_applications.where('transactionId').equals(transactionId).count();
   await db.transaction('rw', [db.accounts, db.transactions, db.currencies], async () => {
     const original = await db.transactions.get(transactionId);
-    if (application && updatedFields.amount !== undefined && updatedFields.amount !== original?.amount) {
+    if (applicationCount > 0 && updatedFields.amount !== undefined && updatedFields.amount !== original?.amount) {
       throw new Error('Desvincula la transacción antes de cambiar su monto.');
     }
     if (original?.receiptId && updatedFields.amount !== undefined && updatedFields.amount !== original.amount) {

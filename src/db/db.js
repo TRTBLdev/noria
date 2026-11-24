@@ -235,6 +235,10 @@ db.version(13).stores({
   }
 });
 
+db.version(14).stores({
+  transaction_applications: '++id, transactionId, targetType, targetId, [targetType+targetId], kind, periodId',
+});
+
 
 // Seed data function to populate catalogs on first open
 export async function seedDatabase() {

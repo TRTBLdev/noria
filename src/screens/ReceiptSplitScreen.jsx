@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Plus, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
 import { db } from '../db/db.js';
 import Header from '../components/Header.jsx';
@@ -8,6 +8,8 @@ import BottomNav from '../components/BottomNav.jsx';
 import PaymentMethodSelector from '../components/PaymentMethodSelector.jsx';
 import CategorySelect from '../components/CategorySelect.jsx';
 import CurrencyAmount from '../components/CurrencyAmount.jsx';
+import NoriaSwitch from '../components/NoriaSwitch.jsx';
+import MultiDebtAllocationPanel, { createEmptyMultiDebtState } from '../components/MultiDebtAllocationPanel.jsx';
 import {
   DateInput,
   FormActions,
@@ -17,7 +19,14 @@ import {
   SelectInput,
   TextInput,
 } from '../components/FormSystem.jsx';
-import { createTransactionGroup, TRANSACTION_GROUP_KINDS } from '../db/receipts.js';
+import {
+  createTransactionGroup,
+  loadTransactionGroupForEdit,
+  TRANSACTION_GROUP_KINDS,
+  updateTransactionGroup,
+} from '../db/receipts.js';
+import { APPLICATION_KINDS, APPLICATION_TARGETS } from '../db/transactionApplications.js';
+import { buildMultiDebtDestination } from '../utils/debtAllocation.js';
 import {
   allocateAmount,
   getCurrencyDecimals,
@@ -33,9 +42,9 @@ const MODE_OPTIONS = [
 ];
 
 const MODE_DESCRIPTIONS = {
-  [TRANSACTION_GROUP_KINDS.RECEIPT]: 'Conserva el total, la base y el IVA. También puedes asignar partes a otras personas y crear cuentas por cobrar.',
-  [TRANSACTION_GROUP_KINDS.SHARED_EXPENSE]: 'Divide un subtotal entre personas, con propina opcional, sin registrar desglose fiscal.',
-  [TRANSACTION_GROUP_KINDS.DEBT_DISTRIBUTION]: 'Distribuye un envío entre una o varias deudas existentes.',
+  [TRANSACTION_GROUP_KINDS.RECEIPT]: 'Conserva el total, la base y el IVA. Puedes asignar partes a terceros, crear cuentas por cobrar o compensar múltiples deudas (FIFO).',
+  [TRANSACTION_GROUP_KINDS.SHARED_EXPENSE]: 'Divide un subtotal entre personas, con propina opcional, creando deuda por cobrar o compensando deudas abiertas.',
+  [TRANSACTION_GROUP_KINDS.DEBT_DISTRIBUTION]: 'Distribuye un envío entre múltiples deudas abiertas en FIFO con montos editables y manejo de remanente.',
 };
 
 const newReceiptPart = (fields = {}) => ({
@@ -49,6 +58,7 @@ const newReceiptPart = (fields = {}) => ({
   destinationType: 'NONE',
   targetId: '',
   manualTargetAmount: '',
+  multiDebt: createEmptyMultiDebtState(),
   ...fields,
 });
 
@@ -63,9 +73,9 @@ const newParticipant = index => ({
   name: index === 0 ? 'Tú' : '',
   thirdPartyId: '',
   amount: '',
+  destinationType: 'CREATE_RECEIVABLE',
+  multiDebt: createEmptyMultiDebtState(),
 });
-
-const newDebtRow = () => ({ debtId: '', sentAmount: '', recognizedAmount: '' });
 
 const getAccountIdFromMethod = (value, instruments) => {
   if (!value) return null;
@@ -83,6 +93,47 @@ const formatMoneyForMessage = (value, decimals) => Number(value || 0).toLocaleSt
   minimumFractionDigits: decimals,
   maximumFractionDigits: decimals,
 });
+
+const toLocalDateStr = value => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return new Date().toISOString().slice(0, 10);
+  const yr = date.getFullYear();
+  const mo = String(date.getMonth() + 1).padStart(2, '0');
+  const dy = String(date.getDate()).padStart(2, '0');
+  return `${yr}-${mo}-${dy}`;
+};
+
+function buildMultiDebtStateFromApps(paymentApps, originApp, remainderExpenseTx, originDebt) {
+  const manualRows = {};
+  const selectedDebtIds = [];
+  for (const app of paymentApps) {
+    selectedDebtIds.push(app.targetId);
+    manualRows[app.targetId] = {
+      sourceAmount: String(app.sourceAmount),
+      targetAmount: String(app.targetAmount),
+      appliedRate: app.appliedRate ? String(app.appliedRate) : '',
+      isManual: true,
+    };
+  }
+  let remainderAction = '';
+  let remainderTagId = '';
+  let remainderDescription = '';
+  if (remainderExpenseTx) {
+    remainderAction = 'PERSONAL_EXPENSE';
+    remainderTagId = remainderExpenseTx.tagId ? String(remainderExpenseTx.tagId) : '';
+    remainderDescription = remainderExpenseTx.description || '';
+  } else if (originApp) {
+    remainderAction = 'CREATE_RECEIVABLE';
+    remainderDescription = originDebt?.description || '';
+  }
+  return createEmptyMultiDebtState({
+    selectedDebtIds,
+    manualRows,
+    remainderAction,
+    remainderTagId,
+    remainderDescription,
+  });
+}
 
 function ThirdPartyPicker({
   id,
@@ -156,6 +207,10 @@ function SectionTitle({ children, aside }) {
 
 export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KINDS.RECEIPT }) {
   const navigate = useNavigate();
+  const { receiptId: editingReceiptId } = useParams();
+  const isEditing = Boolean(editingReceiptId);
+  const loadedReceiptRef = useRef(null);
+
   const accounts = useLiveQuery(() => db.accounts.toArray()) || [];
   const institutions = useLiveQuery(() => db.institutions.toArray()) || [];
   const instruments = useLiveQuery(() => db.instruments.toArray()) || [];
@@ -192,26 +247,208 @@ export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KIN
   const [participants, setParticipants] = useState([newParticipant(0), newParticipant(1)]);
   const [sharedTagId, setSharedTagId] = useState('');
 
-  const [debtRows, setDebtRows] = useState([newDebtRow()]);
-  const [remainderType, setRemainderType] = useState('');
-  const [remainderTagId, setRemainderTagId] = useState('');
-  const [remainderConcept, setRemainderConcept] = useState('Excedente del envío');
+  const [debtDistributionState, setDebtDistributionState] = useState(createEmptyMultiDebtState);
+  const [virtualDebtCreditsById, setVirtualDebtCreditsById] = useState({});
+  const [loadingEdit, setLoadingEdit] = useState(false);
 
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!invoiceCurrency && baseCurrency) setInvoiceCurrency(baseCurrency);
-  }, [baseCurrency, invoiceCurrency]);
+    if (!isEditing && !invoiceCurrency && baseCurrency) setInvoiceCurrency(baseCurrency);
+  }, [baseCurrency, invoiceCurrency, isEditing]);
 
   useEffect(() => {
     setParticipants(current => Array.from({ length: numberPeople }, (_, index) => current[index] || newParticipant(index)));
   }, [numberPeople]);
 
   useEffect(() => {
-    setDebtRows([newDebtRow()]);
-    setRemainderType('');
-  }, [counterpartyId]);
+    if (!editingReceiptId || loadedReceiptRef.current === editingReceiptId) return;
+    loadedReceiptRef.current = editingReceiptId;
+    setLoadingEdit(true);
+    setError('');
+    (async () => {
+      try {
+        const loaded = await loadTransactionGroupForEdit(db, editingReceiptId);
+        const { receipt, transactions: txs, appsByTx, virtualDebtCreditsById: credits } = loaded;
+        setVirtualDebtCreditsById(credits || {});
+
+        const loadedMode = receipt.groupKind || TRANSACTION_GROUP_KINDS.RECEIPT;
+        setMode(loadedMode);
+        setDate(toLocalDateStr(receipt.date));
+        setDescription(receipt.description || '');
+        setPaymentMethod(receipt.instrumentId ? `inst-${receipt.instrumentId}` : `acc-${receipt.accountId}`);
+
+        const cpId = receipt.counterpartyThirdPartyId || receipt.merchantThirdPartyId;
+        if (cpId) {
+          const cp = await db.third_parties.get(Number(cpId));
+          setCounterpartyId(String(cpId));
+          setCounterpartyName(cp?.name || '');
+        } else {
+          setCounterpartyId('');
+          setCounterpartyName('');
+        }
+
+        // Group sibling remainder expense fragments with their parent MULTI_DEBT fragment
+        const logicalUnits = [];
+        for (let idx = 0; idx < txs.length; idx += 1) {
+          const tx = txs[idx];
+          const next = txs[idx + 1];
+          const apps = appsByTx.get(tx.id) || [];
+          const hasPaymentApps = apps.some(a => a.kind === APPLICATION_KINDS.DEBT_PAYMENT);
+          if (hasPaymentApps && next?.isRemainderExpense && next.remainderOriginThirdPartyId === tx.beneficiaryThirdPartyId) {
+            logicalUnits.push({ tx, apps, remainderExpenseTx: next });
+            idx += 1;
+          } else {
+            logicalUnits.push({ tx, apps, remainderExpenseTx: null });
+          }
+        }
+
+        if (loadedMode === TRANSACTION_GROUP_KINDS.RECEIPT) {
+          setAmountInput(String(receipt.paymentAmount ?? ''));
+          setInvoiceCurrency(receipt.invoiceCurrency || receipt.paymentCurrency || '');
+          setIncludeTax(Boolean(receipt.hasTaxBreakdown));
+          if (receipt.hasTaxBreakdown) {
+            setTaxableBase(String(receipt.taxableBase ?? '0'));
+            setExemptBase(String(receipt.exemptBase ?? '0'));
+            setTaxAmount(String(receipt.taxAmount ?? '0'));
+            setInvoiceTotalInput('');
+          } else {
+            setInvoiceTotalInput(String(receipt.invoiceTotal ?? receipt.paymentAmount ?? ''));
+          }
+
+          const builtParts = [];
+          for (const unit of logicalUnits) {
+            const { tx, apps, remainderExpenseTx } = unit;
+            const ownerId = tx.beneficiaryThirdPartyId || apps.find(a => a.kind === APPLICATION_KINDS.DEBT_PAYMENT)?.targetId ? tx.beneficiaryThirdPartyId : null;
+            const owner = ownerId ? await db.third_parties.get(Number(ownerId)) : null;
+            const paymentApps = apps.filter(a => a.kind === APPLICATION_KINDS.DEBT_PAYMENT);
+            const originApp = apps.find(a => a.kind === APPLICATION_KINDS.DEBT_ORIGIN);
+            const goalApp = apps.find(a => a.kind === APPLICATION_KINDS.GOAL_PROGRESS);
+            const originDebt = originApp ? await db.debts.get(originApp.targetId) : null;
+
+            const partBaseOrGross = receipt.hasTaxBreakdown
+              ? (Number(tx.invoiceBaseAmount || 0) + Number(remainderExpenseTx?.invoiceBaseAmount || 0))
+              : (Number(tx.invoiceGrossAmount ?? tx.paymentPrincipalAmount ?? tx.amount) + Number(remainderExpenseTx?.invoiceGrossAmount ?? remainderExpenseTx?.paymentPrincipalAmount ?? 0));
+
+            let destinationType = 'NONE';
+            let targetId = '';
+            let manualTargetAmount = '';
+            let multiDebt = createEmptyMultiDebtState();
+
+            if (paymentApps.length > 0) {
+              destinationType = 'MULTI_DEBT';
+              multiDebt = buildMultiDebtStateFromApps(paymentApps, originApp, remainderExpenseTx, originDebt);
+            } else if (originApp) {
+              destinationType = 'CREATE_RECEIVABLE';
+            } else if (goalApp) {
+              destinationType = 'GOAL';
+              targetId = String(goalApp.targetId);
+              if (goalApp.rateSource === 'MANUAL') manualTargetAmount = String(goalApp.targetAmount);
+            }
+
+            builtParts.push(newReceiptPart({
+              description: tx.description || '',
+              amount: String(roundMoney(partBaseOrGross, 2)),
+              taxTreatment: tx.taxTreatment || 'TAXABLE',
+              tagId: tx.tagId ? String(tx.tagId) : '',
+              ownerMode: ownerId ? 'PERSON' : 'SELF',
+              ownerName: owner?.name || '',
+              ownerThirdPartyId: ownerId ? String(ownerId) : '',
+              destinationType,
+              targetId,
+              manualTargetAmount,
+              multiDebt,
+            }));
+          }
+          setReceiptParts(builtParts);
+        } else if (loadedMode === TRANSACTION_GROUP_KINDS.SHARED_EXPENSE) {
+          const tip = Number(receipt.tipAmount) || 0;
+          const subtotal = Math.max(0, roundMoney((Number(receipt.paymentAmount) || 0) - tip, 2));
+          setAmountInput(String(subtotal));
+          setTipPercentage(tip > 0 && subtotal > 0 ? String(roundMoney((tip / subtotal) * 100, 2)) : '');
+          setSplitMethod('MANUAL');
+          setNumberPeople(Math.max(2, logicalUnits.length));
+
+          const builtParticipants = [];
+          for (let index = 0; index < logicalUnits.length; index += 1) {
+            const { tx, apps, remainderExpenseTx } = logicalUnits[index];
+            const paymentApps = apps.filter(a => a.kind === APPLICATION_KINDS.DEBT_PAYMENT);
+            const originApp = apps.find(a => a.kind === APPLICATION_KINDS.DEBT_ORIGIN);
+            const originDebt = originApp ? await db.debts.get(originApp.targetId) : null;
+            const totalWithTipShare = Number(tx.paymentPrincipalAmount ?? tx.amount) + Number(remainderExpenseTx?.paymentPrincipalAmount ?? 0);
+            const ratioWithoutTip = (Number(receipt.paymentAmount) || 1) > 0 ? subtotal / Number(receipt.paymentAmount) : 1;
+            const consumptionOnly = roundMoney(totalWithTipShare * ratioWithoutTip, 2);
+
+            if (index === 0) {
+              setSharedTagId(tx.tagId ? String(tx.tagId) : '');
+              builtParticipants.push({
+                isUser: true,
+                name: 'Tú',
+                thirdPartyId: '',
+                amount: String(consumptionOnly),
+                destinationType: 'CREATE_RECEIVABLE',
+                multiDebt: createEmptyMultiDebtState(),
+              });
+            } else {
+              const ownerId = tx.beneficiaryThirdPartyId ? String(tx.beneficiaryThirdPartyId) : '';
+              const owner = ownerId ? await db.third_parties.get(Number(ownerId)) : null;
+              const isMulti = paymentApps.length > 0;
+              builtParticipants.push({
+                isUser: false,
+                name: owner?.name || '',
+                thirdPartyId: ownerId,
+                amount: String(consumptionOnly),
+                destinationType: isMulti ? 'MULTI_DEBT' : 'CREATE_RECEIVABLE',
+                multiDebt: isMulti
+                  ? buildMultiDebtStateFromApps(paymentApps, originApp, remainderExpenseTx, originDebt)
+                  : createEmptyMultiDebtState(),
+              });
+            }
+          }
+          setParticipants(builtParticipants);
+        } else {
+          setAmountInput(String(receipt.paymentAmount ?? ''));
+          const allPaymentApps = [];
+          let originApp = null;
+          let remainderExpenseTx = null;
+          for (const unit of logicalUnits) {
+            for (const app of unit.apps) {
+              if (app.kind === APPLICATION_KINDS.DEBT_PAYMENT) allPaymentApps.push(app);
+              if (app.kind === APPLICATION_KINDS.DEBT_ORIGIN) originApp = app;
+            }
+            if (unit.remainderExpenseTx) remainderExpenseTx = unit.remainderExpenseTx;
+          }
+          const originDebt = originApp ? await db.debts.get(originApp.targetId) : null;
+          setDebtDistributionState(buildMultiDebtStateFromApps(allPaymentApps, originApp, remainderExpenseTx, originDebt));
+        }
+      } catch (loadError) {
+        setError(loadError.message || 'No se pudo cargar el movimiento para editar.');
+      } finally {
+        setLoadingEdit(false);
+      }
+    })();
+  }, [editingReceiptId]);
+
+  const getEffectiveOpenDebts = targetThirdPartyId => {
+    const id = Number(targetThirdPartyId);
+    if (!id) return [];
+    return debts
+      .filter(debt => debt.type === 'PAGAR' && debt.thirdPartyId === id && !['WRITTEN_OFF', 'CANCELLED'].includes(debt.status))
+      .map(debt => {
+        const credit = virtualDebtCreditsById[debt.id] || 0;
+        const total = Number(debt.totalAmount || debt.amount || 0);
+        const adjustedPaid = Math.max(0, (Number(debt.paidAmount) || 0) - credit);
+        const remaining = Math.max(0, total - adjustedPaid);
+        return {
+          ...debt,
+          paidAmount: adjustedPaid,
+          remaining,
+          status: remaining > 0.001 ? 'ACTIVE' : debt.status,
+        };
+      })
+      .filter(debt => debt.remaining > 0.001);
+  };
 
   const accountId = getAccountIdFromMethod(paymentMethod, instruments);
   const selectedAccount = activeAccounts.find(account => account.id === accountId);
@@ -273,15 +510,10 @@ export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KIN
   const sharedShares = sharedConsumptions.map((consumption, index) => roundMoney(consumption + sharedTipShares[index], paymentDecimals));
   const sharedOverage = sharedConsumptionResult.overage;
 
-  const openCounterpartyDebts = debts.filter(debt => (
-    debt.type === 'PAGAR'
-    && debt.status !== 'SETTLED'
-    && debt.status !== 'CANCELLED'
-    && debt.thirdPartyId === Number(counterpartyId)
-    && Math.max(0, Number(debt.totalAmount || debt.amount || 0) - (Number(debt.paidAmount) || 0)) > 0.001
-  ));
-  const allocatedDebtAmount = debtRows.reduce((sum, row) => sum + Math.max(0, Number(row.sentAmount) || 0), 0);
-  const debtRemainder = paymentAmount - allocatedDebtAmount;
+  const openCounterpartyDebts = useMemo(
+    () => getEffectiveOpenDebts(counterpartyId),
+    [debts, counterpartyId, virtualDebtCreditsById]
+  );
 
   const receiptPreview = useMemo(() => {
     try {
@@ -298,10 +530,26 @@ export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KIN
         gross = documentAmounts.map((amount, index) => amount + taxes[index]);
       }
       const paid = allocateAmount(paymentAmount, gross, paymentDecimals);
-      const fees = allocateAmount(feeAmount, paid, paymentDecimals);
-      return effectiveReceiptParts.map((part, index) => ({ tax: taxes[index], gross: gross[index], debit: paid[index] + fees[index] }));
+      const isDebtPart = part => ['DEBT', 'MULTI_DEBT'].includes(part.destinationType);
+      const hasDebtPart = effectiveReceiptParts.some(isDebtPart);
+      const nonDebtIndexes = effectiveReceiptParts.map((part, idx) => (!isDebtPart(part) ? idx : -1)).filter(idx => idx >= 0);
+      let fees;
+      if (feeAmount > 0 && hasDebtPart && nonDebtIndexes.length > 0) {
+        const nonDebtFees = allocateAmount(feeAmount, nonDebtIndexes.map(idx => paid[idx]), paymentDecimals);
+        fees = effectiveReceiptParts.map(() => 0);
+        nonDebtIndexes.forEach((partIdx, i) => { fees[partIdx] = nonDebtFees[i]; });
+      } else {
+        fees = allocateAmount(feeAmount, paid, paymentDecimals);
+      }
+      return effectiveReceiptParts.map((part, index) => ({
+        tax: taxes[index],
+        gross: gross[index],
+        principal: paid[index],
+        fee: fees[index],
+        debit: paid[index] + fees[index],
+      }));
     } catch {
-      return effectiveReceiptParts.map(() => ({ tax: 0, gross: 0, debit: 0 }));
+      return effectiveReceiptParts.map(() => ({ tax: 0, gross: 0, principal: 0, fee: 0, debit: 0 }));
     }
   }, [effectiveReceiptParts, includeTax, parsedTax, invoiceCurrency, currencies, paymentAmount, paymentDecimals, feeAmount]);
 
@@ -313,14 +561,6 @@ export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KIN
   };
   const updateParticipant = (index, fields) => {
     setParticipants(current => current.map((person, position) => position === index ? { ...person, ...fields } : person));
-  };
-  const updateDebtRow = (index, fields) => {
-    setDebtRows(current => current.map((row, position) => position === index ? { ...row, ...fields } : row));
-  };
-
-  const getDebtLabel = debt => {
-    const remaining = Math.max(0, Number(debt.totalAmount || debt.amount || 0) - (Number(debt.paidAmount) || 0));
-    return `${debt.description} · ${remaining.toFixed(getCurrencyDecimals(debt.currency, currencies))} ${debt.currency}`;
   };
 
   const handleSave = async event => {
@@ -357,17 +597,34 @@ export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KIN
             + `Sobran ${currencyLabel} ${formatMoneyForMessage(overallocatedBucket.overage, invoiceDecimals)}; reduce un fragmento o corrige ${bucketLabel}.`
           );
         }
-        parts = effectiveReceiptParts.map(part => ({
-          description: part.description,
-          ...(includeTax ? { baseAmount: Number(part.amount), taxTreatment: part.taxTreatment } : { grossAmount: Number(part.amount) }),
-          tagId: part.tagId ? Number(part.tagId) : null,
-          ownerThirdPartyId: part.ownerMode === 'PERSON' ? Number(part.ownerThirdPartyId) : null,
-          destination: part.destinationType === 'NONE' ? null : {
-            type: part.destinationType,
-            targetId: part.targetId ? Number(part.targetId) : null,
-            manualTargetAmount: part.manualTargetAmount ? Number(part.manualTargetAmount) : null,
-          },
-        }));
+        parts = effectiveReceiptParts.map((part, index) => {
+          let destination = null;
+          if (part.destinationType === 'MULTI_DEBT') {
+            if (!part.ownerThirdPartyId) throw new Error('Selecciona la persona titular de las deudas.');
+            const partPrincipal = receiptPreview[index]?.principal || 0;
+            destination = buildMultiDebtDestination({
+              panelState: part.multiDebt,
+              availableAmount: partPrincipal,
+              sourceCurrency: selectedAccount.currency,
+              openDebts: getEffectiveOpenDebts(part.ownerThirdPartyId),
+              currencies,
+            });
+          } else if (part.destinationType !== 'NONE') {
+            destination = {
+              type: part.destinationType,
+              targetId: part.targetId ? Number(part.targetId) : null,
+              manualTargetAmount: part.manualTargetAmount ? Number(part.manualTargetAmount) : null,
+            };
+          }
+
+          return {
+            description: part.description,
+            ...(includeTax ? { baseAmount: Number(part.amount), taxTreatment: part.taxTreatment } : { grossAmount: Number(part.amount) }),
+            tagId: part.tagId ? Number(part.tagId) : null,
+            ownerThirdPartyId: part.ownerMode === 'PERSON' ? Number(part.ownerThirdPartyId) : null,
+            destination,
+          };
+        });
         Object.assign(groupInput, {
           hasTaxBreakdown: includeTax,
           invoiceCurrency,
@@ -388,51 +645,59 @@ export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KIN
           if (participantIds.has(participant.thirdPartyId)) throw new Error('Una persona no puede aparecer dos veces en la misma cuenta.');
           participantIds.add(participant.thirdPartyId);
         });
-        parts = participants.map((participant, index) => ({
-          description: `${description || 'Cuenta compartida'} · ${participant.name || `Persona ${index + 1}`}`,
-          paymentPrincipalAmount: sharedShares[index],
-          tagId: index === 0 ? Number(sharedTagId) : null,
-          ownerThirdPartyId: index === 0 ? null : Number(participant.thirdPartyId),
-          destination: index === 0 ? null : { type: 'CREATE_RECEIVABLE' },
-        }));
+        parts = participants.map((participant, index) => {
+          if (index === 0) {
+            return {
+              description: `${description || 'Cuenta compartida'} · ${participant.name || 'Tú'}`,
+              paymentPrincipalAmount: sharedShares[index],
+              tagId: Number(sharedTagId),
+              ownerThirdPartyId: null,
+              destination: null,
+            };
+          }
+          const destination = participant.destinationType === 'MULTI_DEBT'
+            ? buildMultiDebtDestination({
+                panelState: participant.multiDebt,
+                availableAmount: sharedShares[index],
+                sourceCurrency: selectedAccount.currency,
+                openDebts: getEffectiveOpenDebts(participant.thirdPartyId),
+                currencies,
+              })
+            : { type: 'CREATE_RECEIVABLE' };
+
+          return {
+            description: `${description || 'Cuenta compartida'} · ${participant.name || `Persona ${index + 1}`}`,
+            paymentPrincipalAmount: sharedShares[index],
+            tagId: null,
+            ownerThirdPartyId: Number(participant.thirdPartyId),
+            destination,
+          };
+        });
         Object.assign(groupInput, { tipAmount, parts });
       } else {
         if (!counterpartyId) throw new Error('Selecciona la persona a la que enviaste el dinero.');
-        const usedDebtIds = new Set();
-        parts = debtRows.map((row, index) => {
-          const debt = openCounterpartyDebts.find(item => item.id === Number(row.debtId));
-          if (!debt) throw new Error(`Selecciona una deuda válida en la fila ${index + 1}.`);
-          if (usedDebtIds.has(debt.id)) throw new Error('Una deuda no puede aparecer dos veces en el mismo envío.');
-          usedDebtIds.add(debt.id);
-          const recognizedTargetAmount = Number(row.recognizedAmount);
-          if (!(recognizedTargetAmount > 0)) throw new Error(`Indica el monto reconocido en la fila ${index + 1}.`);
-          return {
-            description: debt.description,
-            paymentPrincipalAmount: Number(row.sentAmount),
-            tagId: null,
-            destination: {
-              type: 'DEBT',
-              targetId: debt.id,
-              recognizedTargetAmount,
-            },
-          };
+        const destination = buildMultiDebtDestination({
+          panelState: debtDistributionState,
+          availableAmount: paymentAmount,
+          sourceCurrency: selectedAccount.currency,
+          openDebts: openCounterpartyDebts,
+          currencies,
         });
-        if (debtRemainder < -tolerance) throw new Error('La suma enviada a las deudas supera el monto del envío.');
-        if (debtRemainder > tolerance) {
-          if (!remainderType) throw new Error('Clasifica el excedente antes de guardar.');
-          if (remainderType === 'EXPENSE' && !remainderTagId) throw new Error('Selecciona la categoría del gasto o regalo excedente.');
-          parts.push({
-            description: remainderConcept || 'Excedente del envío',
-            paymentPrincipalAmount: debtRemainder,
-            tagId: remainderType === 'EXPENSE' ? Number(remainderTagId) : null,
-            ownerThirdPartyId: remainderType === 'CREATE_RECEIVABLE' ? Number(counterpartyId) : null,
-            destination: remainderType === 'CREATE_RECEIVABLE' ? { type: 'CREATE_RECEIVABLE' } : null,
-          });
-        }
+        parts = [{
+          description: description.trim() || 'Pago de deudas',
+          paymentPrincipalAmount: paymentAmount,
+          tagId: null,
+          ownerThirdPartyId: Number(counterpartyId),
+          destination,
+        }];
         Object.assign(groupInput, { parts });
       }
 
-      await createTransactionGroup(db, groupInput);
+      if (isEditing) {
+        await updateTransactionGroup(db, editingReceiptId, groupInput);
+      } else {
+        await createTransactionGroup(db, groupInput);
+      }
       navigate('/transactions', { replace: true });
     } catch (saveError) {
       setError(saveError.message || 'No se pudo registrar el movimiento.');
@@ -444,155 +709,169 @@ export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KIN
   return (
     <div className="min-h-screen pb-28 pt-16" style={{ background: '#F5F2ED' }}>
       <div className="mx-auto w-full max-w-md px-6">
-        <Header title="Dividir movimiento" showBack backRoute="/transactions" />
-        <form onSubmit={handleSave} className="space-y-6 py-5">
-          <SegmentedChoice value={mode} onChange={value => { setMode(value); setError(''); }} options={MODE_OPTIONS} />
-          <p className="-mt-3 border-l-2 border-[#647C78] pl-3 text-[11px] leading-relaxed text-noria-muted">
-            {MODE_DESCRIPTIONS[mode]}
-          </p>
-
-          <section className="space-y-4">
-            <SectionTitle>Movimiento real</SectionTitle>
-            <PaymentMethodSelector
-              value={paymentMethod}
-              onChange={event => setPaymentMethod(event.target.value)}
-              activeAccounts={activeAccounts}
-              institutions={institutions}
-              instruments={instruments}
-              required
+        <Header title={isEditing ? 'Editar movimiento' : 'Dividir movimiento'} showBack backRoute="/transactions" />
+        {loadingEdit ? (
+          <p className="py-8 font-mono text-[11px] uppercase text-noria-muted">Cargando movimiento…</p>
+        ) : (
+          <form onSubmit={handleSave} className="space-y-6 py-5">
+            <SegmentedChoice
+              value={mode}
+              onChange={value => { if (!isEditing) { setMode(value); setError(''); } }}
+              options={MODE_OPTIONS}
             />
-            <div className="grid grid-cols-2 gap-4">
-              <FormField label="Fecha" htmlFor="group-date">
-                <DateInput id="group-date" value={date} onChange={event => setDate(event.target.value)} required />
-              </FormField>
-              <FormField
-                label={`${mode === TRANSACTION_GROUP_KINDS.SHARED_EXPENSE ? 'Subtotal' : 'Monto'} (${selectedAccount?.currency || '—'})`}
-                htmlFor="group-payment"
-              >
-                <NumberInput id="group-payment" value={amountInput} onChange={event => setAmountInput(event.target.value)} min="0" step="0.01" required />
-              </FormField>
-            </div>
-            {mode === TRANSACTION_GROUP_KINDS.SHARED_EXPENSE && (
+            <p className="-mt-3 border-l-2 border-[#647C78] pl-3 text-[11px] leading-relaxed text-noria-muted">
+              {MODE_DESCRIPTIONS[mode]}
+            </p>
+
+            <section className="space-y-4">
+              <SectionTitle>Movimiento real</SectionTitle>
+              <PaymentMethodSelector
+                value={paymentMethod}
+                onChange={event => setPaymentMethod(event.target.value)}
+                activeAccounts={activeAccounts}
+                institutions={institutions}
+                instruments={instruments}
+                required
+              />
               <div className="grid grid-cols-2 gap-4">
-                <FormField label="Propina (%)" htmlFor="shared-tip">
-                  <NumberInput id="shared-tip" value={tipPercentage} onChange={event => setTipPercentage(event.target.value)} min="0" step="0.01" />
+                <FormField label="Fecha" htmlFor="group-date">
+                  <DateInput id="group-date" value={date} onChange={event => setDate(event.target.value)} required />
                 </FormField>
-                <div className="border border-[#1A1A1A]/25 p-3 font-mono text-[10px]">
-                  <p>Total con propina</p>
-                  <CurrencyAmount amount={paymentAmount} currencyCode={selectedAccount?.currency} />
-                </div>
+                <FormField
+                  label={`${mode === TRANSACTION_GROUP_KINDS.SHARED_EXPENSE ? 'Subtotal' : 'Monto'} (${selectedAccount?.currency || '—'})`}
+                  htmlFor="group-payment"
+                >
+                  <NumberInput id="group-payment" value={amountInput} onChange={event => setAmountInput(event.target.value)} min="0" step="0.01" required />
+                </FormField>
               </div>
+              {mode === TRANSACTION_GROUP_KINDS.SHARED_EXPENSE && (
+                <div className="grid grid-cols-2 gap-4">
+                  <FormField label="Propina (%)" htmlFor="shared-tip">
+                    <NumberInput id="shared-tip" value={tipPercentage} onChange={event => setTipPercentage(event.target.value)} min="0" step="0.01" />
+                  </FormField>
+                  <div className="border border-[#1A1A1A]/25 p-3 font-mono text-[10px]">
+                    <p>Total con propina</p>
+                    <CurrencyAmount amount={paymentAmount} currencyCode={selectedAccount?.currency} />
+                  </div>
+                </div>
+              )}
+              {(feeAmount > 0 || mode === TRANSACTION_GROUP_KINDS.DEBT_DISTRIBUTION) && (
+                <p className="border-l-2 border-[#647C78] pl-3 font-mono text-[10px] leading-relaxed text-noria-muted">
+                  Comisión: <CurrencyAmount amount={feeAmount} currencyCode={selectedAccount?.currency} /> · Débito total: <CurrencyAmount amount={paymentAmount + feeAmount} currencyCode={selectedAccount?.currency} />
+                  {' · La comisión bancaria no reduce las deudas.'}
+                </p>
+              )}
+              <FormField label="Descripción" htmlFor="group-description">
+                <TextInput id="group-description" value={description} onChange={event => setDescription(event.target.value)} required />
+              </FormField>
+              <ThirdPartyPicker
+                id="group-counterparty"
+                label="Contraparte"
+                inputValue={counterpartyName}
+                selectedId={counterpartyId}
+                thirdParties={thirdParties}
+                onChange={(name, id) => {
+                  setCounterpartyName(name);
+                  if (id !== counterpartyId) {
+                    setCounterpartyId(id);
+                    setDebtDistributionState(createEmptyMultiDebtState());
+                  }
+                }}
+                required={mode === TRANSACTION_GROUP_KINDS.DEBT_DISTRIBUTION}
+                allowCreate={mode !== TRANSACTION_GROUP_KINDS.DEBT_DISTRIBUTION}
+                hint={mode === TRANSACTION_GROUP_KINDS.DEBT_DISTRIBUTION ? 'Selecciona una persona existente' : 'Opcional · comercio, persona o institución'}
+              />
+            </section>
+
+            {mode === TRANSACTION_GROUP_KINDS.RECEIPT && (
+              <ReceiptFields
+                activeCurrencies={activeCurrencies}
+                currencies={currencies}
+                invoiceCurrency={invoiceCurrency}
+                setInvoiceCurrency={setInvoiceCurrency}
+                includeTax={includeTax}
+                setIncludeTax={setIncludeTax}
+                invoiceTotalInput={invoiceTotalInput}
+                setInvoiceTotalInput={setInvoiceTotalInput}
+                taxableBase={taxableBase}
+                setTaxableBase={setTaxableBase}
+                exemptBase={exemptBase}
+                setExemptBase={setExemptBase}
+                taxAmount={taxAmount}
+                setTaxAmount={setTaxAmount}
+                invoiceTotal={invoiceTotal}
+                receiptParts={receiptParts}
+                automaticReceiptParts={automaticReceiptParts}
+                setReceiptParts={setReceiptParts}
+                updateReceiptPart={updateReceiptPart}
+                updateReceiptRemainder={updateReceiptRemainder}
+                receiptPreview={receiptPreview}
+                thirdParties={thirdParties}
+                getEffectiveOpenDebts={getEffectiveOpenDebts}
+                goals={goals}
+                tags={tags}
+                selectedAccount={selectedAccount}
+              />
             )}
-            {(feeAmount > 0 || mode === TRANSACTION_GROUP_KINDS.DEBT_DISTRIBUTION) && (
-              <p className="border-l-2 border-[#647C78] pl-3 font-mono text-[10px] leading-relaxed text-noria-muted">
-                Comisión: <CurrencyAmount amount={feeAmount} currencyCode={selectedAccount?.currency} /> · Débito total: <CurrencyAmount amount={paymentAmount + feeAmount} currencyCode={selectedAccount?.currency} />
-                {mode === TRANSACTION_GROUP_KINDS.DEBT_DISTRIBUTION && ' · La comisión no reduce las deudas.'}
-              </p>
+
+            {mode === TRANSACTION_GROUP_KINDS.SHARED_EXPENSE && (
+              <SharedExpenseFields
+                splitMethod={splitMethod}
+                setSplitMethod={setSplitMethod}
+                numberPeople={numberPeople}
+                setNumberPeople={setNumberPeople}
+                participants={participants}
+                updateParticipant={updateParticipant}
+                sharedShares={sharedShares}
+                sharedConsumptions={sharedConsumptions}
+                sharedTipShares={sharedTipShares}
+                sharedOverage={sharedOverage}
+                tolerance={tolerance}
+                thirdParties={thirdParties}
+                getEffectiveOpenDebts={getEffectiveOpenDebts}
+                currencies={currencies}
+                sharedTagId={sharedTagId}
+                setSharedTagId={setSharedTagId}
+                tags={tags}
+                currency={selectedAccount?.currency}
+                feeAmount={feeAmount}
+                paymentDecimals={paymentDecimals}
+              />
             )}
-            <FormField label="Descripción" htmlFor="group-description">
-              <TextInput id="group-description" value={description} onChange={event => setDescription(event.target.value)} required />
-            </FormField>
-            <ThirdPartyPicker
-              id="group-counterparty"
-              label="Contraparte"
-              inputValue={counterpartyName}
-              selectedId={counterpartyId}
-              thirdParties={thirdParties}
-              onChange={(name, id) => { setCounterpartyName(name); setCounterpartyId(id); }}
-              required={mode === TRANSACTION_GROUP_KINDS.DEBT_DISTRIBUTION}
-              allowCreate={mode !== TRANSACTION_GROUP_KINDS.DEBT_DISTRIBUTION}
-              hint={mode === TRANSACTION_GROUP_KINDS.DEBT_DISTRIBUTION ? 'Selecciona una persona existente' : 'Opcional · comercio, persona o institución'}
-            />
-          </section>
 
-          {mode === TRANSACTION_GROUP_KINDS.RECEIPT && (
-            <ReceiptFields
-              activeCurrencies={activeCurrencies}
-              currencies={currencies}
-              invoiceCurrency={invoiceCurrency}
-              setInvoiceCurrency={setInvoiceCurrency}
-              includeTax={includeTax}
-              setIncludeTax={setIncludeTax}
-              invoiceTotalInput={invoiceTotalInput}
-              setInvoiceTotalInput={setInvoiceTotalInput}
-              taxableBase={taxableBase}
-              setTaxableBase={setTaxableBase}
-              exemptBase={exemptBase}
-              setExemptBase={setExemptBase}
-              taxAmount={taxAmount}
-              setTaxAmount={setTaxAmount}
-              invoiceTotal={invoiceTotal}
-              receiptParts={receiptParts}
-              automaticReceiptParts={automaticReceiptParts}
-              setReceiptParts={setReceiptParts}
-              updateReceiptPart={updateReceiptPart}
-              updateReceiptRemainder={updateReceiptRemainder}
-              receiptPreview={receiptPreview}
-              thirdParties={thirdParties}
-              debts={debts}
-              goals={goals}
-              tags={tags}
-              selectedAccount={selectedAccount}
-              getDebtLabel={getDebtLabel}
-            />
-          )}
+            {mode === TRANSACTION_GROUP_KINDS.DEBT_DISTRIBUTION && (
+              <section className="space-y-4">
+                <SectionTitle>Distribución entre deudas (FIFO)</SectionTitle>
+                {!counterpartyId ? (
+                  <p className="text-[12px] text-noria-muted">Selecciona primero una contraparte.</p>
+                ) : (
+                  <MultiDebtAllocationPanel
+                    idPrefix="dist"
+                    availableAmount={paymentAmount}
+                    sourceCurrency={selectedAccount?.currency || ''}
+                    openDebts={openCounterpartyDebts}
+                    value={debtDistributionState}
+                    onChange={setDebtDistributionState}
+                    tags={tags}
+                    currencies={currencies}
+                    onReduceAmount={allocated => {
+                      if (allocated > 0) setAmountInput(String(allocated));
+                    }}
+                  />
+                )}
+              </section>
+            )}
 
-          {mode === TRANSACTION_GROUP_KINDS.SHARED_EXPENSE && (
-            <SharedExpenseFields
-              splitMethod={splitMethod}
-              setSplitMethod={setSplitMethod}
-              numberPeople={numberPeople}
-              setNumberPeople={setNumberPeople}
-              participants={participants}
-              updateParticipant={updateParticipant}
-              sharedShares={sharedShares}
-              sharedConsumptions={sharedConsumptions}
-              sharedTipShares={sharedTipShares}
-              sharedOverage={sharedOverage}
-              tolerance={tolerance}
-              thirdParties={thirdParties}
-              sharedTagId={sharedTagId}
-              setSharedTagId={setSharedTagId}
-              tags={tags}
-              currency={selectedAccount?.currency}
-              feeAmount={feeAmount}
-              paymentDecimals={paymentDecimals}
+            {error && <p className="border-l-2 border-[#9F2F2D] pl-3 text-[12px] font-[500] text-[#9F2F2D]">{error}</p>}
+            <FormActions
+              primaryLabel={saving ? 'Guardando…' : (isEditing ? 'Guardar cambios' : 'Registrar movimiento')}
+              primaryDisabled={saving}
+              secondaryLabel="Cancelar"
+              onSecondary={() => navigate(-1)}
+              primaryColor="#647C78"
             />
-          )}
-
-          {mode === TRANSACTION_GROUP_KINDS.DEBT_DISTRIBUTION && (
-            <DebtDistributionFields
-              counterpartyId={counterpartyId}
-              openDebts={openCounterpartyDebts}
-              debtRows={debtRows}
-              setDebtRows={setDebtRows}
-              updateDebtRow={updateDebtRow}
-              getDebtLabel={getDebtLabel}
-              currencies={currencies}
-              sourceCurrency={selectedAccount?.currency}
-              allocatedAmount={allocatedDebtAmount}
-              remainder={debtRemainder}
-              tolerance={tolerance}
-              onReduceAmount={() => setAmountInput(String(allocatedDebtAmount))}
-              remainderType={remainderType}
-              setRemainderType={setRemainderType}
-              remainderTagId={remainderTagId}
-              setRemainderTagId={setRemainderTagId}
-              remainderConcept={remainderConcept}
-              setRemainderConcept={setRemainderConcept}
-              tags={tags}
-            />
-          )}
-
-          {error && <p className="border-l-2 border-[#9F2F2D] pl-3 text-[12px] font-[500] text-[#9F2F2D]">{error}</p>}
-          <FormActions
-            primaryLabel={saving ? 'Guardando…' : 'Registrar movimiento'}
-            primaryDisabled={saving}
-            secondaryLabel="Cancelar"
-            onSecondary={() => navigate(-1)}
-            primaryColor="#647C78"
-          />
-        </form>
+          </form>
+        )}
       </div>
       <BottomNav />
     </div>
@@ -601,6 +880,7 @@ export default function ReceiptSplitScreen({ initialMode = TRANSACTION_GROUP_KIN
 
 function ReceiptFields({
   activeCurrencies,
+  currencies,
   invoiceCurrency,
   setInvoiceCurrency,
   includeTax,
@@ -621,11 +901,10 @@ function ReceiptFields({
   updateReceiptRemainder,
   receiptPreview,
   thirdParties,
-  debts,
+  getEffectiveOpenDebts,
   goals,
   tags,
   selectedAccount,
-  getDebtLabel,
 }) {
   const [expandedPartKeys, setExpandedPartKeys] = useState({});
 
@@ -639,10 +918,12 @@ function ReceiptFields({
             {activeCurrencies.map(currency => <option key={currency.code} value={currency.code}>{currency.code}</option>)}
           </SelectInput>
         </FormField>
-        <label className="flex items-center gap-3 border border-[#1A1A1A]/25 p-3 font-mono text-[10px] font-bold uppercase tracking-[0.08em]">
-          <input type="checkbox" checked={includeTax} onChange={event => setIncludeTax(event.target.checked)} />
-          Incluir desglose de IVA
-        </label>
+        <div className="flex items-center justify-between border-y border-[rgba(26,26,26,0.16)] py-2.5">
+          <label htmlFor="receipt-include-tax" className="font-mono text-[10px] font-[700] uppercase tracking-[0.1em] text-noria-text">
+            Incluir desglose de IVA
+          </label>
+          <NoriaSwitch id="receipt-include-tax" checked={includeTax} onChange={() => setIncludeTax(current => !current)} />
+        </div>
         {includeTax ? (
           <div className="grid grid-cols-3 gap-3">
             <FormField label="Base gravada" htmlFor="receipt-taxable">
@@ -660,9 +941,9 @@ function ReceiptFields({
             <NumberInput id="receipt-total" value={invoiceTotalInput} onChange={event => setInvoiceTotalInput(event.target.value)} min="0" step="0.01" required />
           </FormField>
         )}
-        <div className="flex justify-between border border-[#1A1A1A]/25 p-3 font-mono text-[11px]">
-          <span>Total del ticket</span>
-          <CurrencyAmount amount={invoiceTotal} currencyCode={invoiceCurrency} />
+        <div className="flex justify-between border-y border-[rgba(26,26,26,0.16)] py-2.5 font-mono text-[11px]">
+          <span className="uppercase tracking-[0.08em] text-noria-muted">Total del ticket</span>
+          <CurrencyAmount amount={invoiceTotal} currencyCode={invoiceCurrency} className="font-[700]" />
         </div>
       </section>
 
@@ -684,26 +965,25 @@ function ReceiptFields({
             ? updateReceiptRemainder(part.bucketKey, fields)
             : updateReceiptPart(manualIndex, fields);
           const ownerId = Number(part.ownerThirdPartyId);
-          const availableDebts = debts.filter(debt => debt.type === 'PAGAR' && debt.status !== 'SETTLED' && debt.thirdPartyId === ownerId);
-          const selectedDebt = debts.find(debt => debt.id === Number(part.targetId));
+          const openDebts = ownerId ? getEffectiveOpenDebts(ownerId) : [];
           const selectedGoal = goals.find(goal => goal.id === Number(part.targetId));
-          const targetCurrency = selectedDebt?.currency || selectedGoal?.currency;
+          const partPrincipal = receiptPreview[index]?.principal || 0;
 
           const partKey = isAutomatic ? `automatic-${part.bucketKey}` : `manual-${manualIndex}`;
           const hasCustomAssignment = part.ownerMode === 'PERSON' || part.destinationType !== 'NONE';
           const isExpanded = expandedPartKeys[partKey] !== undefined ? expandedPartKeys[partKey] : hasCustomAssignment;
 
           return (
-            <div key={partKey} className={`space-y-3 border p-3.5 ${isAutomatic ? 'border-[#647C78] bg-[#647C78]/5' : 'border-[#1A1A1A]/30'}`}>
+            <div key={partKey} className={`space-y-3 border bg-transparent p-3.5 ${isAutomatic ? 'border-[#647C78]' : 'border-[#1A1A1A]/30'}`}>
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-mono text-[10px] font-bold uppercase">
                     {isAutomatic ? 'Mi parte · restante automático' : `Parte asignada ${manualIndex + 1}`}
                   </span>
                   {hasCustomAssignment && (
-                    <span className="border border-[#647C78] bg-[#647C78]/10 text-[#647C78] px-1.5 py-0.5 font-mono text-[9px] uppercase font-bold tracking-wider">
+                    <span className="border border-[#647C78] bg-transparent text-[#647C78] px-1.5 py-0.5 font-mono text-[9px] uppercase font-bold tracking-wider">
                       {part.ownerMode === 'PERSON'
-                        ? `Tercero: ${part.ownerName || 'Otra persona'}`
+                        ? `${part.destinationType === 'MULTI_DEBT' ? 'Deudas' : 'Tercero'}: ${part.ownerName || 'Otra persona'}`
                         : (part.destinationType === 'GOAL' ? `Meta: ${selectedGoal?.name || 'Objetivo'}` : 'Asignado')}
                     </span>
                   )}
@@ -720,7 +1000,6 @@ function ReceiptFields({
                 )}
               </div>
 
-              {/* Fila 1: Monto y Categoría (o Tercero si es de otra persona) */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {includeTax ? (
                   <div className="grid grid-cols-2 gap-2">
@@ -747,7 +1026,12 @@ function ReceiptFields({
                     inputValue={part.ownerName}
                     selectedId={part.ownerThirdPartyId}
                     thirdParties={thirdParties}
-                    onChange={(name, id) => updatePart({ ownerName: name, ownerThirdPartyId: id, targetId: '' })}
+                    onChange={(name, id) => updatePart({
+                      ownerName: name,
+                      ownerThirdPartyId: id,
+                      targetId: '',
+                      multiDebt: createEmptyMultiDebtState(),
+                    })}
                     required
                   />
                 ) : (
@@ -755,12 +1039,10 @@ function ReceiptFields({
                 )}
               </div>
 
-              {/* Fila 2: Concepto opcional */}
               <FormField label="Concepto" htmlFor={`part-description-${index}`} hint="Opcional">
-                <TextInput id={`part-description-${index}`} value={part.description} onChange={event => updatePart({ description: event.target.value })} placeholder="Ej. Ropa, artículos de cocina..." />
+                <TextInput id={`part-description-${index}`} value={part.description} onChange={event => updatePart({ description: event.target.value })} placeholder="Ej. Plomería, víveres..." />
               </FormField>
 
-              {/* Botón de alternancia para opciones avanzadas */}
               <div className="pt-0.5">
                 <button
                   type="button"
@@ -779,7 +1061,6 @@ function ReceiptFields({
                 </button>
               </div>
 
-              {/* Opciones avanzadas de asignación expandibles */}
               {isExpanded && (
                 <div className="space-y-3 border-t border-[#1A1A1A]/15 pt-3 animate-fade-in">
                   <FormField label="Consumido por" htmlFor={`part-owner-mode-${index}`}>
@@ -789,6 +1070,7 @@ function ReceiptFields({
                       ownerThirdPartyId: '',
                       destinationType: event.target.value === 'SELF' ? 'NONE' : 'CREATE_RECEIVABLE',
                       targetId: '',
+                      multiDebt: createEmptyMultiDebtState(),
                       tagId: event.target.value === 'SELF' ? part.tagId : '',
                     })}>
                       <option value="SELF">Mi consumo</option>
@@ -797,21 +1079,37 @@ function ReceiptFields({
                   </FormField>
 
                   <FormField label="Destino" htmlFor={`part-destination-${index}`}>
-                    <SelectInput id={`part-destination-${index}`} value={part.destinationType} onChange={event => updatePart({ destinationType: event.target.value, targetId: '' })}>
+                    <SelectInput
+                      id={`part-destination-${index}`}
+                      value={part.destinationType}
+                      onChange={event => updatePart({
+                        destinationType: event.target.value,
+                        targetId: '',
+                        multiDebt: createEmptyMultiDebtState(),
+                      })}
+                    >
                       {part.ownerMode === 'SELF' && <option value="NONE">Gasto personal</option>}
                       {part.ownerMode === 'SELF' && <option value="GOAL">Objetivo de gasto</option>}
                       {part.ownerMode === 'PERSON' && <option value="CREATE_RECEIVABLE">Crear deuda por cobrar</option>}
-                      {part.ownerMode === 'PERSON' && <option value="DEBT">Abonar deuda por pagar con esa persona</option>}
+                      {part.ownerMode === 'PERSON' && <option value="MULTI_DEBT">Aplicar a deudas abiertas (FIFO)</option>}
                     </SelectInput>
                   </FormField>
 
-                  {part.destinationType === 'DEBT' && (
-                    <FormField label="Deuda" htmlFor={`part-debt-${index}`}>
-                      <SelectInput id={`part-debt-${index}`} value={part.targetId} onChange={event => updatePart({ targetId: event.target.value })} required>
-                        <option value="" disabled>Selecciona…</option>
-                        {availableDebts.map(debt => <option key={debt.id} value={debt.id}>{getDebtLabel(debt)}</option>)}
-                      </SelectInput>
-                    </FormField>
+                  {part.destinationType === 'MULTI_DEBT' && (
+                    ownerId ? (
+                      <MultiDebtAllocationPanel
+                        idPrefix={`part-multi-${index}`}
+                        availableAmount={partPrincipal}
+                        sourceCurrency={selectedAccount?.currency || invoiceCurrency}
+                        openDebts={openDebts}
+                        value={part.multiDebt}
+                        onChange={nextState => updatePart({ multiDebt: nextState })}
+                        tags={tags}
+                        currencies={currencies}
+                      />
+                    ) : (
+                      <p className="text-[11px] text-noria-muted">Selecciona primero a la persona arriba para listar sus deudas.</p>
+                    )
                   )}
 
                   {part.destinationType === 'GOAL' && (
@@ -826,15 +1124,14 @@ function ReceiptFields({
                     </FormField>
                   )}
 
-                  {['DEBT', 'GOAL'].includes(part.destinationType) && targetCurrency && targetCurrency !== selectedAccount?.currency && (
-                    <FormField label={`Equivalente manual (${targetCurrency})`} htmlFor={`part-equivalent-${index}`} hint="Opcional si FIFO o una paridad pueden resolverlo">
+                  {part.destinationType === 'GOAL' && selectedGoal?.currency && selectedGoal.currency !== selectedAccount?.currency && (
+                    <FormField label={`Equivalente manual (${selectedGoal.currency})`} htmlFor={`part-equivalent-${index}`} hint="Opcional si FIFO o una paridad pueden resolverlo">
                       <NumberInput id={`part-equivalent-${index}`} value={part.manualTargetAmount} onChange={event => updatePart({ manualTargetAmount: event.target.value })} min="0" step="0.01" />
                     </FormField>
                   )}
                 </div>
               )}
 
-              {/* Pie de fragmento: desglose fiscal condicional */}
               {includeTax ? (
                 <div className="grid grid-cols-3 gap-2 border-t border-[#1A1A1A]/20 pt-2 font-mono text-[9px]">
                   <span>IVA: <CurrencyAmount amount={receiptPreview[index]?.tax || 0} currencyCode={invoiceCurrency} /></span>
@@ -867,6 +1164,8 @@ function SharedExpenseFields({
   sharedOverage,
   tolerance,
   thirdParties,
+  getEffectiveOpenDebts,
+  currencies,
   sharedTagId,
   setSharedTagId,
   tags,
@@ -875,7 +1174,18 @@ function SharedExpenseFields({
   paymentDecimals,
 }) {
   let feeShares = participants.map(() => 0);
-  try { feeShares = allocateAmount(feeAmount, sharedShares, paymentDecimals); } catch { /* preview stays at zero */ }
+  try {
+    const isDebtPart = person => person.destinationType === 'MULTI_DEBT';
+    const hasDebtPart = participants.slice(1).some(isDebtPart);
+    const nonDebtIndexes = participants.map((person, idx) => (idx === 0 || !isDebtPart(person) ? idx : -1)).filter(idx => idx >= 0);
+    if (feeAmount > 0 && hasDebtPart && nonDebtIndexes.length > 0) {
+      const nonDebtFees = allocateAmount(feeAmount, nonDebtIndexes.map(idx => sharedShares[idx]), paymentDecimals);
+      feeShares = participants.map(() => 0);
+      nonDebtIndexes.forEach((partIdx, i) => { feeShares[partIdx] = nonDebtFees[i]; });
+    } else {
+      feeShares = allocateAmount(feeAmount, sharedShares, paymentDecimals);
+    }
+  } catch { /* preview stays at zero */ }
   const valid = sharedOverage <= tolerance;
   return (
     <section className="space-y-4">
@@ -903,7 +1213,11 @@ function SharedExpenseFields({
                 inputValue={participant.name}
                 selectedId={participant.thirdPartyId}
                 thirdParties={thirdParties}
-                onChange={(name, id) => updateParticipant(index, { name, thirdPartyId: id })}
+                onChange={(name, id) => updateParticipant(index, {
+                  name,
+                  thirdPartyId: id,
+                  multiDebt: createEmptyMultiDebtState(),
+                })}
                 required
               />
             )}
@@ -919,7 +1233,38 @@ function SharedExpenseFields({
               <span>Total: <CurrencyAmount amount={(sharedShares[index] || 0) + (feeShares[index] || 0)} currencyCode={currency} /></span>
             </div>
             {index > 0 && (
-              <p className="font-mono text-[9px] text-noria-muted">Se creará una deuda por cobrar por el total mostrado.</p>
+              <div className="space-y-3 border-t border-[#1A1A1A]/15 pt-2.5">
+                <SegmentedChoice
+                  label="Destino de esta parte"
+                  value={participant.destinationType || 'CREATE_RECEIVABLE'}
+                  onChange={nextType => updateParticipant(index, {
+                    destinationType: nextType,
+                    multiDebt: createEmptyMultiDebtState(),
+                  })}
+                  options={[
+                    { value: 'CREATE_RECEIVABLE', label: 'Crear por cobrar' },
+                    { value: 'MULTI_DEBT', label: 'Aplicar a deudas (FIFO)' },
+                  ]}
+                />
+                {participant.destinationType === 'MULTI_DEBT' ? (
+                  participant.thirdPartyId ? (
+                    <MultiDebtAllocationPanel
+                      idPrefix={`shared-multi-${index}`}
+                      availableAmount={sharedShares[index] || 0}
+                      sourceCurrency={currency || ''}
+                      openDebts={getEffectiveOpenDebts(participant.thirdPartyId)}
+                      value={participant.multiDebt}
+                      onChange={nextState => updateParticipant(index, { multiDebt: nextState })}
+                      tags={tags}
+                      currencies={currencies}
+                    />
+                  ) : (
+                    <p className="font-mono text-[9px] text-noria-muted">Selecciona o crea primero la persona para listar sus deudas.</p>
+                  )
+                ) : (
+                  <p className="font-mono text-[9px] text-noria-muted">Se creará una deuda por cobrar por el total mostrado.</p>
+                )}
+              </div>
             )}
           </div>
         ))}
@@ -929,109 +1274,6 @@ function SharedExpenseFields({
           ? <>{splitMethod === 'MANUAL' ? 'Mi consumo calculado' : 'Subtotal distribuido'}: <CurrencyAmount amount={splitMethod === 'MANUAL' ? sharedConsumptions[0] : sharedConsumptions.reduce((sum, value) => sum + value, 0)} currencyCode={currency} /></>
           : <>Los consumos ajenos exceden el subtotal por <CurrencyAmount amount={sharedOverage} currencyCode={currency} /></>}
       </div>
-    </section>
-  );
-}
-
-function DebtDistributionFields({
-  counterpartyId,
-  openDebts,
-  debtRows,
-  setDebtRows,
-  updateDebtRow,
-  getDebtLabel,
-  currencies,
-  sourceCurrency,
-  allocatedAmount,
-  remainder,
-  tolerance,
-  onReduceAmount,
-  remainderType,
-  setRemainderType,
-  remainderTagId,
-  setRemainderTagId,
-  remainderConcept,
-  setRemainderConcept,
-  tags,
-}) {
-  return (
-    <section className="space-y-4">
-      <SectionTitle aside={counterpartyId && openDebts.length > 0 ? (
-        <button type="button" onClick={() => setDebtRows(current => [...current, newDebtRow()])} className="flex items-center gap-1 font-mono text-[10px] uppercase text-[#647C78]">
-          <Plus size={13} /> Otra deuda
-        </button>
-      ) : null}>Distribución entre deudas</SectionTitle>
-      {!counterpartyId && <p className="text-[12px] text-noria-muted">Selecciona primero una contraparte.</p>}
-      {counterpartyId && openDebts.length === 0 && <p className="text-[12px] text-[#9F2F2D]">Esta persona no tiene deudas por pagar abiertas.</p>}
-      {counterpartyId && openDebts.length > 0 && debtRows.map((row, index) => {
-        const debt = openDebts.find(item => item.id === Number(row.debtId));
-        const source = Number(row.sentAmount) || 0;
-        const recognized = Number(row.recognizedAmount) || 0;
-        const rate = source > 0 ? recognized / source : 0;
-        const usedByOtherRow = new Set(debtRows.filter((_, position) => position !== index).map(item => Number(item.debtId)));
-        return (
-          <div key={index} className="space-y-4 border border-[#1A1A1A] p-4">
-            <div className="flex items-center justify-between">
-              <span className="font-mono text-[10px] font-bold uppercase">Deuda {index + 1}</span>
-              {debtRows.length > 1 && (
-                <button type="button" onClick={() => setDebtRows(current => current.filter((_, position) => position !== index))} className="text-[#9F2F2D]" aria-label={`Eliminar deuda ${index + 1}`}>
-                  <Trash2 size={13} />
-                </button>
-              )}
-            </div>
-            <FormField label="Deuda" htmlFor={`debt-row-${index}`}>
-              <SelectInput id={`debt-row-${index}`} value={row.debtId} onChange={event => updateDebtRow(index, { debtId: event.target.value, recognizedAmount: '' })} required>
-                <option value="" disabled>Selecciona…</option>
-                {openDebts.filter(item => item.id === Number(row.debtId) || !usedByOtherRow.has(item.id)).map(item => (
-                  <option key={item.id} value={item.id}>{getDebtLabel(item)}</option>
-                ))}
-              </SelectInput>
-            </FormField>
-            <div className="grid grid-cols-2 gap-3">
-              <FormField label={`Monto enviado (${sourceCurrency || '—'})`} htmlFor={`debt-source-${index}`}>
-                <NumberInput id={`debt-source-${index}`} value={row.sentAmount} onChange={event => updateDebtRow(index, { sentAmount: event.target.value })} min="0" step="0.01" required />
-              </FormField>
-              <FormField label={`Monto reconocido (${debt?.currency || '—'})`} htmlFor={`debt-target-${index}`}>
-                <NumberInput id={`debt-target-${index}`} value={row.recognizedAmount} onChange={event => updateDebtRow(index, { recognizedAmount: event.target.value })} min="0" step="0.01" required />
-              </FormField>
-            </div>
-            {debt && source > 0 && recognized > 0 && (
-              <p className="font-mono text-[9px] text-noria-muted">
-                Tasa implícita: 1 {sourceCurrency} = {rate.toFixed(6)} {debt.currency}. El costo FIFO se conserva por separado.
-              </p>
-            )}
-          </div>
-        );
-      })}
-
-      {counterpartyId && openDebts.length > 0 && (
-        <div className="space-y-3 border border-[#1A1A1A]/25 p-3">
-          <div className="flex justify-between font-mono text-[10px]"><span>Asignado a deudas</span><CurrencyAmount amount={allocatedAmount} currencyCode={sourceCurrency} /></div>
-          <div className={`flex justify-between font-mono text-[10px] ${remainder < -tolerance ? 'text-[#9F2F2D]' : ''}`}><span>Excedente</span><CurrencyAmount amount={remainder} currencyCode={sourceCurrency} /></div>
-          {remainder > tolerance && (
-            <>
-              <SegmentedChoice label="Clasificar excedente" value={remainderType} onChange={setRemainderType} options={[
-                { value: 'EXPENSE', label: 'Gasto / regalo' },
-                { value: 'CREATE_RECEIVABLE', label: 'Deuda por cobrar' },
-              ]} />
-              <button type="button" onClick={onReduceAmount} className="w-full border border-[#1A1A1A] px-3 py-2 font-mono text-[9px] font-bold uppercase tracking-[0.08em]">
-                Reducir el envío al monto asignado
-              </button>
-              {remainderType && (
-                <FormField label="Concepto del excedente" htmlFor="debt-remainder-concept">
-                  <TextInput id="debt-remainder-concept" value={remainderConcept} onChange={event => setRemainderConcept(event.target.value)} required />
-                </FormField>
-              )}
-              {remainderType === 'EXPENSE' && (
-                <CategorySelect id="debt-remainder-category" value={remainderTagId} onChange={setRemainderTagId} tags={tags} kind="EXPENSE" required />
-              )}
-              {remainderType === 'CREATE_RECEIVABLE' && (
-                <p className="font-mono text-[9px] text-noria-muted">Se creará una deuda por cobrar explícita contra la contraparte. No se crea ninguna deuda inversa automáticamente.</p>
-              )}
-            </>
-          )}
-        </div>
-      )}
     </section>
   );
 }

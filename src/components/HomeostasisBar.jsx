@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/db.js';
 import { ChevronUp } from 'lucide-react';
 import { convertAmountToBase } from '../utils/currency.js';
+import { isPersonalExpenseTransaction } from '../db/transactionApplications.js';
 import CurrencyAmount from './CurrencyAmount.jsx';
 
 export default function HomeostasisBar() {
@@ -57,7 +58,7 @@ export default function HomeostasisBar() {
     return all.filter(t => new Date(t.date) >= startOfMonth && new Date(t.date) <= endOfMonth);
   }) || [];
 
-  const outTransactions = allMonthTransactions.filter(t => t.type === 'OUT');
+  const outTransactions = allMonthTransactions.filter(isPersonalExpenseTransaction);
   const inTransactions = allMonthTransactions.filter(t => t.type === 'IN' && t.cashflowKind !== 'LOAN_PROCEEDS');
 
   const realIncomeMonth = inTransactions.reduce((sum, t) => {
