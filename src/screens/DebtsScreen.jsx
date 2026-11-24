@@ -10,6 +10,7 @@ import TransactionApplicationSheet from '../components/TransactionApplicationShe
 import DebtCompensationSheet from '../components/DebtCompensationSheet.jsx';
 import MonthFilterBar, { getYearMonthKey } from '../components/MonthFilterBar.jsx';
 import { getImplicitRate, unlinkTransactionApplication } from '../db/transactionApplications.js';
+import { groupActiveDebtsByPartyAndCurrency } from '../utils/debtGrouping.js';
 import { getCurrencySymbol } from '../utils/format.js';
 import {
   Plus, ChevronDown, ChevronUp,
@@ -22,6 +23,8 @@ import { CurrencyAmount } from '../components/CurrencyAmount.jsx';
 
 export default function DebtsScreen() {
   // UI State
+  const [viewMode, setViewMode] = useState('GROUPED'); // 'GROUPED' | 'LIST'
+  const [expandedPartyGroups, setExpandedPartyGroups] = useState(() => new Set());
   const [expandedDebtId, setExpandedDebtId] = useState(null);
   const [expandedSplitGroupId, setExpandedSplitGroupId] = useState(null);
   const [showSettled, setShowSettled] = useState(false);
@@ -156,8 +159,35 @@ export default function DebtsScreen() {
   }, [debtsWithPayments, thirdParties]);
 
   // Split into sections
-  const cobrar = debtsWithPayments.filter(d => d.type === 'COBRAR' && !['SETTLED', 'WRITTEN_OFF'].includes(d.status));
-  const pagar = debtsWithPayments.filter(d => d.type === 'PAGAR' && !['SETTLED', 'WRITTEN_OFF'].includes(d.status));
+  const cobrar = useMemo(
+    () => debtsWithPayments.filter(d => d.type === 'COBRAR' && !['SETTLED', 'WRITTEN_OFF'].includes(d.status)),
+    [debtsWithPayments]
+  );
+  const pagar = useMemo(
+    () => debtsWithPayments.filter(d => d.type === 'PAGAR' && !['SETTLED', 'WRITTEN_OFF'].includes(d.status)),
+    [debtsWithPayments]
+  );
+
+  const cobrarItems = useMemo(() => (
+    viewMode === 'GROUPED'
+      ? groupActiveDebtsByPartyAndCurrency(cobrar)
+      : cobrar.map(debt => ({ kind: 'SINGLE', key: `debt-${debt.id}`, debt }))
+  ), [viewMode, cobrar]);
+
+  const pagarItems = useMemo(() => (
+    viewMode === 'GROUPED'
+      ? groupActiveDebtsByPartyAndCurrency(pagar)
+      : pagar.map(debt => ({ kind: 'SINGLE', key: `debt-${debt.id}`, debt }))
+  ), [viewMode, pagar]);
+
+  const togglePartyGroup = key => {
+    setExpandedPartyGroups(current => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   const getEffectiveSettledDate = (d) => {
     if (d.writtenOffDate) return new Date(d.writtenOffDate);
@@ -386,7 +416,7 @@ export default function DebtsScreen() {
   };
 
   // ── Render: Debt Row ──
-  const renderDebtRow = (debt) => {
+  const renderDebtRow = (debt, { nested = false } = {}) => {
     const isExpanded = expandedDebtId === debt.id;
     const badge = getDebtStatusBadge(debt);
     const pct = debt.totalAmount > 0 ? Math.min(100, (debt.paidAmount / debt.totalAmount) * 100) : 0;
@@ -418,7 +448,11 @@ export default function DebtsScreen() {
       : null;
 
     return (
-      <div key={debt.id} className="relative border border-[#1A1A1A] bg-transparent" id={`debt-${debt.id}`}>
+      <div
+        key={debt.id}
+        className={nested ? 'relative bg-transparent' : 'relative border border-[#1A1A1A] bg-transparent'}
+        id={`debt-${debt.id}`}
+      >
         {/* Compact row */}
         <div className="flex items-start gap-3 p-4">
           <button
@@ -791,6 +825,68 @@ export default function DebtsScreen() {
     );
   };
 
+  const renderPartyGroupRow = (group) => {
+    const isExpanded = expandedPartyGroups.has(group.key);
+    return (
+      <div key={group.key} className="border border-[#1A1A1A] bg-transparent" id={`debt-group-${group.key}`}>
+        <div className="flex items-start gap-3 p-4">
+          <button
+            type="button"
+            onClick={() => togglePartyGroup(group.key)}
+            className="flex-1 min-w-0 text-left focus:outline-none"
+          >
+            <div className="flex items-center gap-2 min-w-0 flex-wrap">
+              <p className="text-[14px] font-[600] text-noria-text truncate">{group.thirdPartyName}</p>
+              <span
+                className="border px-1.5 py-0.5 font-mono text-[8px] font-[700] uppercase tracking-[0.1em]"
+                style={{ borderColor: '#647C78', color: '#647C78' }}
+              >
+                {group.count} DEUDAS
+              </span>
+              {group.hasOverdue && (
+                <span
+                  className="border px-1.5 py-0.5 font-mono text-[8px] font-[700] uppercase tracking-[0.1em]"
+                  style={{ borderColor: '#9F2F2D', color: '#9F2F2D' }}
+                >
+                  VENCIDA
+                </span>
+              )}
+            </div>
+            <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.1em] text-noria-muted flex flex-wrap gap-x-3 gap-y-0.5">
+              <span>{group.currency}</span>
+              {group.earliestCreatedAt && <span>Desde: {formatDate(group.earliestCreatedAt)}</span>}
+              {group.nextDueDate && <span>Próx. vence: {formatDate(group.nextDueDate)}</span>}
+            </div>
+            {group.paidAmount > 0 && (
+              <p className="mt-1 font-mono text-[9px] uppercase tracking-[0.08em] text-noria-muted">
+                {group.type === 'COBRAR' ? 'Cobrado' : 'Pagado'}: <CurrencyAmount amount={group.paidAmount} currencyCode={group.currency} /> / <CurrencyAmount amount={group.totalAmount} currencyCode={group.currency} />
+              </p>
+            )}
+          </button>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <CurrencyAmount amount={group.remaining} currencyCode={group.currency} className="text-[15px] font-[700] text-noria-text tabular-nums" />
+            <button
+              type="button"
+              onClick={() => togglePartyGroup(group.key)}
+              className="w-7 h-7 flex items-center justify-center text-noria-muted hover:text-noria-text focus:outline-none"
+              aria-label={isExpanded ? `Colapsar deudas de ${group.thirdPartyName}` : `Expandir deudas de ${group.thirdPartyName}`}
+              aria-expanded={isExpanded}
+            >
+              {isExpanded ? <ChevronUp size={14} strokeWidth={1.8} /> : <ChevronDown size={14} strokeWidth={1.8} />}
+            </button>
+          </div>
+        </div>
+
+        {isExpanded && (
+          <div className="border-t border-[rgba(26,26,26,0.16)] divide-y divide-[rgba(26,26,26,0.12)] animate-fade-in">
+            {group.debts.map(debt => renderDebtRow(debt, { nested: true }))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderSplitRow = (split) => {
     const isExpanded = expandedSplitGroupId === split.id;
     const pct = split.totalAmount > 0 ? Math.min(100, (split.paidAmount / split.totalAmount) * 100) : 0;
@@ -997,13 +1093,32 @@ export default function DebtsScreen() {
       <main className="max-w-md mx-auto px-5 pt-4 space-y-6">
         {/* ── Technical Summary ── */}
         <section className="border border-[#1A1A1A] p-4 space-y-3" id="debts-summary">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <p className="font-mono text-[9px] font-[700] uppercase tracking-[0.14em] text-noria-text/60">
               Resumen de Deudas
             </p>
-            <span className="font-mono text-[9px] font-[700] uppercase tracking-[0.14em] text-noria-muted">
-              {summary.totalActive} activa{summary.totalActive !== 1 ? 's' : ''}
-            </span>
+            <div className="flex items-center gap-3">
+              <div className="inline-flex items-center font-mono text-[9px] uppercase tracking-[0.12em] text-noria-muted">
+                <button
+                  type="button"
+                  onClick={() => setViewMode('GROUPED')}
+                  className={`transition-colors focus:outline-none ${viewMode === 'GROUPED' ? 'text-noria-text font-[700] border-b border-[#1A1A1A] pb-0.5' : 'hover:text-noria-text pb-0.5'}`}
+                >
+                  Por persona
+                </button>
+                <span className="mx-1.5 opacity-30">|</span>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('LIST')}
+                  className={`transition-colors focus:outline-none ${viewMode === 'LIST' ? 'text-noria-text font-[700] border-b border-[#1A1A1A] pb-0.5' : 'hover:text-noria-text pb-0.5'}`}
+                >
+                  Lista
+                </button>
+              </div>
+              <span className="font-mono text-[9px] font-[700] uppercase tracking-[0.14em] text-noria-muted">
+                {summary.totalActive} activa{summary.totalActive !== 1 ? 's' : ''}
+              </span>
+            </div>
           </div>
 
           {/* Totals by currency */}
@@ -1079,12 +1194,12 @@ export default function DebtsScreen() {
             </button>
           )}
           <div className="pt-4 space-y-3">
-            {cobrar.length === 0 ? (
+            {cobrarItems.length === 0 ? (
               <p className="text-[12px] text-noria-muted text-center py-4 border border-[rgba(26,26,26,0.12)]">
                 Sin deudas por cobrar
               </p>
             ) : (
-              cobrar.map(debt => renderDebtRow(debt))
+              cobrarItems.map(item => (item.kind === 'GROUP' ? renderPartyGroupRow(item) : renderDebtRow(item.debt)))
             )}
           </div>
         </section>
@@ -1093,12 +1208,12 @@ export default function DebtsScreen() {
         <section id="debts-pagar">
           {renderSectionHeader('Por Pagar', pagar.length, true, null)}
           <div className="pt-4 space-y-3">
-            {pagar.length === 0 ? (
+            {pagarItems.length === 0 ? (
               <p className="text-[12px] text-noria-muted text-center py-4 border border-[rgba(26,26,26,0.12)]">
                 Sin deudas por pagar
               </p>
             ) : (
-              pagar.map(debt => renderDebtRow(debt))
+              pagarItems.map(item => (item.kind === 'GROUP' ? renderPartyGroupRow(item) : renderDebtRow(item.debt)))
             )}
           </div>
         </section>
